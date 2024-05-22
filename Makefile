@@ -24,7 +24,8 @@ APP_LOAD_PARAMS= --curve secp256k1 $(COMMON_LOAD_PARAMS)
 
 APPVERSION_M=2
 APPVERSION_N=1
-APPVERSION_P=4
+APPVERSION_P=8
+
 APPVERSION=$(APPVERSION_M).$(APPVERSION_N).$(APPVERSION_P)
 
 # simplify for tests
@@ -93,6 +94,7 @@ endif
 
 ifeq ($(TARGET_NAME),TARGET_STAX)
     DEFINES += NBGL_QRCODE
+    SDK_SOURCE_PATH += qrcode
 else
     DEFINES += HAVE_BAGL HAVE_UX_FLOW
     ifneq ($(TARGET_NAME),TARGET_NANOS)
@@ -103,10 +105,6 @@ else
         DEFINES += HAVE_BAGL_FONT_OPEN_SANS_EXTRABOLD_11PX
         DEFINES += HAVE_BAGL_FONT_OPEN_SANS_LIGHT_16PX
     endif
-endif
-
-ifeq ($(TARGET_NAME),TARGET_NANOS)
-DEFINES       += HAVE_WALLET_ID_SDK
 endif
 
 # Enabling debug PRINTF
@@ -156,7 +154,7 @@ include $(BOLOS_SDK)/Makefile.glyphs
 APP_SOURCE_PATH  += src 
 
 APP_SOURCE_FILES += ${BOLOS_SDK}/lib_standard_app/format.c
-INCLUDES_PATH += ${BOLOS_SDK}
+APP_SOURCE_FILES += ${BOLOS_SDK}/lib_standard_app/crypto_helpers.c
 
 SDK_SOURCE_PATH  += lib_stusb lib_stusb_impl lib_u2f 
 ifneq ($(TARGET_NAME),TARGET_STAX)
