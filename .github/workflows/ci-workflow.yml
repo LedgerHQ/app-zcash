@@ -25,6 +25,8 @@ jobs:
             SDK: "$NANOSP_SDK"
           - model: stax
             SDK: "$STAX_SDK"
+          - model: flex
+            SDK: "$FLEX_SDK"
 
     runs-on: ubuntu-latest
 
@@ -54,6 +56,7 @@ jobs:
           - model: nanox
           - model: nanosp
           - model: stax
+          - model: flex
 
     needs: job_build
     runs-on: ubuntu-latest
