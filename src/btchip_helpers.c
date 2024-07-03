@@ -175,7 +175,7 @@ void btchip_public_key_hash160(unsigned char *in, unsigned short inlen,
     unsigned char buffer[32];
     cx_hash_sha256(in, inlen, buffer, 32);
     cx_ripemd160_init(&riprip);
-    cx_hash_no_throw(&riprip.header, CX_LAST, buffer, 32, out, 20);
+    CX_ASSERT(cx_hash_no_throw(&riprip.header, CX_LAST, buffer, 32, out, 20));
 }
 
 void btchip_compute_checksum(unsigned char* in, unsigned short inlen, unsigned char * output) {
