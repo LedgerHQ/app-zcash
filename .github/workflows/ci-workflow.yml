@@ -42,9 +42,9 @@ jobs:
           make COIN=zcash && mv bin/ zcash-bin/
 
       - name: Upload Zcash app binary
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: zcash-app
+          name: zcash-app-${{ matrix.model }}
           path: zcash-bin
 
   job_test:
@@ -77,15 +77,9 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Download ZCash app binary
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
-          name: zcash-app
-          path: tests/zcash-bin
-
-      - name: Download Zcash app binary
-        uses: actions/download-artifact@v2
-        with:
-          name: zcash-app
+          name: zcash-app-${{ matrix.model }}
           path: tests/zcash-bin
 
       - name: Run tests
