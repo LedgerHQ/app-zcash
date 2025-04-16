@@ -412,7 +412,7 @@ return_OK:
                 }
             }
             PRINTF("hashOutputs\n%.*H\n",32,btchip_context_D.segwit.cache.hashedOutputs);
-            if (btchip_context_D.NU5Transaction) {
+            if (TX_VERSION == 5) {
                 memcpy(btchip_context_D.nu5_ctx.prevouts_sig_digest, btchip_context_D.segwit.cache.hashedPrevouts, DIGEST_SIZE);
                 memcpy(btchip_context_D.nu5_ctx.sequence_sig_digest, btchip_context_D.segwit.cache.hashedSequence, DIGEST_SIZE);
                 memcpy(btchip_context_D.nu5_ctx.outputs_sig_digest, btchip_context_D.segwit.cache.hashedOutputs, DIGEST_SIZE);

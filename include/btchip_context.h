@@ -239,11 +239,11 @@ struct btchip_context_s {
     /* Overwinter */
     unsigned char usingOverwinter;
     unsigned char overwinterSignReady;
-    unsigned char NU5Transaction;
     unsigned char nVersionGroupId[4];
     unsigned char nExpiryHeight[4];
     unsigned char nLockTime[4];
     unsigned char sigHashType[4];
+    unsigned char consensusBranchId[4];
 
     struct {
         unsigned char header_digest[DIGEST_SIZE];
@@ -311,7 +311,7 @@ typedef struct btchip_altcoin_config_s {
     unsigned short p2sh_version;
     unsigned char family;
 #ifdef HAVE_NBGL
-    unsigned char img_raw[1024]; 
+    unsigned char img_raw[1024];
     nbgl_icon_details_t img_nbgl;
 #endif // HAVE_NBGL
     char coinid[14]; // used coind id for message signature prefix

@@ -31,6 +31,11 @@
 #define TRUSTED_INPUT_SIZE   48
 #define TRUSTED_INPUT_TOTAL_SIZE (TRUSTED_INPUT_SIZE + 8)
 
+#define OVERWINTER_FLAG (1 << 31)
+
+#define TX_IS_OVERWINTER    (btchip_read_u32(btchip_context_D.transactionVersion, false, false) & OVERWINTER_FLAG)
+#define TX_VERSION          (btchip_read_u32(btchip_context_D.transactionVersion, false, false) ^ OVERWINTER_FLAG)
+
 void transaction_parse(unsigned char parseMode);
 
 // target = a + b
