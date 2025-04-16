@@ -268,3 +268,50 @@ def test_NU5_signature_mult_outputs(cmd, transport):
     assert sw == 0x9000
 
     assert sig.hex() == SIG
+
+
+@automation("automations/accept.json")
+def test_NU6_with_tx_version_4(cmd, transport):
+    sw, _ = transport.exchange_raw("e042000011000000000400008085202f895510e7c801")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800025b53e61d09f49b165a21fed754ab228e789193d664cd4ab026ccccaf6b30740ba1e0000006a")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280003247304402202ffcfd634ae68631af2435b537d33e86a0a38338e3841aecf6d0f54cadef979f0220469c7cd94d52be1183e4f9")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280003275035388254a4b49a22bee691f8b3d32e65b05167e012102529734fe55e9de06341c90ab8dc11f144ddcfaed136f49edcdb2")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280000a875bfb0eadb3ffffffff")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280000102")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280002262e52a03000000001976a914c91bd3bb62b6abbb0005ea78613c0c4f11330b4a88ac")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280002201ae8700000000001976a9149014582e6407d13434d7dac8bb53e4616356501688ac")
+    assert sw == 0x9000
+    sw, txid = transport.exchange_raw("e042800014000000000f000000000000000000000000000000")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e040000015058000002c80000085800000040000000000000000")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04400050d050000800a27a7265510e7c801")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04480053b0138" + txid.hex() + "19")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04480051d76a914c91bd3bb62b6abbb0005ea78613c0c4f11330b4a88ac00000000")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04aff0015058000002c80000085800000040000000100000000")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04a0000320280969800000000001976a9147678416cb82a4a716dd1ee6b332744ba2a1f11c488ac30db8e02000000001976a914c628ce")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04a8000138ff6367f0ea6763f1c1d865329af0715ac88ac")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04800000b0000000000000100000000")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04400800d050000800a27a7265510e7c801")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04480803b0138" + txid.hex() + "19")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04480801d76a914c91bd3bb62b6abbb0005ea78613c0c4f11330b4a88ac00000000")
+    assert sw == 0x9000
+    sw, sig = transport.exchange_raw("e04800001f058000002c8000008580000004000000000000000000000000000100000000")
+    assert sw == 0x9000
+    assert sig.hex() == "31440220488d0fca08431682cd5f10968a72affdd569f61a4a358f73edf05d0fb4a3e1a702204722751bd7d27f999ed714694ad024465d54c288a9cc560559d9594914d92ac501"
