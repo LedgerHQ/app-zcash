@@ -52,9 +52,6 @@ unsigned char const OVERWINTER_PARAM_OUTPUTS[16] = { 'Z', 'c', 'a', 's', 'h', 'O
 unsigned char const OVERWINTER_PARAM_SIGHASH[16] = { 'Z', 'c', 'a', 's', 'h', 'S', 'i', 'g', 'H', 'a', 's', 'h', 0, 0, 0, 0 };
 unsigned char const OVERWINTER_NO_JOINSPLITS[32] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
-unsigned char const NU5_GROUP_ID[4] = {0xB4, 0xD0, 0xD6, 0xC2};
-unsigned char const NU6_GROUP_ID[4] = {0x55, 0x10, 0xE7, 0xC8};
-
 unsigned char const NU5_PARAM_TXID[16] = { 'Z', 'c', 'a', 's', 'h', 'T', 'x', 'H', 'a', 's', 'h', '_', 0, 0, 0, 0};
 unsigned char const NU5_PARAM_HEADERS[16] = { 'Z', 'T', 'x', 'I', 'd', 'H', 'e', 'a', 'd', 'e', 'r', 's', 'H', 'a', 's', 'h' };
 unsigned char const NU5_PARAM_TRANSPA[16] = { 'Z', 'T', 'x', 'I', 'd', 'T', 'r', 'a', 'n', 's', 'p', 'a', 'H', 'a', 's', 'h' };
