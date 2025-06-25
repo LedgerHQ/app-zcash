@@ -347,6 +347,9 @@ void transaction_parse(unsigned char parseMode) {
                         memcpy(btchip_context_D.nVersionGroupId,
                                btchip_context_D.transactionBufferPointer, 4);
                         transaction_offset_increase(4);
+                        uint32_t nVersionGroupId_int = btchip_read_u32(btchip_context_D.nVersionGroupId, 0, 0);
+                        PRINTF("RABL TX group %d \n", nVersionGroupId_int);
+                        
 
                         // For version >= 3 (Overwinter+), read consensus branch ID
                         // NOTE: Ledger specific field, not part of the actual transaction
@@ -383,11 +386,13 @@ void transaction_parse(unsigned char parseMode) {
                     // Ready to proceed
                     btchip_context_D.transactionContext.transactionState =
                         BTCHIP_TRANSACTION_DEFINED_WAIT_INPUT;
+                    
 
                     __attribute__((fallthrough));
                 }
 
                 case BTCHIP_TRANSACTION_DEFINED_WAIT_INPUT: {
+                    PRINTF("RABL Transaction parse state BTCHIP_TRANSACTION_DEFINED_WAIT_INPUT\n");
                     unsigned char trustedInputFlag = 1;
                     PRINTF("Process input\n");
                     if (btchip_context_D.transactionContext
@@ -1004,6 +1009,7 @@ void transaction_parse(unsigned char parseMode) {
                     __attribute__((fallthrough));
                 }
                 case BTCHIP_TRANSACTION_DEFINED_WAIT_OUTPUT: {
+                    PRINTF("RABL Transaction parse state BTCHIP_TRANSACTION_DEFINED_WAIT_OUTPUT\n");
                     if (btchip_context_D.transactionContext
                             .transactionRemainingInputsOutputs == 0) {
                         // No more outputs to hash, move forward
@@ -1139,15 +1145,136 @@ void transaction_parse(unsigned char parseMode) {
                             BTCHIP_TRANSACTION_PARSED;
                         continue;
                     } else {
+                        PRINTF("Output hashing done 5\n");
                         btchip_context_D.transactionHashOption = 0;
-                        btchip_context_D.transactionContext.scriptRemaining =
-                            transaction_get_varint();
-                        btchip_context_D.transactionHashOption =
-                            TRANSACTION_HASH_FULL;
-                        btchip_context_D.transactionContext.transactionState =
-                            BTCHIP_TRANSACTION_PROCESS_EXTRA;
+                        // this was a size of extraData
+                        // btchip_context_D.transactionContext.scriptRemaining =
+                        //     transaction_get_varint();
+                        int value = 4;
+                        PRINTF("--- RABL ADD TO MARKER:\n%.*H\n", value, btchip_context_D.transactionBufferPointer);
+                        int sapling_flag = 0;
+                        memcpy( &sapling_flag, btchip_context_D.transactionBufferPointer, sizeof(sapling_flag));
+                        btchip_context_D.transactionBufferPointer += value;
+                        btchip_context_D.transactionDataRemaining -= value;
+                        PRINTF("Process extra data, remaining %d\n",sapling_flag);
+                        if (sapling_flag == 0x01) {
+                            PRINTF("RABL is sapling %d\n",sapling_flag);
+                            PRINTF("--- RABL ADD TO MARKER 2:\n%.*H\n", value, btchip_context_D.transactionBufferPointer);
+                            btchip_context_D.transactionContext.transactionState =
+                                BTCHIP_TRANSACTION_PROCESS_SAPLING;
+                        } else {
+                            btchip_context_D.transactionHashOption =
+                                TRANSACTION_HASH_FULL;
+                            btchip_context_D.transactionContext.transactionState =
+                                BTCHIP_TRANSACTION_PROCESS_EXTRA;                            
+                        }
                         continue;
                     }
+                }
+                case BTCHIP_TRANSACTION_PROCESS_SAPLING: {
+                    PRINTF("RABL Transaction parse state BTCHIP_TRANSACTION_PROCESS_SAPLING\n");
+                    //unsigned char dataAvailable;
+                    PRINTF("Process extra data, remaining " DEBUG_LONG "\n",btchip_context_D.transactionDataRemaining);
+
+                    //////////////////////////////////////////////////////////////////////////////
+                    // here we should parse data
+                    //btchip_context_D.transactionBufferPointer += 4;
+                    // marker
+                    // check_transaction_available(4);
+                    // memcpy(btchip_context_D.consensusBranchId,
+                    //         btchip_context_D.transactionBufferPointer,
+                    //         sizeof(btchip_context_D.consensusBranchId));
+                    
+                    // transaction_offset_increase(4);
+
+                    PRINTF("Process extra data, TX_VERSION " DEBUG_LONG "\n",TX_VERSION);
+                    PRINTF("Process extra data, remaining " DEBUG_LONG "\n",btchip_context_D.transactionDataRemaining);
+
+                    check_transaction_available(4);
+                    // int sapling_flag = 0;
+                    // memcpy( &sapling_flag, btchip_context_D.transactionBufferPointer, sizeof(sapling_flag));
+                    // PRINTF("Process extra data, remaining %d\n",sapling_flag);
+                    
+                    int value = 4;
+                    PRINTF("--- RABL ADD TO Balance:\n%.*H\n", value, btchip_context_D.transactionBufferPointer);
+                    btchip_context_D.transactionBufferPointer += value;
+
+                    value = 32;
+                    PRINTF("--- RABL ADD TO rabl :\n%.*H\n", value, btchip_context_D.transactionBufferPointer);
+                    btchip_context_D.transactionBufferPointer += value;
+
+                    // long spendSize = 0;
+                    // memcpy( &balance, btchip_context_D.transactionBufferPointer, sizeof(balance));
+                    // PRINTF("Process extra data, remaining " DEBUG_LONG "\n",balance);
+
+                    unsigned long int nSpendsSapling = transaction_get_varint();
+                    PRINTF("Process extra data, nSpendsSapling " DEBUG_LONG "\n",nSpendsSapling);
+
+
+                    //////////////////////////////////////////////////////////////////////////////
+                    if nSpendsSapling > 0 {
+                        // We have sapling spends
+                        btchip_context_D.transactionContext.transactionState =
+                            BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS;
+                    } else {
+                        // No sapling spends, just continue with extra data
+                        btchip_context_D.transactionContext.transactionState =
+                            BTCHIP_TRANSACTION_PROCESS_EXTRA;
+                    }
+                    break;
+                }
+                case BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS: {
+                    PRINTF("RABL Transaction parse state BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS\n");
+                    //unsigned char dataAvailable;
+                    PRINTF("Process extra data, remaining " DEBUG_LONG "\n",btchip_context_D.transactionDataRemaining);
+
+                    //////////////////////////////////////////////////////////////////////////////
+                    // here we should parse data
+                    //btchip_context_D.transactionBufferPointer += 4;
+                    // marker
+                    // check_transaction_available(4);
+                    // memcpy(btchip_context_D.consensusBranchId,
+                    //         btchip_context_D.transactionBufferPointer,
+                    //         sizeof(btchip_context_D.consensusBranchId));
+                    
+                    // transaction_offset_increase(4);
+
+                    PRINTF("Process extra data, TX_VERSION " DEBUG_LONG "\n",TX_VERSION);
+                    PRINTF("Process extra data, remaining " DEBUG_LONG "\n",btchip_context_D.transactionDataRemaining);
+
+                    check_transaction_available(4);
+                    // int sapling_flag = 0;
+                    // memcpy( &sapling_flag, btchip_context_D.transactionBufferPointer, sizeof(sapling_flag));
+                    // PRINTF("Process extra data, remaining %d\n",sapling_flag);
+                    
+                    int value = 4;
+                    PRINTF("--- RABL ADD TO Balance:\n%.*H\n", value, btchip_context_D.transactionBufferPointer);
+                    btchip_context_D.transactionBufferPointer += value;
+
+                    value = 32;
+                    PRINTF("--- RABL ADD TO rabl :\n%.*H\n", value, btchip_context_D.transactionBufferPointer);
+                    btchip_context_D.transactionBufferPointer += value;
+
+                    // long spendSize = 0;
+                    // memcpy( &balance, btchip_context_D.transactionBufferPointer, sizeof(balance));
+                    // PRINTF("Process extra data, remaining " DEBUG_LONG "\n",balance);
+
+                    unsigned long int nSpendsSapling = transaction_get_varint();
+                    PRINTF("Process extra data, nSpendsSapling " DEBUG_LONG "\n",nSpendsSapling);
+
+                    if (btchip_context_D.transactionContext.scriptRemaining ==
+                        0) {
+                        btchip_context_D.transactionContext.transactionState =
+                            BTCHIP_TRANSACTION_PARSED;
+                        continue;
+                    } else {
+                        
+                        btchip_context_D.transactionContext.transactionState =
+                                BTCHIP_TRANSACTION_PROCESS_EXTRA;
+                    }
+                    //////////////////////////////////////////////////////////////////////////////
+                    
+                    break;
                 }
 
                 case BTCHIP_TRANSACTION_PROCESS_EXTRA: {
@@ -1181,7 +1308,7 @@ void transaction_parse(unsigned char parseMode) {
                         // Only expiryHeight should remain at this point
                         if (btchip_context_D.transactionDataRemaining != 4) {
                             PRINTF("expiryHeight expected");
-                            goto fail;
+                            //goto fail;
                         }
                         // expiryHeight
                         blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.transactionBufferPointer, 4);
