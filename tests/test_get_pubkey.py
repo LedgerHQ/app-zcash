@@ -2,7 +2,7 @@ from bitcoin_client.bitcoin_base_cmd import AddrType
 from utils import automation
 
 
-@automation("automations/accept_pubkey.json")
+@automation("tests/automations/accept_pubkey.json")
 def test_get_public_key(cmd):
     # legacy address
     pub_key, addr, bip32_chain_code = cmd.get_public_key(

@@ -85,6 +85,8 @@ enum btchip_transaction_state_e {
     BTCHIP_TRANSACTION_PRESIGN_READY = 0x09,
     /** Transaction fully parsed, ready to be signed */
     BTCHIP_TRANSACTION_SIGN_READY = 0x0a,
+    /**  */
+    BTCHIP_TRANSACTION_PARSE_SAPLING_ORCHARD = 0x0b,
 };
 typedef enum btchip_transaction_state_e btchip_transaction_state_t;
 
@@ -96,6 +98,49 @@ enum btchip_output_parsing_state_e {
     BTCHIP_BIP44_CHANGE_PATH_VALIDATION = 0x04
 };
 typedef enum btchip_output_parsing_state_e btchip_output_parsing_state_t;
+
+typedef enum {
+    NU5_PARSE_SAPLING_SPENDS_COUNT = 0,
+    NU5_PARSE_SAPLING_SPENDS_DATA = 1,
+    NU5_PARSE_SAPLING_OUTPUTS_COUNT = 2,
+    NU5_PARSE_SAPLING_OUTPUTS_DATA = 3,
+    NU5_PARSE_ORCHARD_ACTIONS_COUNT = 4,
+    NU5_PARSE_ORCHARD_ACTIONS_DATA = 5,
+    NU5_PARSE_ORCHARD_FLAG_VALUE_ANCHOR = 6,
+    NU5_PARSE_ORCHARD_PROOF_SIZE = 7,
+    NU5_PARSE_ORCHARD_PROOF = 8,
+    NU5_PARSE_ORCHARD_VSPENDAUTHSIGS = 9,
+    NU5_PARSE_ORCHARD_BINDINGSIG = 10,
+    NU5_PARSE_COMPLETE = 11
+} nu5_parse_state_e;
+
+typedef struct {
+    uint8_t cv[32];
+    uint8_t anchor[32]; 
+    uint8_t nullifier[32];
+    uint8_t rk[32];
+    uint8_t zkproof[192];
+    uint8_t spendAuthSig[64];
+} sapling_spend_t;
+
+typedef struct {
+    uint8_t cv[32];
+    uint8_t cmu[32];
+    uint8_t ephemeralKey[32];
+    uint8_t encCiphertext[580];
+    uint8_t outCiphertext[80];
+    uint8_t zkproof[192];
+} sapling_output_t;
+
+typedef struct {
+    uint8_t cv[32];
+    uint8_t nullifier[32];
+    uint8_t rk[32];
+    uint8_t cmx[32];
+    uint8_t ephemeralKey[32];
+    uint8_t encCiphertext[580];
+    uint8_t outCiphertext[80];
+} orchard_action_t;
 
 #define DIGEST_SIZE 32
 
@@ -178,6 +223,16 @@ struct btchip_context_s {
     /** Current hash to perform (TRANSACTION_HASH_) */
     unsigned char transactionHashOption;
 
+    // Add hash contexts for Sapling and Orchard
+    union multi_hash saplingSpends;
+    union multi_hash saplingOutputs;
+    union multi_hash orchardActions;
+
+    union multi_hash orchard_actions;
+    union multi_hash orchard_actions_compact;
+    union multi_hash orchard_actions_memos;
+    union multi_hash orchard_actions_noncompact;
+
     /* Segregated Witness changes */
 
     union {
@@ -252,6 +307,37 @@ struct btchip_context_s {
         unsigned char scriptpubkeys_sig_digest[DIGEST_SIZE];
         unsigned char sequence_sig_digest[DIGEST_SIZE];
         unsigned char outputs_sig_digest[DIGEST_SIZE];
+
+        uint8_t sapling_spends_digest[DIGEST_SIZE];
+        uint8_t sapling_outputs_digest[DIGEST_SIZE];
+        uint8_t orchard_digest[DIGEST_SIZE];
+        uint8_t orchard_actions_compact_digest[DIGEST_SIZE];
+        uint8_t orchard_actions_memos_digest[DIGEST_SIZE];
+        uint8_t orchard_actions_noncompact_digest[DIGEST_SIZE];
+
+        
+        // Parsing state management
+        nu5_parse_state_e parse_state;
+
+        uint64_t sapling_spends_count;
+        uint64_t sapling_outputs_count;
+        uint64_t orchard_actions_count;
+
+        uint64_t sapling_spends_remaining;
+        uint64_t sapling_outputs_remaining;
+        uint64_t orchard_actions_remaining;
+        uint64_t current_item_bytes_remaining;
+        uint8_t current_field;
+
+        // Buffers for complete structures
+        uint8_t current_spend_buffer[sizeof(sapling_spend_t)];
+        uint8_t current_output_buffer[sizeof(sapling_output_t)]; 
+        uint8_t current_action_buffer[sizeof(orchard_action_t)];
+        uint8_t orchard_flag_value_anchor_buffer[41]; // flag = 1; value_balance = 8; anchor = 32;
+        // TODO: if it is really necessary, then we will need to parse the proof by chunks
+        // uint8_t *orchard_proofs_buffer; // (2720 + (2272 * nu5_ctx.orchard_actions_count))
+        // uint8_t *orchard_vspend_auth_sigs_buffer; // (64 * nu5_ctx.orchard_actions_count)
+        uint8_t orchard_binding_sig_buffer[64]; // 
     } nu5_ctx;
 
     /*Is swap mode*/

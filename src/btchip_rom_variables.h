@@ -41,7 +41,17 @@ extern unsigned char const NU5_PARAM_PREVOUT[16];
 extern unsigned char const NU5_PARAM_SEQUENC[16];
 extern unsigned char const NU5_PARAM_OUTPUTS[16];
 extern unsigned char const NU5_PARAM_SAPLING[16];
+extern unsigned char const NU5_PARAM_SAPLING_SPENDS[16];
+extern unsigned char const NU5_PARAM_SAPLING_SPENDS_COMPACT[16];
+extern unsigned char const NU5_PARAM_SAPLING_SPENDS_NONCOMP[16];
+extern unsigned char const NU5_PARAM_SAPLING_OUTPUTS[16];
+extern unsigned char const NU5_PARAM_SAPLING_OUTPUTS_COMPACT[16];
+extern unsigned char const NU5_PARAM_SAPLING_OUTPUTS_MEMOS[16];
+extern unsigned char const NU5_PARAM_SAPLING_OUTPUTS_NONCOMP[16];
 extern unsigned char const NU5_PARAM_ORCHARD[16];
+extern unsigned char const NU5_PARAM_ORCHARD_ACTIONS_COMPACT[16];
+extern unsigned char const NU5_PARAM_ORCHARD_MEMOS[16];
+extern unsigned char const NU5_PARAM_ORCHARD_ACTIONS_NONCOMP[16];
 extern unsigned char const NU5_PARAM_AMOUNTS[16];
 extern unsigned char const NU5_PARAM_SCRIPTS[16];
 extern unsigned char const NU5_PARAM_TX_IN[16];
@@ -50,7 +60,7 @@ extern unsigned char const NU5_PARAM_TX_IN[16];
 
 extern unsigned char const TWOPOWER[8];
 
-#define APDU_DEBUG_LENGTH 0
+#define APDU_DEBUG_LENGTH 1
 
 #define APDU_NFCPAYMENT_LENGTH 0
 

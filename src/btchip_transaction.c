@@ -19,6 +19,7 @@
 #include "btchip_internal.h"
 #include "btchip_apdu_constants.h"
 #include "btchip_display_variables.h"
+#include "btchip_public_ram_variables.h"
 
 // Check if fOverwintered flag is set and if nVersion is >= 0x03
 #define TRUSTED_INPUT_OVERWINTER (TX_IS_OVERWINTER && (TX_VERSION >= 0x03))
@@ -143,6 +144,446 @@ unsigned long int transaction_get_varint(void) {
         PRINTF("Varint parsing failed\n");
         THROW(INVALID_PARAMETER);
         return 0;
+    }
+}
+
+void parse_nu5_sapling_orchard_section(void) {
+    for (;;) {
+        // switch to the appropriate parsing state and print debug info
+        if (btchip_context_D.nu5_ctx.parse_state == NU5_PARSE_SAPLING_SPENDS_COUNT) {
+            PRINTF("DEBUG - Sapling spends count\n");
+        } else if (btchip_context_D.nu5_ctx.parse_state == NU5_PARSE_SAPLING_SPENDS_DATA) {
+            PRINTF("DEBUG - Sapling spends data\n");
+        } else if (btchip_context_D.nu5_ctx.parse_state == NU5_PARSE_SAPLING_OUTPUTS_COUNT) {
+            PRINTF("DEBUG - Sapling outputs count\n");
+        } else if (btchip_context_D.nu5_ctx.parse_state == NU5_PARSE_SAPLING_OUTPUTS_DATA) {
+            PRINTF("DEBUG - Sapling outputs data\n");
+        } else if (btchip_context_D.nu5_ctx.parse_state == NU5_PARSE_ORCHARD_ACTIONS_COUNT) {
+            PRINTF("DEBUG - Orchard actions count\n");
+        } else if (btchip_context_D.nu5_ctx.parse_state == NU5_PARSE_ORCHARD_ACTIONS_DATA) {
+            PRINTF("DEBUG - Orchard actions data\n");
+        } else if (btchip_context_D.nu5_ctx.parse_state == NU5_PARSE_ORCHARD_FLAG_VALUE_ANCHOR) {
+            PRINTF("DEBUG - Orchard flag/value/anchor\n");
+        } else if (btchip_context_D.nu5_ctx.parse_state == NU5_PARSE_ORCHARD_PROOF) {
+            PRINTF("DEBUG - Orchard proof\n");
+        } else if (btchip_context_D.nu5_ctx.parse_state == NU5_PARSE_COMPLETE) {
+            PRINTF("DEBUG - complete\n");
+        } else {
+            PRINTF("DEBUG - Unknown parsing state: %d\n", btchip_context_D.nu5_ctx.parse_state);
+        }
+
+        switch (btchip_context_D.nu5_ctx.parse_state) {
+            case NU5_PARSE_SAPLING_SPENDS_COUNT: {
+                uint64_t nShieldedSpends = transaction_get_varint();
+                btchip_context_D.nu5_ctx.sapling_spends_remaining = nShieldedSpends;
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining = 0;
+                PRINTF("Number of Sapling spends: %d\n", (int)nShieldedSpends);
+            
+                if (nShieldedSpends > 0) {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_SAPLING_SPENDS_DATA;
+                    btchip_context_D.nu5_ctx.current_item_bytes_remaining = 32; // Start with cv field
+                    btchip_context_D.nu5_ctx.current_field = 0; // cv
+                } else {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_SAPLING_OUTPUTS_COUNT;
+                    btchip_context_D.nu5_ctx.current_item_bytes_remaining = 1; // nex field total of sapling outputs
+                }
+                continue;
+            }
+        
+            case NU5_PARSE_SAPLING_SPENDS_DATA: {
+                if (btchip_context_D.nu5_ctx.sapling_spends_remaining == 0) {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_SAPLING_OUTPUTS_COUNT;
+                    continue;
+                }
+            
+                // Process current field based on current_field and current_item_bytes_remaining
+                unsigned char dataToProcess = (btchip_context_D.transactionDataRemaining > 
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining) ?
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining :
+                                             btchip_context_D.transactionDataRemaining;
+            
+                if (dataToProcess == 0) {
+                    return; // Need more data
+                }
+            
+                // Only hash cv, anchor, and rk fields per ZIP 244 (skip nullifier, zkproof, spendAuthSig)
+                if (btchip_context_D.nu5_ctx.current_field == 0 ||  // cv
+                    btchip_context_D.nu5_ctx.current_field == 1 ||  // anchor  
+                    btchip_context_D.nu5_ctx.current_field == 3) {  // rk
+                    blake2b_256_update(&btchip_context_D.saplingSpends.blake2b,
+                                      btchip_context_D.transactionBufferPointer, dataToProcess);
+                }
+            
+                transaction_offset_increase(dataToProcess);
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining -= dataToProcess;
+            
+                // Check if current field is complete
+                if (btchip_context_D.nu5_ctx.current_item_bytes_remaining == 0) {
+                    btchip_context_D.nu5_ctx.current_field++;
+                
+                    // Set bytes remaining for next field
+                    switch (btchip_context_D.nu5_ctx.current_field) {
+                        case 1: btchip_context_D.nu5_ctx.current_item_bytes_remaining = 32; break; // anchor
+                        case 2: btchip_context_D.nu5_ctx.current_item_bytes_remaining = 32; break; // nullifier (skip)
+                        case 3: btchip_context_D.nu5_ctx.current_item_bytes_remaining = 32; break; // rk
+                        case 4: btchip_context_D.nu5_ctx.current_item_bytes_remaining = 192; break; // zkproof (skip)
+                        case 5: btchip_context_D.nu5_ctx.current_item_bytes_remaining = 64; break; // spendAuthSig (skip)
+                        default:
+                            // Spend complete, move to next spend
+                            btchip_context_D.nu5_ctx.sapling_spends_remaining--;
+                            btchip_context_D.nu5_ctx.current_field = 0;
+                            btchip_context_D.nu5_ctx.current_item_bytes_remaining = 32; // cv of next spend
+                            break;
+                    }
+                }
+                continue;
+            }
+        
+            case NU5_PARSE_SAPLING_OUTPUTS_COUNT: {
+                // Parse nShieldedOutputs (varint)
+                uint32_t nShieldedOutputs = transaction_get_varint();
+                btchip_context_D.nu5_ctx.sapling_outputs_remaining = nShieldedOutputs;
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining = 0;
+                PRINTF("Number of Sapling outputs: %d\n", (int)nShieldedOutputs);
+            
+                if (nShieldedOutputs > 0) {
+                    btchip_context_D.nu5_ctx.sapling_outputs_count = nShieldedOutputs; // cv
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_SAPLING_OUTPUTS_DATA;
+                    btchip_context_D.nu5_ctx.current_item_bytes_remaining = 32; // Start with cv field
+                    btchip_context_D.nu5_ctx.current_field = 0; // cv
+                } else {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_ORCHARD_ACTIONS_COUNT;
+                    btchip_context_D.nu5_ctx.current_item_bytes_remaining = 1; // next field total of orchard actions
+
+                }
+                continue;
+            }
+        
+            case NU5_PARSE_SAPLING_OUTPUTS_DATA: {
+                if (btchip_context_D.nu5_ctx.sapling_outputs_remaining == 0) {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_ORCHARD_ACTIONS_COUNT;
+                    continue;
+                }
+            
+                unsigned char dataToProcess = (btchip_context_D.transactionDataRemaining > 
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining) ?
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining :
+                                             btchip_context_D.transactionDataRemaining;
+
+                if (dataToProcess == 0) {
+                    return; // Need more data
+                }
+            
+                // Hash all fields except zkproof (field 5) per ZIP 244
+                if (btchip_context_D.nu5_ctx.current_field != 5) {
+                    blake2b_256_update(&btchip_context_D.saplingOutputs.blake2b,
+                                      btchip_context_D.transactionBufferPointer, dataToProcess);
+                }
+            
+                transaction_offset_increase(dataToProcess);
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining -= dataToProcess;
+            
+                // Check if current field is complete
+                if (btchip_context_D.nu5_ctx.current_item_bytes_remaining == 0) {
+                    btchip_context_D.nu5_ctx.current_field++;
+                
+                    // Set bytes remaining for next field
+                    switch (btchip_context_D.nu5_ctx.current_field) {
+                        case 1: btchip_context_D.nu5_ctx.current_item_bytes_remaining = 32; break;  // cmu
+                        case 2: btchip_context_D.nu5_ctx.current_item_bytes_remaining = 32; break;  // ephemeralKey
+                        case 3: btchip_context_D.nu5_ctx.current_item_bytes_remaining = 580; break; // encCiphertext
+                        case 4: btchip_context_D.nu5_ctx.current_item_bytes_remaining = 80; break;  // outCiphertext
+                        case 5: btchip_context_D.nu5_ctx.current_item_bytes_remaining = 192; break; // zkproof (skip)
+                        default:
+                            // Output complete, move to next output
+                            btchip_context_D.nu5_ctx.sapling_outputs_remaining--;
+                            btchip_context_D.nu5_ctx.current_field = 0;
+                            btchip_context_D.nu5_ctx.current_item_bytes_remaining = 32; // cv of next output
+                            break;
+                    }
+                }
+                continue;
+            }
+        
+            case NU5_PARSE_ORCHARD_ACTIONS_COUNT: {
+                uint64_t nOrchardActions = transaction_get_varint();
+                btchip_context_D.nu5_ctx.orchard_actions_remaining = nOrchardActions;
+                btchip_context_D.nu5_ctx.orchard_actions_count = nOrchardActions;
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining = sizeof(orchard_action_t);
+
+                PRINTF("Number of Orchard actions: %d\n", (int)nOrchardActions);
+            
+                if (nOrchardActions > 0) {
+                    blake2b_256_init(&btchip_context_D.orchard_actions_compact.blake2b, NU5_PARAM_ORCHARD_ACTIONS_COMPACT);
+                    blake2b_256_init(&btchip_context_D.orchard_actions_memos.blake2b, NU5_PARAM_ORCHARD_MEMOS);
+                    blake2b_256_init(&btchip_context_D.orchard_actions_noncompact.blake2b, NU5_PARAM_ORCHARD_ACTIONS_NONCOMP);
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_ORCHARD_ACTIONS_DATA;
+                    btchip_context_D.nu5_ctx.current_item_bytes_remaining = sizeof(orchard_action_t);
+                } else {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_COMPLETE;
+                }
+               continue;
+            }
+
+            case NU5_PARSE_ORCHARD_ACTIONS_DATA: {
+                // Similar approach for Orchard actions
+                if (btchip_context_D.nu5_ctx.orchard_actions_remaining == 0) {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_COMPLETE;
+                    continue;
+                }
+                
+                unsigned char dataToProcess = (btchip_context_D.transactionDataRemaining > 
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining) ?
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining :
+                                             btchip_context_D.transactionDataRemaining;
+                
+                if (dataToProcess == 0) {
+                    return;
+                }
+                
+                size_t buffer_offset = sizeof(orchard_action_t) - btchip_context_D.nu5_ctx.current_item_bytes_remaining;
+                memcpy(btchip_context_D.nu5_ctx.current_action_buffer + buffer_offset,
+                       btchip_context_D.transactionBufferPointer, dataToProcess);
+                
+                transaction_offset_increase(dataToProcess);
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining -= dataToProcess;
+                
+                // When complete, hash all action fields (as per ZIP 244)
+                if (btchip_context_D.nu5_ctx.current_item_bytes_remaining == 0
+                        && btchip_context_D.nu5_ctx.orchard_actions_remaining > 0) {
+                    orchard_action_t *action = (orchard_action_t*)btchip_context_D.nu5_ctx.current_action_buffer;
+
+                    // compact digest
+                    blake2b_256_update(&btchip_context_D.orchard_actions_compact.blake2b, action->nullifier, 32);
+                    blake2b_256_update(&btchip_context_D.orchard_actions_compact.blake2b, action->cmx, 32);
+                    blake2b_256_update(&btchip_context_D.orchard_actions_compact.blake2b, action->ephemeralKey, 32);
+                    blake2b_256_update(&btchip_context_D.orchard_actions_compact.blake2b, action->encCiphertext, 52);
+
+                    // memos digest
+                    blake2b_256_update(&btchip_context_D.orchard_actions_memos.blake2b, action->encCiphertext + 52, 512);
+
+                    // noncompact digest
+                    blake2b_256_update(&btchip_context_D.orchard_actions_noncompact.blake2b, action->encCiphertext, 32);
+                    blake2b_256_update(&btchip_context_D.orchard_actions_noncompact.blake2b, action->cv, 32);
+                    blake2b_256_update(&btchip_context_D.orchard_actions_noncompact.blake2b, action->rk, 32);
+                    blake2b_256_update(&btchip_context_D.orchard_actions_noncompact.blake2b, action->encCiphertext + 564, 16);
+                    blake2b_256_update(&btchip_context_D.orchard_actions_noncompact.blake2b, action->outCiphertext, 80);
+
+                    btchip_context_D.nu5_ctx.orchard_actions_remaining--;
+
+                    if (btchip_context_D.nu5_ctx.orchard_actions_remaining == 0) {
+                        blake2b_256_final(&btchip_context_D.orchard_actions_compact.blake2b,
+                                         btchip_context_D.nu5_ctx.orchard_actions_compact_digest);
+                        blake2b_256_final(&btchip_context_D.orchard_actions_memos.blake2b,
+                                         btchip_context_D.nu5_ctx.orchard_actions_memos_digest);
+                        blake2b_256_final(&btchip_context_D.orchard_actions_noncompact.blake2b,
+                                         btchip_context_D.nu5_ctx.orchard_actions_noncompact_digest);
+
+
+                        btchip_context_D.nu5_ctx.current_item_bytes_remaining = 41; // flag = 1, value_balance = 8, and anchor = 32;
+                        btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_ORCHARD_FLAG_VALUE_ANCHOR;
+                        continue;
+                    }
+
+                    btchip_context_D.nu5_ctx.current_item_bytes_remaining = sizeof(orchard_action_t);
+                }
+                continue;
+            }
+
+            case NU5_PARSE_ORCHARD_FLAG_VALUE_ANCHOR: {
+                if (btchip_context_D.nu5_ctx.current_item_bytes_remaining == 0) {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_COMPLETE;
+                    continue;
+                }
+                
+                unsigned char dataToProcess = (btchip_context_D.transactionDataRemaining > 
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining) ?
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining :
+                                             btchip_context_D.transactionDataRemaining;
+
+                if (dataToProcess == 0) {
+                    return;
+                }
+                
+                // TODO: use a constant to store this magic size expected
+                size_t buffer_offset = 41 - btchip_context_D.nu5_ctx.current_item_bytes_remaining;
+                memcpy(btchip_context_D.nu5_ctx.orchard_flag_value_anchor_buffer + buffer_offset,
+                       btchip_context_D.transactionBufferPointer, dataToProcess);
+                
+                transaction_offset_increase(dataToProcess);
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining -= dataToProcess;
+
+                if (btchip_context_D.nu5_ctx.current_item_bytes_remaining == 0) {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_ORCHARD_PROOF_SIZE;
+                }
+
+                continue;
+            }
+
+            case NU5_PARSE_ORCHARD_PROOF_SIZE: {
+                if (btchip_context_D.transactionDataRemaining == 0) {
+                    return;
+                }
+
+                uint64_t sizeProofsOrchard = transaction_get_varint();
+
+                if (sizeProofsOrchard == 0) { // should not be possible
+                    btchip_context_D.transactionContext.transactionState = BTCHIP_TRANSACTION_PARSED;
+                    return;
+                }
+
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining = sizeProofsOrchard;
+
+                // if (btchip_context_D.nu5_ctx.orchard_proofs_buffer) {
+                //     free(btchip_context_D.nu5_ctx.orchard_proofs_buffer);
+                // }
+
+                PRINTF("\nDEBUG - PROOF - space needed: %d bytes\n\n", sizeProofsOrchard * sizeof(uint8_t));
+                // btchip_context_D.nu5_ctx.orchard_proofs_buffer = malloc(sizeProofsOrchard * sizeof(uint8_t)); // TODO: maybe should be avoided 
+
+                btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_ORCHARD_PROOF;
+                continue;
+            }
+
+            case NU5_PARSE_ORCHARD_PROOF: {
+                unsigned char dataToProcess = (btchip_context_D.transactionDataRemaining > 
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining) ?
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining :
+                                             btchip_context_D.transactionDataRemaining;
+
+                if (dataToProcess == 0) {
+                    return;
+                }
+
+                // TODO: use a constant to store this magic size expected
+                // size_t buffer_offset = (2720 + (2272 * btchip_context_D.nu5_ctx.orchard_actions_count)) - btchip_context_D.nu5_ctx.current_item_bytes_remaining;
+                // memcpy(btchip_context_D.nu5_ctx.orchard_proofs_buffer + buffer_offset,
+                //        btchip_context_D.transactionBufferPointer, dataToProcess);
+
+                transaction_offset_increase(dataToProcess);
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining -= dataToProcess;
+
+                if (btchip_context_D.nu5_ctx.current_item_bytes_remaining == 0) {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_ORCHARD_VSPENDAUTHSIGS;
+                    btchip_context_D.nu5_ctx.current_item_bytes_remaining = 64 * btchip_context_D.nu5_ctx.orchard_actions_count;
+                    // btchip_context_D.nu5_ctx.orchard_vspend_auth_sigs_buffer = malloc(64 * sizeof(uint8_t)); // TODO: maybe should be avoided 
+                }
+
+                continue;
+            }
+
+            case NU5_PARSE_ORCHARD_VSPENDAUTHSIGS: {
+                unsigned char dataToProcess = (btchip_context_D.transactionDataRemaining > 
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining) ?
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining :
+                                             btchip_context_D.transactionDataRemaining;
+
+                if (dataToProcess == 0) {
+                    return;
+                }
+
+                // TODO: use a constant to store this magic size expected
+                // size_t buffer_offset = (64 * btchip_context_D.nu5_ctx.orchard_actions_count) - btchip_context_D.nu5_ctx.current_item_bytes_remaining;
+                // memcpy(btchip_context_D.nu5_ctx.orchard_vspend_auth_sigs_buffer + buffer_offset,
+                //        btchip_context_D.transactionBufferPointer, dataToProcess);
+
+                transaction_offset_increase(dataToProcess);
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining -= dataToProcess;
+
+                if (btchip_context_D.nu5_ctx.current_item_bytes_remaining == 0) {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_ORCHARD_BINDINGSIG;
+                    btchip_context_D.nu5_ctx.current_item_bytes_remaining = 64;
+                }
+
+                continue;
+            }
+        
+            case NU5_PARSE_ORCHARD_BINDINGSIG: {
+                unsigned char dataToProcess = (btchip_context_D.transactionDataRemaining > 
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining) ?
+                                             btchip_context_D.nu5_ctx.current_item_bytes_remaining :
+                                             btchip_context_D.transactionDataRemaining;
+
+                if (dataToProcess == 0) {
+                    return;
+                }
+
+                // TODO: use a constant to store this magic size expected
+                // size_t buffer_offset = 64 - btchip_context_D.nu5_ctx.current_item_bytes_remaining;
+                // memcpy(btchip_context_D.nu5_ctx.orchard_binding_sig_buffer + buffer_offset,
+                //        btchip_context_D.transactionBufferPointer, dataToProcess);
+
+                transaction_offset_increase(dataToProcess);
+                btchip_context_D.nu5_ctx.current_item_bytes_remaining -= dataToProcess;
+
+                if (btchip_context_D.nu5_ctx.current_item_bytes_remaining == 0) {
+                    btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_COMPLETE;
+                }
+
+                continue;
+            }
+
+            case NU5_PARSE_COMPLETE: {
+            
+                // // Compute final digests as per ZIP 244
+                // uint8_t hashHeader[32];
+                // uint8_t hashTransparent[32];
+                // uint8_t hashSapling[32];
+                // uint8_t hashOrchard[32];
+
+                // // Finalize header_digest
+                // blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, hashHeader);
+
+                // // // Compute transparent_digest
+                // blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, NU5_PARAM_TRANSPA);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, 
+                //                   btchip_context_D.segwit.cache.hashedPrevouts, 32);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, 
+                //                   btchip_context_D.segwit.cache.hashedSequence, 32);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, 
+                //                   btchip_context_D.segwit.cache.hashedOutputs, 32);
+                // blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, hashTransparent);
+
+                // // // Compute sapling_digest
+                // blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, NU5_PARAM_SAPLING);
+                // // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
+                // //                   btchip_context_D.nu5_ctx.sapling_spends_digest, 32);
+                // // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
+                // //                   btchip_context_D.nu5_ctx.sapling_outputs_digest, 32);
+                // blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, hashSapling);
+
+                // // Compute orchard_digest  
+                // blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, NU5_PARAM_ORCHARD);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
+                //                   btchip_context_D.nu5_ctx.orchard_actions_compact_digest, 32);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
+                //                   btchip_context_D.nu5_ctx.orchard_actions_memos_digest, 32);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
+                //                   btchip_context_D.nu5_ctx.orchard_actions_noncompact_digest, 32);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
+                //                   btchip_context_D.nu5_ctx.orchard_flag_value_anchor_buffer, 41);
+                // blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.nu5_ctx.orchard_digest);
+
+                // // Compute final txid_digest
+                // uint8_t parameters[16];
+                // memcpy(parameters, NU5_PARAM_TXID, 12);
+                // memcpy(parameters + 12, btchip_context_D.consensusBranchId, 
+                //        sizeof(btchip_context_D.consensusBranchId));
+
+                // blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, parameters);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, hashHeader, 32);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, hashTransparent, 32);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, hashSapling, 32);
+                // blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, hashOrchard, 32);
+            
+                btchip_context_D.transactionContext.transactionState = BTCHIP_TRANSACTION_PARSED;
+                return;
+            }
+        }
+
+        if (btchip_context_D.transactionDataRemaining <= 0) {
+            break; // if no continue was invoked from the switch, means that it need more data
+        }
     }
 }
 
@@ -798,6 +1239,14 @@ void transaction_parse(unsigned char parseMode) {
 
                             // Compute orchard_digest. Assume there are no Orchard actions
                             blake2b_256_init(tmp_ctx, NU5_PARAM_ORCHARD);
+                            blake2b_256_update(tmp_ctx,
+                                              btchip_context_D.nu5_ctx.orchard_actions_compact_digest, 32);
+                            blake2b_256_update(tmp_ctx,
+                                              btchip_context_D.nu5_ctx.orchard_actions_memos_digest, 32);
+                            blake2b_256_update(tmp_ctx,
+                                              btchip_context_D.nu5_ctx.orchard_actions_noncompact_digest, 32);
+                            blake2b_256_update(tmp_ctx,
+                                              btchip_context_D.nu5_ctx.orchard_flag_value_anchor_buffer, 41);
                             blake2b_256_final(tmp_ctx, orchard_digest);
 
                             // Start to compute signature_digest
@@ -1120,7 +1569,8 @@ void transaction_parse(unsigned char parseMode) {
                         goto ok;
                     }
                     // Locktime
-                    check_transaction_available(4);
+                    // check_transaction_available(4);
+                    PRINTF("\nBuffer:\n%.*H\n\n", 32, btchip_context_D.transactionBufferPointer);
 
                     if (TX_VERSION == 5) {
                         blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
@@ -1132,7 +1582,7 @@ void transaction_parse(unsigned char parseMode) {
                                            sizeof(btchip_context_D.consensusBranchId));
                         blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.transactionBufferPointer, 4);
                     }
-                    transaction_offset_increase(4);
+                    // transaction_offset_increase(4); //
 
                     if (btchip_context_D.transactionDataRemaining == 0) {
                         btchip_context_D.transactionContext.transactionState =
@@ -1140,8 +1590,7 @@ void transaction_parse(unsigned char parseMode) {
                         continue;
                     } else {
                         btchip_context_D.transactionHashOption = 0;
-                        btchip_context_D.transactionContext.scriptRemaining =
-                            transaction_get_varint();
+                        // btchip_context_D.transactionContext.scriptRemaining = transaction_get_varint();
                         btchip_context_D.transactionHashOption =
                             TRANSACTION_HASH_FULL;
                         btchip_context_D.transactionContext.transactionState =
@@ -1151,96 +1600,82 @@ void transaction_parse(unsigned char parseMode) {
                 }
 
                 case BTCHIP_TRANSACTION_PROCESS_EXTRA: {
-                    unsigned char dataAvailable;
-
-                    if (btchip_context_D.transactionContext.scriptRemaining ==
-                        0) {
-                        btchip_context_D.transactionContext.transactionState =
-                            BTCHIP_TRANSACTION_PARSED;
-                        continue;
-                    }
-
-                    if (btchip_context_D.transactionDataRemaining < 1) {
-                        // No more data to read, ok
-                        goto ok;
-                    }
-
-                    dataAvailable =
-                        (btchip_context_D.transactionDataRemaining >
-                                 btchip_context_D.transactionContext
-                                     .scriptRemaining
-                             ? btchip_context_D.transactionContext
-                                   .scriptRemaining
-                             : btchip_context_D.transactionDataRemaining);
-                    if (dataAvailable == 0) {
-                        goto ok;
-                    }
-
+                    PRINTF("\nBTCHIP_TRANSACTION_PROCESS_EXTRA\n\n");
+    
                     if (TX_VERSION == 5) {
-                        // We don't support sapling or orchard actions
-                        // Only expiryHeight should remain at this point
-                        if (btchip_context_D.transactionDataRemaining != 4) {
-                            PRINTF("expiryHeight expected");
-                            goto fail;
+                        // For NU5, we need to parse Sapling and Orchard sections
+                        // Initialize parsing state on first entry
+                        if (btchip_context_D.nu5_ctx.parse_state == 0) {
+                            btchip_context_D.nu5_ctx.parse_state = NU5_PARSE_SAPLING_SPENDS_COUNT;
+                            btchip_context_D.nu5_ctx.sapling_spends_remaining = 0;
+                            btchip_context_D.nu5_ctx.sapling_outputs_remaining = 0;
+                            btchip_context_D.nu5_ctx.orchard_actions_remaining = 0;
+                            btchip_context_D.nu5_ctx.current_item_bytes_remaining = 0;
+                            btchip_context_D.nu5_ctx.current_field = 0;
+            
+                            // Initialize hash contexts with correct personalization per ZIP 244
+                            // blake2b_256_init(&btchip_context_D.saplingSpends.blake2b, "ZcashSSHash");
+                            // blake2b_256_init(&btchip_context_D.saplingOutputs.blake2b, "ZcashSOHash");
+
+                            // blake2b_256_init(&btchip_context_D.orchardActions.blake2b, "ZcashOrcHash");
+            
+                            PRINTF("NU5 parsing initialized\n");
                         }
-                        // expiryHeight
-                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.transactionBufferPointer, 4);
-                    }
 
-                    transaction_offset_increase(dataAvailable);
-                    btchip_context_D.transactionContext.scriptRemaining -=
-                        dataAvailable;
-                    if (TX_VERSION == 5) {
-                        uint8_t hashHeader[32];
-                        uint8_t hashTransparent[32];
-                        uint8_t hashSapling[32];
-                        uint8_t hashOrchard[32];
+                        PRINTF("\nDEBUG - Buffer:\n%.*H\n", (int)G_io_apdu_buffer[ISO_OFFSET_LC], btchip_context_D.transactionBufferPointer);
+        
+                        parse_nu5_sapling_orchard_section();
+        
+                        unsigned char dataToProcess = (btchip_context_D.transactionDataRemaining >
+                                                       btchip_context_D.nu5_ctx.current_item_bytes_remaining)
+                                                       ? btchip_context_D.nu5_ctx.current_item_bytes_remaining
+                                                       : btchip_context_D.transactionDataRemaining;
 
-                        // store header_digest
-                        blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, hashHeader);
+                        // Check if parsing is complete
+                        if (btchip_context_D.transactionContext.transactionState == BTCHIP_TRANSACTION_PARSED) {
+                            continue;
+                        } else if (dataToProcess == 0 ) {
+                            // More data needed or still parsing, return to wait for next APDU
+                            goto ok;
+                        }
 
-                        // This context will be used for transparent_digest
-                        blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, (uint8_t *) NU5_PARAM_TRANSPA);
-                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.segwit.cache.hashedPrevouts, 32);
-                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.segwit.cache.hashedSequence, 32);
-                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.segwit.cache.hashedOutputs, 32);
+                        continue;
+                    } else {
+                        // For non-NU5 transactions, handle normally
+                        unsigned char dataAvailable;
 
-                        // store transparent_digest
-                        blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, hashTransparent);
+                        if (btchip_context_D.transactionContext.scriptRemaining == 0) {
+                            btchip_context_D.transactionContext.transactionState = BTCHIP_TRANSACTION_PARSED;
+                            continue;
+                        }
 
-                        // This context will be used for sapling_digest
-                        blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, (uint8_t *) NU5_PARAM_SAPLING);
-                        // store sapling_digest
-                        blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, hashSapling);
+                        if (btchip_context_D.transactionDataRemaining < 1) {
+                            goto ok;
+                        }
 
-                        // This context will be used for orchard_digest
-                        blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, (uint8_t *) NU5_PARAM_ORCHARD);
-                        // store orchard_digest
-                        blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, hashOrchard);
+                        dataAvailable = (btchip_context_D.transactionDataRemaining >
+                                        btchip_context_D.transactionContext.scriptRemaining
+                                        ? btchip_context_D.transactionContext.scriptRemaining
+                                        : btchip_context_D.transactionDataRemaining);
+        
+                        if (dataAvailable == 0) {
+                            goto ok;
+                        }
 
-                        // initialize personalization hash for tx_id
-                        uint8_t parameters[16];
-                        memcpy(parameters, NU5_PARAM_TXID, 12);
-                        memcpy(parameters + 12,
-                               btchip_context_D.consensusBranchId,
-                               sizeof(btchip_context_D.consensusBranchId));
-
-                        // This context will be used for txid_digest
-                        blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, parameters);
-                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, hashHeader, sizeof(hashHeader));
-                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, hashTransparent, sizeof(hashTransparent));
-                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, hashSapling, sizeof(hashSapling));
-                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, hashOrchard, sizeof(hashOrchard));
+                        transaction_offset_increase(dataAvailable);
+                        btchip_context_D.transactionContext.scriptRemaining -= dataAvailable;
                     }
                     break;
                 }
 
                 case BTCHIP_TRANSACTION_PARSED: {
+                    PRINTF("\nBTCHIP_TRANSACTION_PARSED\n\n");
                     PRINTF("Transaction parsed\n");
                     goto ok;
                 }
 
                 case BTCHIP_TRANSACTION_PRESIGN_READY: {
+                    PRINTF("\nBTCHIP_TRANSACTION_PRESIGN_READY\n\n");
                     PRINTF("Presign ready\n");
                     if (TX_VERSION == 5) {
                         blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, NU5_PARAM_OUTPUTS);
@@ -1249,6 +1684,7 @@ void transaction_parse(unsigned char parseMode) {
                 }
 
                 case BTCHIP_TRANSACTION_SIGN_READY: {
+                    PRINTF("\nBTCHIP_TRANSACTION_SIGN_READY\n\n");
                     PRINTF("Sign ready\n");
                     goto ok;
                 }
