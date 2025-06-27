@@ -87,8 +87,15 @@ enum btchip_transaction_state_e {
     BTCHIP_TRANSACTION_SIGN_READY = 0x0a,
     /** Transaction fully parsed, ready to be signed */
     BTCHIP_TRANSACTION_PROCESS_SAPLING = 0x0b,
-    BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS_COMPACT = 0x0c,
-    BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS_NONCOMPACT = 0x0d,    
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS = 0x0c,
+    //BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS_NONCOMPACT = 0x0d,     TODO
+
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS_HASHING = 0x0e,    
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_COMPACT = 0x0f,    
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_MEMO = 0x10,    
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_NONCOMPACT = 0x11,    
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUT_HASHING = 0x12,    
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_FINAL_HASHING = 0x13,
 };
 typedef enum btchip_transaction_state_e btchip_transaction_state_t;
 
@@ -129,6 +136,10 @@ struct btchip_transaction_context_s {
     unsigned long int transactionCurrentInputOutput;
     /** Remaining script bytes to process for the current input or output */
     unsigned long int scriptRemaining;
+    
+    // TODO
+    unsigned long saplingSpendRemaining;
+    unsigned long saplingOutputRemaining;
 
     /** Persistent over signing components */
 
@@ -181,6 +192,17 @@ struct btchip_context_s {
     union multi_hash transactionHashAuthorization;
     /** Current hash to perform (TRANSACTION_HASH_) */
     unsigned char transactionHashOption;
+
+    union multi_hash transactionSaplingSpend;
+    union multi_hash transactionSaplingSpendCompact;
+    union multi_hash transactionSaplingSpendNonCompact;
+
+    union multi_hash transactionSaplingOutput;
+    union multi_hash transactionSaplingOutputCompact;
+    union multi_hash transactionSaplingOutputMemo;
+    union multi_hash transactionSaplingOutputNonCompact;
+
+
 
     /* Segregated Witness changes */
 
@@ -248,6 +270,11 @@ struct btchip_context_s {
     unsigned char nLockTime[4];
     unsigned char sigHashType[4];
     unsigned char consensusBranchId[4];
+
+    /* Sapling */
+    unsigned long saplingBalance;
+    unsigned char saplingAnchor[32];    
+    unsigned long saplingOutputCount;
 
     struct {
         unsigned char header_digest[DIGEST_SIZE];

@@ -63,7 +63,13 @@ unsigned char const NU5_PARAM_ORCHARD[16] = { 'Z', 'T', 'x', 'I', 'd', 'O', 'r',
 unsigned char const NU5_PARAM_AMOUNTS[16] = { 'Z', 'T', 'x', 'T', 'r', 'A', 'm', 'o', 'u', 'n', 't', 's', 'H', 'a', 's', 'h' };
 unsigned char const NU5_PARAM_SCRIPTS[16] = { 'Z', 'T', 'x', 'T', 'r', 'S', 'c', 'r', 'i', 'p', 't', 's', 'H', 'a', 's', 'h' };
 unsigned char const NU5_PARAM_TX_IN[16] = { 'Z', 'c', 'a', 's', 'h', '_', '_', '_', 'T', 'x', 'I', 'n', 'H', 'a', 's', 'h' };
-
+unsigned char const NU5_PARAM_SAPLING_SPENDS[16] = { 'Z', 'T', 'x', 'I', 'd', 'S', 'S', 'p', 'e', 'n', 'd', 's', 'H', 'a', 's', 'h' };
+unsigned char const NU5_PARAM_SAPLING_SPENDS_COMPACT[16] = { 'Z', 'T', 'x', 'I', 'd', 'S', 'S', 'p', 'e', 'n', 'd', 'C', 'H', 'a', 's', 'h' };
+unsigned char const NU5_PARAM_SAPLING_SPENDS_NONCOMPACT[16] = { 'Z', 'T', 'x', 'I', 'd', 'S', 'S', 'p', 'e', 'n', 'd', 'N', 'H', 'a', 's', 'h' };
+unsigned char const NU5_PARAM_SAPLING_OUTPUTS[16] = { 'Z', 'T', 'x', 'I', 'd', 'S', 'O', 'u', 't', 'p', 'u', 't', 'H', 'a', 's', 'h' };
+unsigned char const NU5_PARAM_SAPLING_OUTPUTS_COMPACT[16] = { 'Z', 'T', 'x', 'I', 'd', 'S', 'O', 'u', 't', 'C', '_', '_', 'H', 'a', 's', 'h' };
+unsigned char const NU5_PARAM_SAPLING_OUTPUTS_MEMO[16] = { 'Z', 'T', 'x', 'I', 'd', 'S', 'O', 'u', 't', 'M', '_', '_', 'H', 'a', 's', 'h' };
+unsigned char const NU5_PARAM_SAPLING_OUTPUTS_NONCOMPACT[16] = { 'Z', 'T', 'x', 'I', 'd', 'S', 'O', 'u', 't', 'N', '_', '_', 'H', 'a', 's', 'h' };
 
 unsigned char const DISPATCHER_CLA[] = {
     BTCHIP_CLA, // btchip_apdu_setup,
