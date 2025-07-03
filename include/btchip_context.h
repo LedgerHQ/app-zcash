@@ -193,6 +193,8 @@ struct btchip_context_s {
     /** Current hash to perform (TRANSACTION_HASH_) */
     unsigned char transactionHashOption;
 
+    union multi_hash transactionHashHeader;
+
     union multi_hash transactionSaplingSpend;
     union multi_hash transactionSaplingSpendCompact;
     union multi_hash transactionSaplingSpendNonCompact;
@@ -272,7 +274,7 @@ struct btchip_context_s {
     unsigned char consensusBranchId[4];
 
     /* Sapling */
-    unsigned long saplingBalance;
+    unsigned char saplingBalance[8];
     unsigned char saplingAnchor[32];    
     unsigned long saplingOutputCount;
 
