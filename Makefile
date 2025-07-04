@@ -28,7 +28,7 @@ APPNAME = "Zcash"
 
 # Application version
 APPVERSION_M=2
-APPVERSION_N=3
+APPVERSION_N=4
 APPVERSION_P=2
 APPVERSION = "$(APPVERSION_M).$(APPVERSION_N).$(APPVERSION_P)"
 
@@ -53,7 +53,12 @@ VARIANT_PARAM = COIN
 VARIANT_VALUES = zcash
 
 # Enabling DEBUG flag will enable PRINTF and disable optimizations
-#DEBUG = 1
+DEBUG = 1
+
+# GDB debugging support
+# DEFINES += HAVE_GDB_SUPPORT
+# CFLAGS += -ggdb3
+# APP_LOAD_PARAMS += --appFlags 0x800 # GDB flag
 
 ########################################
 #     Application custom permissions   #
