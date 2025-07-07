@@ -86,20 +86,14 @@ unsigned short btchip_apdu_get_trusted_input() {
         if (TX_VERSION != 5) {
             cx_hash_sha256(G_io_apdu_buffer + TRUSTED_INPUT_SIZE, 32, G_io_apdu_buffer + 4, 32);
         } else {
-            PRINTF("RABL: trusted input: memmove\n");
             memmove(G_io_apdu_buffer + 4, G_io_apdu_buffer + TRUSTED_INPUT_SIZE, 32);
-            PRINTF("---RABL: RABL: trusted input: transactionAmount:\n%.*H\n", 32, G_io_apdu_buffer + 4 + TRUSTED_INPUT_SIZE );
         }
 
-        PRINTF("RABL: trusted input: transactionTargetInput %d \n", btchip_context_D.transactionTargetInput);
         btchip_write_u32_le(G_io_apdu_buffer + 4 + 32,
                             btchip_context_D.transactionTargetInput);
-        PRINTF("---RABL: RABL: trusted input: transactionTargetInput:\n%.*H\n", 4, G_io_apdu_buffer + 4 + 32);
 
-        PRINTF("RABL: trusted input: transactionAmount %d \n", btchip_context_D.transactionContext.transactionAmount);
         memmove(G_io_apdu_buffer + 4 + 32 + 4,
                    btchip_context_D.transactionContext.transactionAmount, 8);
-        PRINTF("---RABL: RABL: trusted input: transactionAmount:\n%.*H\n", 8, G_io_apdu_buffer + 4 + 32 + 4);
 
         cx_hmac_sha256((uint8_t *)N_btchip.bkp.trustedinput_key,
                        sizeof(N_btchip.bkp.trustedinput_key), G_io_apdu_buffer,
