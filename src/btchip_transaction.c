@@ -151,7 +151,6 @@ void transaction_parse(unsigned char parseMode) {
     unsigned char optionP2SHSkip2FA =
         ((N_btchip.bkp.config.options & BTCHIP_OPTION_SKIP_2FA_P2SH) != 0);
     btchip_set_check_internal_structure_integrity(0);
-    PRINTF("Continue transaction parse %.*H\n", 1, &btchip_context_D.transactionContext.transactionState);
     BEGIN_TRY {
         TRY {
             for (;;) {
@@ -177,19 +176,16 @@ void transaction_parse(unsigned char parseMode) {
                             memcpy(parameters + sizeof(parameters) - sizeof(btchip_context_D.consensusBranchId),
                                    btchip_context_D.consensusBranchId,
                                    sizeof(btchip_context_D.consensusBranchId));
-                            PRINTF("Init transaction HASH: transactionHashFull \n");
                             if (cx_blake2b_init2_no_throw(&btchip_context_D.transactionHashFull.blake2b, 256, NULL, 0, parameters, 16)) {
                                 goto fail;
                             }
                         }
                     }
                     else {
-                        PRINTF("Init transaction HASH: transactionHashFull 2 \n");
                         if (cx_sha256_init_no_throw(&btchip_context_D.transactionHashFull.sha256)) {
                             goto fail;
                         }
                     }
-                    PRINTF("Init transaction HASH: transactionHashAuthorization \n");
                     if (cx_sha256_init_no_throw(
                         &btchip_context_D.transactionHashAuthorization.sha256)) {
                         goto fail;
@@ -351,8 +347,7 @@ void transaction_parse(unsigned char parseMode) {
                         check_transaction_available(4);
                         memcpy(btchip_context_D.nVersionGroupId,
                                btchip_context_D.transactionBufferPointer, 4);
-                               transaction_offset_increase(4);
-                        uint32_t nVersionGroupId_int = btchip_read_u32(btchip_context_D.nVersionGroupId, 0, 0);
+                        transaction_offset_increase(4);
 
                         // For version >= 3 (Overwinter+), read consensus branch ID
                         // NOTE: Ledger specific field, not part of the actual transaction
@@ -405,7 +400,6 @@ void transaction_parse(unsigned char parseMode) {
                         // No more inputs to hash, move forward
                         btchip_context_D.transactionContext.transactionState =
                             BTCHIP_TRANSACTION_INPUT_HASHING_DONE;
-                            // TODO: check input hash if it was good formed when inputs count == 0
                         continue;
                     }
                     if (btchip_context_D.transactionDataRemaining < 1) {
@@ -554,7 +548,7 @@ void transaction_parse(unsigned char parseMode) {
                                 transaction_offset_increase(8);
                             } else {
                                 // Add txid
-                                if (btchip_context_D.usingOverwinter && (TX_VERSION == 5)) {                                    
+                                if (btchip_context_D.usingOverwinter && (TX_VERSION == 5)) {
                                     blake2b_256_init(&btchip_context_D.segwit.hash.hashPrevouts.blake2b, NU5_PARAM_TX_IN);
                                     blake2b_256_update(&btchip_context_D.segwit.hash.hashPrevouts.blake2b, btchip_context_D.transactionBufferPointer, 36);
                                 }
@@ -712,7 +706,7 @@ void transaction_parse(unsigned char parseMode) {
                             PRINTF("Disabling P2SH consumption\n");
                             btchip_context_D.transactionContext.consumeP2SH = 0;
                         }
-                        if (btchip_context_D.usingSegwit && btchip_context_D.segwitParsedOnce && (TX_VERSION == 5)) {                           
+                        if (btchip_context_D.usingSegwit && btchip_context_D.segwitParsedOnce && (TX_VERSION == 5)) {
                            CX_ASSERT(cx_hash_no_throw(&btchip_context_D.segwit.hash.hashPrevouts.blake2b.header, 0, btchip_context_D.transactionBufferPointer, 1, NULL, 0));
                         }
                         transaction_offset_increase(1);
@@ -1115,7 +1109,6 @@ void transaction_parse(unsigned char parseMode) {
                     }
                     
                     if (TX_VERSION == 5) {
-
                         uint8_t tmp[32];
 
                         // Store outputs_digest
@@ -1156,11 +1149,6 @@ void transaction_parse(unsigned char parseMode) {
                 }
                 
                 case BTCHIP_TRANSACTION_PROCESS_SAPLING: {
-                    //unsigned char dataAvailable;
-                    PRINTF("Process extra data, remaining " DEBUG_LONG "\n",btchip_context_D.transactionDataRemaining);
-
-                    PRINTF("Process extra data, TX_VERSION " DEBUG_LONG "\n",TX_VERSION);
-                    
                     check_transaction_available(40);
                     
                     int value = 8;
@@ -1172,7 +1160,6 @@ void transaction_parse(unsigned char parseMode) {
                     memcpy( &btchip_context_D.saplingAnchor, btchip_context_D.transactionBufferPointer, sizeof(btchip_context_D.saplingAnchor));
                     btchip_context_D.transactionBufferPointer += value;
 
-                    //////////////////////////////////////////////////////////////////////////////
                     if (btchip_context_D.transactionContext.saplingSpendRemaining > 0) {
                         // We have sapling spends
                         btchip_context_D.transactionContext.transactionState =
@@ -1190,11 +1177,8 @@ void transaction_parse(unsigned char parseMode) {
                     }
                     break;
                 }
-                //////////////////////////////////////////////////////////////////////////////
                 case BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS: {
-                    //unsigned char dataAvailable;
-                    PRINTF("Process extra data, remaining " DEBUG_LONG "\n",btchip_context_D.transactionDataRemaining);
-
+                    
                     check_transaction_available(96);
                     // update compact hash with cv
                     int value = 32;
@@ -1225,11 +1209,6 @@ void transaction_parse(unsigned char parseMode) {
                 }
 
                 case BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS_HASHING: {
-
-                    //////////////////////////////////////////////////////////////////////////////
-
-                    // START NEW PROCESSING sapling spend hash
-
                     // Finalize compact and noncompact sapling spend hashes
                     uint8_t saplingSpend[DIGEST_SIZE];
                     uint8_t saplingSpendCompactDigest[DIGEST_SIZE];
@@ -1353,9 +1332,7 @@ void transaction_parse(unsigned char parseMode) {
                     goto ok;
                 }
 
-                // ORCHARD -----------
                 case BTCHIP_TRANSACTION_PROCESS_ORCHARD_COMPACT: {
-                    
                     long compact_size = 32+32+32+52; // nullifier + cmx + ephemeralKey + encCiphertext[..52]
                     check_transaction_available(compact_size);
                     blake2b_256_update(&btchip_context_D.transactionHashCompact.blake2b, btchip_context_D.transactionBufferPointer, compact_size);
@@ -1375,7 +1352,6 @@ void transaction_parse(unsigned char parseMode) {
                 }
 
                 case BTCHIP_TRANSACTION_PROCESS_ORCHARD_MEMO: {
-                    
                     const long memo_part_size = 128; // memo_size = 512 each APDU will contain qarter of the memo
                     check_transaction_available(memo_part_size);
                     // update compact hash with cv

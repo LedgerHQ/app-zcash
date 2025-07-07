@@ -91,7 +91,6 @@ unsigned short btchip_apdu_get_trusted_input() {
 
         btchip_write_u32_le(G_io_apdu_buffer + 4 + 32,
                             btchip_context_D.transactionTargetInput);
-
         memmove(G_io_apdu_buffer + 4 + 32 + 4,
                    btchip_context_D.transactionContext.transactionAmount, 8);
 
