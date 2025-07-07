@@ -380,7 +380,7 @@ void transaction_parse(unsigned char parseMode) {
                     PRINTF("Number of inputs : " DEBUG_LONG "\n",btchip_context_D.transactionContext.transactionRemainingInputsOutputs);
 
                     blake2b_256_init(&btchip_context_D.transactionSaplingFull.blake2b, (uint8_t *) NU5_PARAM_SAPLING);
-                    blake2b_256_init(&btchip_context_D.transactionOrchardActions.blake2b, (uint8_t *) NU5_PARAM_ORCHARD);
+                    blake2b_256_init(&btchip_context_D.transactionOrchardFull.blake2b, (uint8_t *) NU5_PARAM_ORCHARD);
                     if (btchip_context_D.called_from_swap && parseMode == PARSE_MODE_SIGNATURE) {
                         // remember number of inputs to know when to exit from library
                         // we will count number of already signed inputs and compare with this value
@@ -1128,42 +1128,20 @@ void transaction_parse(unsigned char parseMode) {
                 case BTCHIP_TRANSACTION_OUTPUT_HASHING_DONE: {
                     PRINTF("Output hashing done\n");
 
+                    if (btchip_context_D.transactionDataRemaining < 1) {
+                        goto ok;
+                    }
+                    // Locktime
                     if (TX_VERSION == 5) {
+
                         uint8_t tmp[32];
 
                         // Store outputs_digest
                         blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, tmp);
                         memcpy(btchip_context_D.segwit.cache.hashedOutputs, tmp, 32);
+                        PRINTF("--- RABL hashedOutputs HASH:\n%.*H\n", 32, btchip_context_D.segwit.cache.hashedOutputs); 
 
-                        PRINTF("--- RABL hashedOutputs HASH:\n%.*H\n", 32, btchip_context_D.segwit.cache.hashedOutputs); // valid output hash
-
-                        // This context will be used for header_digest
-                        blake2b_256_init(&btchip_context_D.transactionHashHeader.blake2b, NU5_PARAM_HEADERS); // TODO - header digest should be created after Sapling
-                    }
-
-                    if (btchip_context_D.transactionDataRemaining < 1) {
-                        // No more data to read, ok
-                        goto ok;
-                    }
-                    // Locktime
-                    
-
-                    if (TX_VERSION == 5) {
-                        // blake2b_256_init(&btchip_context_D.transactionHashHeader.blake2b, NU5_PARAM_HEADERS); 
-                        // blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b,
-                        //                    btchip_context_D.transactionVersion,
-                        //                    sizeof(btchip_context_D.transactionVersion));
-                        // PRINTF("--- RABL hashHeader :\n%.*H\n", sizeof(btchip_context_D.transactionVersion), &btchip_context_D.transactionVersion);
-                        // blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b, btchip_context_D.nVersionGroupId, sizeof(btchip_context_D.nVersionGroupId));
-                        // PRINTF("--- RABL hashHeader :\n%.*H\n", sizeof(btchip_context_D.nVersionGroupId), &btchip_context_D.nVersionGroupId);
-                        // blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b,
-                        //                    btchip_context_D.consensusBranchId,
-                        //                    sizeof(btchip_context_D.consensusBranchId));
-                        // PRINTF("--- RABL hashHeader :\n%.*H\n", sizeof(btchip_context_D.consensusBranchId), &btchip_context_D.consensusBranchId);
-                        
-                        // // TODO: should be added later/in the end
-                        // blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b, btchip_context_D.transactionBufferPointer, 4); // Locktime
-                        // PRINTF("--- RABL hashHeader :\n%.*H\n", 4, btchip_context_D.transactionBufferPointer);
+                        // get anount of saplint spends/outputs and orchard actions
 
                         PRINTF("RABL data remaining tmp: %d\n", btchip_context_D.transactionDataRemaining);
                         btchip_context_D.transactionContext.saplingSpendRemaining = transaction_get_varint();
@@ -1188,7 +1166,7 @@ void transaction_parse(unsigned char parseMode) {
                     }
                     else if (btchip_context_D.orchardActionCount > 0) {
                         // init the orchard actions compact hash
-                        blake2b_256_init(&btchip_context_D.transactionOrchardOutputCompact.blake2b, (uint8_t *) NU5_PARAM_ORCHARD_ACTIONS_COMPACT);
+                        blake2b_256_init(&btchip_context_D.transactionHashCompact.blake2b, (uint8_t *) NU5_PARAM_ORCHARD_ACTIONS_COMPACT);
 
                         btchip_context_D.transactionContext.orchardActionsRemaining = btchip_context_D.orchardActionCount;
                         btchip_context_D.transactionContext.transactionState =
@@ -1229,9 +1207,9 @@ void transaction_parse(unsigned char parseMode) {
                             BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS;
 
                         // init the sapling spends compact hash
-                        blake2b_256_init(&btchip_context_D.transactionSaplingSpendCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_SPENDS_COMPACT);
+                        blake2b_256_init(&btchip_context_D.transactionHashCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_SPENDS_COMPACT);
                         // init the sapling spends noncompact hash
-                        blake2b_256_init(&btchip_context_D.transactionSaplingSpendNonCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_SPENDS_NONCOMPACT);
+                        blake2b_256_init(&btchip_context_D.transactionHashNonCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_SPENDS_NONCOMPACT);
                         goto ok;
                     } else {
                         // No sapling spends, just continue with extra data
@@ -1250,23 +1228,23 @@ void transaction_parse(unsigned char parseMode) {
                     // update compact hash with cv
                     int value = 32;
                     PRINTF("--- RABL ADD TO spends.compact cv :\n%.*H\n", value, btchip_context_D.transactionBufferPointer);
-                    blake2b_256_update(&btchip_context_D.transactionSaplingSpendNonCompact.blake2b, btchip_context_D.transactionBufferPointer, 32);
+                    blake2b_256_update(&btchip_context_D.transactionHashNonCompact.blake2b, btchip_context_D.transactionBufferPointer, 32);
                     btchip_context_D.transactionBufferPointer += 32;
                     btchip_context_D.transactionDataRemaining -= 32;
 
                     // update compact hash with anchor
                     PRINTF("--- RABL ADD TO spends.compact saplingAnchor :\n%.*H\n", 32, btchip_context_D.saplingAnchor);
-                    blake2b_256_update(&btchip_context_D.transactionSaplingSpendNonCompact.blake2b, btchip_context_D.saplingAnchor, 32);
+                    blake2b_256_update(&btchip_context_D.transactionHashNonCompact.blake2b, btchip_context_D.saplingAnchor, 32);
 
                     // update NON compact hash with nullifier                    
                     PRINTF("--- RABL ADD TO spends.nonCompact nullifier :\n%.*H\n", value, btchip_context_D.transactionBufferPointer);
-                    blake2b_256_update(&btchip_context_D.transactionSaplingSpendCompact.blake2b, btchip_context_D.transactionBufferPointer, 32);
+                    blake2b_256_update(&btchip_context_D.transactionHashCompact.blake2b, btchip_context_D.transactionBufferPointer, 32);
                     btchip_context_D.transactionBufferPointer += 32;
                     btchip_context_D.transactionDataRemaining -= 32;
 
                     // update compact hash with rk
                     PRINTF("--- RABL ADD TO spends.compact rk :\n%.*H\n", value, btchip_context_D.transactionBufferPointer);
-                    blake2b_256_update(&btchip_context_D.transactionSaplingSpendNonCompact.blake2b, btchip_context_D.transactionBufferPointer, 32);
+                    blake2b_256_update(&btchip_context_D.transactionHashNonCompact.blake2b, btchip_context_D.transactionBufferPointer, 32);
                     btchip_context_D.transactionBufferPointer += 32;
                     btchip_context_D.transactionDataRemaining -= 32;
                     
@@ -1290,19 +1268,19 @@ void transaction_parse(unsigned char parseMode) {
                     uint8_t saplingSpendCompactDigest[DIGEST_SIZE];
                     uint8_t saplingSpendNonCompactDigest[DIGEST_SIZE];
 
-                    blake2b_256_final(&btchip_context_D.transactionSaplingSpendCompact.blake2b, saplingSpendCompactDigest);
+                    blake2b_256_final(&btchip_context_D.transactionHashCompact.blake2b, saplingSpendCompactDigest);
                     PRINTF("---RABL: SAPLING SPENS Compact digest:\n%.*H\n", DIGEST_SIZE, saplingSpendCompactDigest);
 
-                    blake2b_256_final(&btchip_context_D.transactionSaplingSpendNonCompact.blake2b, saplingSpendNonCompactDigest);
+                    blake2b_256_final(&btchip_context_D.transactionHashNonCompact.blake2b, saplingSpendNonCompactDigest);
                     PRINTF("---RABL: SAPLING SPENS NONCompact digest:\n%.*H\n", DIGEST_SIZE, saplingSpendNonCompactDigest);
                     
 
                     //Initialize the sapling spend digest context
-                    blake2b_256_init(&btchip_context_D.transactionSaplingSpend.blake2b, (uint8_t *)  NU5_PARAM_SAPLING_SPENDS);
-                    blake2b_256_update(&btchip_context_D.transactionSaplingSpend.blake2b, saplingSpendCompactDigest, sizeof(saplingSpendCompactDigest));
-                    blake2b_256_update(&btchip_context_D.transactionSaplingSpend.blake2b, saplingSpendNonCompactDigest, sizeof(saplingSpendNonCompactDigest));
+                    blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, (uint8_t *)  NU5_PARAM_SAPLING_SPENDS);
+                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, saplingSpendCompactDigest, sizeof(saplingSpendCompactDigest));
+                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, saplingSpendNonCompactDigest, sizeof(saplingSpendNonCompactDigest));
+                    blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, saplingSpend); // +
 
-                    blake2b_256_final(&btchip_context_D.transactionSaplingSpend.blake2b, saplingSpend); // +
                     blake2b_256_update(&btchip_context_D.transactionSaplingFull.blake2b, saplingSpend, sizeof(saplingSpend));
                     PRINTF("---RABL: SAPLING SPEND HASH:\n%.*H\n", DIGEST_SIZE, saplingSpend);
 
@@ -1319,7 +1297,7 @@ void transaction_parse(unsigned char parseMode) {
                         
                         btchip_context_D.transactionContext.saplingOutputRemaining = btchip_context_D.saplingOutputCount;
                         
-                        blake2b_256_init(&btchip_context_D.transactionSaplingOutputCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS_COMPACT);
+                        blake2b_256_init(&btchip_context_D.transactionHashCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS_COMPACT);
                         goto ok;
                     } else {
                         // No sapling outputs, just continue with extra data
@@ -1337,7 +1315,7 @@ void transaction_parse(unsigned char parseMode) {
                     long compact_size = 32+32+52; // cmu + ephemeral_key + enc_ciphertext[..52]
                     check_transaction_available(compact_size);
                     // update compact hash with cv
-                    blake2b_256_update(&btchip_context_D.transactionSaplingOutputCompact.blake2b, btchip_context_D.transactionBufferPointer, compact_size);
+                    blake2b_256_update(&btchip_context_D.transactionHashCompact.blake2b, btchip_context_D.transactionBufferPointer, compact_size);
                     PRINTF("---RABL: ADD SAPLING OUT Compact :\n%.*H\n", compact_size, btchip_context_D.transactionBufferPointer);
                     btchip_context_D.transactionBufferPointer += compact_size;
                     btchip_context_D.transactionDataRemaining -= compact_size;
@@ -1346,7 +1324,7 @@ void transaction_parse(unsigned char parseMode) {
                     
                     // TODO: check data remaining
                     if (btchip_context_D.transactionContext.saplingOutputRemaining ==0) {
-                        blake2b_256_init(&btchip_context_D.transactionSaplingOutputMemo.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS_MEMO);
+                        blake2b_256_init(&btchip_context_D.transactionHashMemo.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS_MEMO);
                         // memo_size = 512 each APDU will contain halof of the memo
                         btchip_context_D.transactionContext.saplingOutputRemaining = 4 * btchip_context_D.saplingOutputCount;
                         btchip_context_D.transactionContext.transactionState =
@@ -1364,7 +1342,7 @@ void transaction_parse(unsigned char parseMode) {
                     const long memo_part_size = 128; // memo_size = 512 each APDU will contain qarter of the memo
                     check_transaction_available(memo_part_size);
                     // update compact hash with cv
-                    blake2b_256_update(&btchip_context_D.transactionSaplingOutputMemo.blake2b, btchip_context_D.transactionBufferPointer, memo_part_size);
+                    blake2b_256_update(&btchip_context_D.transactionHashMemo.blake2b, btchip_context_D.transactionBufferPointer, memo_part_size);
                     PRINTF("---RABL: ADD SAPLING OUT Mamo :\n%.*H\n", 128, btchip_context_D.transactionBufferPointer);
                     btchip_context_D.transactionBufferPointer += memo_part_size;
                     btchip_context_D.transactionDataRemaining -= memo_part_size;
@@ -1373,7 +1351,7 @@ void transaction_parse(unsigned char parseMode) {
 
                     if (btchip_context_D.transactionContext.saplingOutputRemaining == 0) {
                         
-                        blake2b_256_init(&btchip_context_D.transactionSaplingOutputNonCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS_NONCOMPACT);
+                        blake2b_256_init(&btchip_context_D.transactionHashNonCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS_NONCOMPACT);
                         
                         btchip_context_D.transactionContext.saplingOutputRemaining = btchip_context_D.saplingOutputCount;
                         
@@ -1392,7 +1370,7 @@ void transaction_parse(unsigned char parseMode) {
                     const long non_compact_size = 128; // non_compact_size = 32+16+80
                     check_transaction_available(non_compact_size);
                     // update compact hash with cv
-                    blake2b_256_update(&btchip_context_D.transactionSaplingOutputNonCompact.blake2b, btchip_context_D.transactionBufferPointer, non_compact_size);
+                    blake2b_256_update(&btchip_context_D.transactionHashNonCompact.blake2b, btchip_context_D.transactionBufferPointer, non_compact_size);
                     PRINTF("---RABL: ADD SAPLING OUT NonCompact :\n%.*H\n", non_compact_size, btchip_context_D.transactionBufferPointer);
                     btchip_context_D.transactionBufferPointer += non_compact_size;
                     btchip_context_D.transactionDataRemaining -= non_compact_size;
@@ -1421,22 +1399,21 @@ void transaction_parse(unsigned char parseMode) {
                     uint8_t saplingOutputMemoDigest[DIGEST_SIZE];
                     uint8_t saplingOutputNonCompactDigest[DIGEST_SIZE];
 
-                    blake2b_256_final(&btchip_context_D.transactionSaplingOutputCompact.blake2b, saplingOutputCompactDigest);
+                    blake2b_256_final(&btchip_context_D.transactionHashCompact.blake2b, saplingOutputCompactDigest);
                     PRINTF("---RABL: SAPLING OUT HASH Compact :\n%.*H\n", DIGEST_SIZE, saplingOutputCompactDigest);
-                    blake2b_256_final(&btchip_context_D.transactionSaplingOutputMemo.blake2b, saplingOutputMemoDigest);
+                    blake2b_256_final(&btchip_context_D.transactionHashMemo.blake2b, saplingOutputMemoDigest);
                     PRINTF("---RABL: SAPLING OUT HASH Memo :\n%.*H\n", DIGEST_SIZE, saplingOutputMemoDigest);
-                    blake2b_256_final(&btchip_context_D.transactionSaplingOutputNonCompact.blake2b, saplingOutputNonCompactDigest);
+                    blake2b_256_final(&btchip_context_D.transactionHashNonCompact.blake2b, saplingOutputNonCompactDigest);
                     PRINTF("---RABL: SAPLING OUT HASH NonCompact :\n%.*H\n", DIGEST_SIZE, saplingOutputNonCompactDigest);
 
-                    // Initialize the sapling spend digest context
-                    blake2b_256_init(&btchip_context_D.transactionSaplingOutput.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS);
-
-                    blake2b_256_update(&btchip_context_D.transactionSaplingOutput.blake2b, saplingOutputCompactDigest, sizeof(saplingOutputCompactDigest));
-                    blake2b_256_update(&btchip_context_D.transactionSaplingOutput.blake2b, saplingOutputMemoDigest, sizeof(saplingOutputMemoDigest));
-                    blake2b_256_update(&btchip_context_D.transactionSaplingOutput.blake2b, saplingOutputNonCompactDigest, sizeof(saplingOutputNonCompactDigest));
-
+                    // Initialize the sapling output digest context
                     uint8_t saplingOutput[DIGEST_SIZE];
-                    blake2b_256_final(&btchip_context_D.transactionSaplingOutput.blake2b, saplingOutput); // +
+                    blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS);
+                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, saplingOutputCompactDigest, sizeof(saplingOutputCompactDigest));
+                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, saplingOutputMemoDigest, sizeof(saplingOutputMemoDigest));
+                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, saplingOutputNonCompactDigest, sizeof(saplingOutputNonCompactDigest));
+                    blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, saplingOutput); // +
+
                     blake2b_256_update(&btchip_context_D.transactionSaplingFull.blake2b, saplingOutput, sizeof(saplingOutput));
                     PRINTF("---RABL: SAPLING OUT HASH:\n%.*H\n", DIGEST_SIZE, saplingOutput);
 
@@ -1458,7 +1435,7 @@ void transaction_parse(unsigned char parseMode) {
 
                     long compact_size = 32+32+32+52; // nullifier + cmx + ephemeralKey + encCiphertext[..52]
                     check_transaction_available(compact_size);
-                    blake2b_256_update(&btchip_context_D.transactionOrchardOutputCompact.blake2b, btchip_context_D.transactionBufferPointer, compact_size);
+                    blake2b_256_update(&btchip_context_D.transactionHashCompact.blake2b, btchip_context_D.transactionBufferPointer, compact_size);
                     PRINTF("---RABL: ADD ORCH OUT Compact :\n%.*H\n", compact_size, btchip_context_D.transactionBufferPointer);
                     btchip_context_D.transactionBufferPointer += compact_size;
                     btchip_context_D.transactionDataRemaining -= compact_size;
@@ -1467,7 +1444,7 @@ void transaction_parse(unsigned char parseMode) {
                     
                     // TODO: check data remaining
                     if (btchip_context_D.transactionContext.orchardActionsRemaining ==0) {
-                        blake2b_256_init(&btchip_context_D.transactionOrchardOutputMemo.blake2b, (uint8_t *) NU5_PARAM_ORCHARD_ACTIONS_MEMOS);
+                        blake2b_256_init(&btchip_context_D.transactionHashMemo.blake2b, (uint8_t *) NU5_PARAM_ORCHARD_ACTIONS_MEMOS);
                         // memo_size = 512 each APDU will contain halof of the memo
                         btchip_context_D.transactionContext.orchardActionsRemaining = 4 * btchip_context_D.orchardActionCount;
                         btchip_context_D.transactionContext.transactionState =
@@ -1485,7 +1462,7 @@ void transaction_parse(unsigned char parseMode) {
                     const long memo_part_size = 128; // memo_size = 512 each APDU will contain qarter of the memo
                     check_transaction_available(memo_part_size);
                     // update compact hash with cv
-                    blake2b_256_update(&btchip_context_D.transactionOrchardOutputMemo.blake2b, btchip_context_D.transactionBufferPointer, memo_part_size);
+                    blake2b_256_update(&btchip_context_D.transactionHashMemo.blake2b, btchip_context_D.transactionBufferPointer, memo_part_size);
                     PRINTF("---RABL: ADD ORCH OUT Mamo :\n%.*H\n", 128, btchip_context_D.transactionBufferPointer);
                     btchip_context_D.transactionBufferPointer += memo_part_size;
                     btchip_context_D.transactionDataRemaining -= memo_part_size;
@@ -1495,7 +1472,7 @@ void transaction_parse(unsigned char parseMode) {
 
                     if (btchip_context_D.transactionContext.orchardActionsRemaining == 0) {
                         
-                        blake2b_256_init(&btchip_context_D.transactionOrchardOutputNonCompact.blake2b, (uint8_t *) NU5_PARAM_ORCHARD_ACTIONS_NONCOMP);
+                        blake2b_256_init(&btchip_context_D.transactionHashNonCompact.blake2b, (uint8_t *) NU5_PARAM_ORCHARD_ACTIONS_NONCOMP);
                         
                         btchip_context_D.transactionContext.orchardActionsRemaining = btchip_context_D.orchardActionCount;
                         
@@ -1512,7 +1489,7 @@ void transaction_parse(unsigned char parseMode) {
                     
                     const long non_compact_size = 160; // non_compact_size = 32+32+16+80
                     check_transaction_available(non_compact_size);                    
-                    blake2b_256_update(&btchip_context_D.transactionOrchardOutputNonCompact.blake2b, btchip_context_D.transactionBufferPointer, non_compact_size);
+                    blake2b_256_update(&btchip_context_D.transactionHashNonCompact.blake2b, btchip_context_D.transactionBufferPointer, non_compact_size);
                     PRINTF("---RABL: ADD ORCH OUT NonCompact :\n%.*H\n", non_compact_size, btchip_context_D.transactionBufferPointer);
                     btchip_context_D.transactionBufferPointer += non_compact_size;
                     btchip_context_D.transactionDataRemaining -= non_compact_size;
@@ -1542,19 +1519,19 @@ void transaction_parse(unsigned char parseMode) {
                     uint8_t orchardOutputMemoDigest[DIGEST_SIZE];
                     uint8_t orchardOutputNonCompactDigest[DIGEST_SIZE];
 
-                    blake2b_256_final(&btchip_context_D.transactionOrchardOutputCompact.blake2b, orchardOutputCompactDigest);
+                    blake2b_256_final(&btchip_context_D.transactionHashCompact.blake2b, orchardOutputCompactDigest);
                     PRINTF("---RABL: ORCH OUT HASH Compact :\n%.*H\n", DIGEST_SIZE, orchardOutputCompactDigest);
-                    blake2b_256_final(&btchip_context_D.transactionOrchardOutputMemo.blake2b, orchardOutputMemoDigest);
+                    blake2b_256_final(&btchip_context_D.transactionHashMemo.blake2b, orchardOutputMemoDigest);
                     PRINTF("---RABL: ORCH OUT HASH Memo :\n%.*H\n", DIGEST_SIZE, orchardOutputMemoDigest);
-                    blake2b_256_final(&btchip_context_D.transactionOrchardOutputNonCompact.blake2b, orchardOutputNonCompactDigest);
+                    blake2b_256_final(&btchip_context_D.transactionHashNonCompact.blake2b, orchardOutputNonCompactDigest);
                     PRINTF("---RABL: ORCH OUT HASH NonCompact :\n%.*H\n", DIGEST_SIZE, orchardOutputNonCompactDigest);
 
                     // Initialize the orchard spend digest context
-                    blake2b_256_init(&btchip_context_D.transactionOrchardActions.blake2b, (uint8_t *) NU5_PARAM_ORCHARD);
+                    blake2b_256_init(&btchip_context_D.transactionOrchardFull.blake2b, (uint8_t *) NU5_PARAM_ORCHARD);
 
-                    blake2b_256_update(&btchip_context_D.transactionOrchardActions.blake2b, orchardOutputCompactDigest, sizeof(orchardOutputCompactDigest));
-                    blake2b_256_update(&btchip_context_D.transactionOrchardActions.blake2b, orchardOutputMemoDigest, sizeof(orchardOutputMemoDigest));
-                    blake2b_256_update(&btchip_context_D.transactionOrchardActions.blake2b, orchardOutputNonCompactDigest, sizeof(orchardOutputNonCompactDigest));
+                    blake2b_256_update(&btchip_context_D.transactionOrchardFull.blake2b, orchardOutputCompactDigest, sizeof(orchardOutputCompactDigest));
+                    blake2b_256_update(&btchip_context_D.transactionOrchardFull.blake2b, orchardOutputMemoDigest, sizeof(orchardOutputMemoDigest));
+                    blake2b_256_update(&btchip_context_D.transactionOrchardFull.blake2b, orchardOutputNonCompactDigest, sizeof(orchardOutputNonCompactDigest));
 
 
                     // TODO::::::::::::::::::::::::::::::::::
@@ -1562,10 +1539,10 @@ void transaction_parse(unsigned char parseMode) {
                     const long orch_dig_data_size = 1+8+32; // orchard digest data: 1+8+32
                     check_transaction_available(orch_dig_data_size);
                     
-                    blake2b_256_update(&btchip_context_D.transactionOrchardActions.blake2b, btchip_context_D.transactionBufferPointer, orch_dig_data_size);
+                    blake2b_256_update(&btchip_context_D.transactionOrchardFull.blake2b, btchip_context_D.transactionBufferPointer, orch_dig_data_size);
 
                     // TODO: remove after debug or optimize storing the value
-                    // blake2b_256_final(&btchip_context_D.transactionOrchardActions.blake2b, orchardOutput);
+                    // blake2b_256_final(&btchip_context_D.transactionOrchardFull.blake2b, orchardOutput);
                     // PRINTF("---RABL: orchard OUT HASH:\n%.*H\n", DIGEST_SIZE, orchardOutput);
 
                     btchip_context_D.transactionContext.transactionState =
@@ -1579,23 +1556,23 @@ void transaction_parse(unsigned char parseMode) {
 
                     // TODO: boundrys check
                     PRINTF("BTCHIP_TRANSACTION_PROCESS_SAPLING_FINAL_HASHING: : dataAvailable:\n");                    
-                    blake2b_256_init(&btchip_context_D.transactionHashHeader.blake2b, NU5_PARAM_HEADERS); 
+                    blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, NU5_PARAM_HEADERS); 
                     
-                    blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b,
+                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
                                         btchip_context_D.transactionVersion,
                                         sizeof(btchip_context_D.transactionVersion));
                     PRINTF("--- RABL hashHeader :\n%.*H\n", sizeof(btchip_context_D.transactionVersion), &btchip_context_D.transactionVersion);
 
-                    blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b, btchip_context_D.nVersionGroupId, sizeof(btchip_context_D.nVersionGroupId));
+                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.nVersionGroupId, sizeof(btchip_context_D.nVersionGroupId));
                     PRINTF("--- RABL hashHeader :\n%.*H\n", sizeof(btchip_context_D.nVersionGroupId), &btchip_context_D.nVersionGroupId);
                     
-                    blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b,
+                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
                                         btchip_context_D.consensusBranchId,
                                         sizeof(btchip_context_D.consensusBranchId));
                     PRINTF("--- RABL hashHeader :\n%.*H\n", sizeof(btchip_context_D.consensusBranchId), &btchip_context_D.consensusBranchId);
                     // locktime
                     int value = 4;
-                    blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b, btchip_context_D.transactionBufferPointer, 4);
+                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.transactionBufferPointer, 4);
                     PRINTF("--- RABL hashHeader locktime :\n%.*H\n", 4, btchip_context_D.transactionBufferPointer);                    
                     btchip_context_D.transactionBufferPointer += value;
                     btchip_context_D.transactionDataRemaining -= value;
@@ -1604,7 +1581,7 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionContext.scriptRemaining = transaction_get_varint();
 
                     // expirityHigh
-                    blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b, btchip_context_D.transactionBufferPointer, 4);
+                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.transactionBufferPointer, 4);
                     PRINTF("---RABL: Header expirityHigh:\n%.*H\n", 4, btchip_context_D.transactionBufferPointer);                    
                      
                     
@@ -1613,7 +1590,7 @@ void transaction_parse(unsigned char parseMode) {
                     
                     uint8_t hashHeader[32];
                     
-                    blake2b_256_final(&btchip_context_D.transactionHashHeader.blake2b, hashHeader); // +
+                    blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, hashHeader); // +
                     PRINTF("---RABL: Header HASH:\n%.*H\n", DIGEST_SIZE, hashHeader);
 
                     ///
@@ -1636,7 +1613,7 @@ void transaction_parse(unsigned char parseMode) {
                     blake2b_256_final(&btchip_context_D.transactionSaplingFull.blake2b, hashSapling);
                     PRINTF("---RABL: SAPLING HASH:\n%.*H\n", DIGEST_SIZE, hashSapling); // +
 
-                    // store header_digest
+                    // store transperent digest hash
                     uint8_t hashTransparent[32];
                     uint8_t hashOrchard[32];
 
@@ -1652,7 +1629,7 @@ void transaction_parse(unsigned char parseMode) {
                     // This context will be used for orchard_digest
                     //blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, (uint8_t *) NU5_PARAM_ORCHARD);
                     // store orchard_digest
-                    blake2b_256_final(&btchip_context_D.transactionOrchardActions.blake2b, hashOrchard); // +
+                    blake2b_256_final(&btchip_context_D.transactionOrchardFull.blake2b, hashOrchard); // +
                     PRINTF("---RABL: ORCH HASH:\n%.*H\n", DIGEST_SIZE, hashOrchard);
 
                     // initialize personalization hash for tx_id
@@ -1723,22 +1700,22 @@ void transaction_parse(unsigned char parseMode) {
                             PRINTF("expiryHeight expected %d \n", btchip_context_D.transactionDataRemaining);
                             //goto fail;
                         }
-                        blake2b_256_init(&btchip_context_D.transactionHashHeader.blake2b, NU5_PARAM_HEADERS); 
-                        blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b,
+                        blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, NU5_PARAM_HEADERS); 
+                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
                                            btchip_context_D.transactionVersion,
                                            sizeof(btchip_context_D.transactionVersion));
                         PRINTF("--- RABL hashHeader :\n%.*H\n", sizeof(btchip_context_D.transactionVersion), &btchip_context_D.transactionVersion);
                         
-                        blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b, btchip_context_D.nVersionGroupId, sizeof(btchip_context_D.nVersionGroupId));
+                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.nVersionGroupId, sizeof(btchip_context_D.nVersionGroupId));
                         PRINTF("--- RABL hashHeader :\n%.*H\n", sizeof(btchip_context_D.nVersionGroupId), &btchip_context_D.nVersionGroupId);
                         
-                        blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b,
+                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b,
                                            btchip_context_D.consensusBranchId,
                                            sizeof(btchip_context_D.consensusBranchId));
                         PRINTF("--- RABL hashHeader :\n%.*H\n", sizeof(btchip_context_D.consensusBranchId), &btchip_context_D.consensusBranchId);
                         
                         int value = 4;
-                        blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b, btchip_context_D.transactionBufferPointer, value); // locktime
+                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.transactionBufferPointer, value); // locktime
                         PRINTF("locktime expected %.*H\n", value, btchip_context_D.transactionBufferPointer); 
                         btchip_context_D.transactionBufferPointer += value;
                         btchip_context_D.transactionDataRemaining -= value;
@@ -1747,13 +1724,13 @@ void transaction_parse(unsigned char parseMode) {
                         btchip_context_D.transactionContext.scriptRemaining = transaction_get_varint();
                         PRINTF("scriptRemaining %.*H\n", sizeof(btchip_context_D.transactionContext.scriptRemaining), &btchip_context_D.transactionContext.scriptRemaining); 
 
-                        blake2b_256_update(&btchip_context_D.transactionHashHeader.blake2b, btchip_context_D.transactionBufferPointer, value); // expiryHeight
+                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.transactionBufferPointer, value); // expiryHeight
                         PRINTF("expiryHeight expected %.*H\n", value, btchip_context_D.transactionBufferPointer); 
                         btchip_context_D.transactionBufferPointer += value;
                         btchip_context_D.transactionDataRemaining -= value;
                         btchip_context_D.transactionContext.scriptRemaining -= value;
                         // store header_digest
-                        blake2b_256_final(&btchip_context_D.transactionHashHeader.blake2b, hashHeader);
+                        blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, hashHeader);
                     
 
                         PRINTF("--- RABL HEADER DIGEST :\n%.*H\n", 32, hashHeader);

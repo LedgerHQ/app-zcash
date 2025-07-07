@@ -70,6 +70,9 @@ unsigned char const NU5_PARAM_SAPLING_OUTPUTS[16] = { 'Z', 'T', 'x', 'I', 'd', '
 unsigned char const NU5_PARAM_SAPLING_OUTPUTS_COMPACT[16] = { 'Z', 'T', 'x', 'I', 'd', 'S', 'O', 'u', 't', 'C', '_', '_', 'H', 'a', 's', 'h' };
 unsigned char const NU5_PARAM_SAPLING_OUTPUTS_MEMO[16] = { 'Z', 'T', 'x', 'I', 'd', 'S', 'O', 'u', 't', 'M', '_', '_', 'H', 'a', 's', 'h' };
 unsigned char const NU5_PARAM_SAPLING_OUTPUTS_NONCOMPACT[16] = { 'Z', 'T', 'x', 'I', 'd', 'S', 'O', 'u', 't', 'N', '_', '_', 'H', 'a', 's', 'h' };
+unsigned char const NU5_PARAM_ORCHARD_ACTIONS_COMPACT[16] = { 'Z', 'T', 'x', 'I', 'd', 'O', 'r', 'c', 'A', 'c', 't', 'C', 'H', 'a', 's', 'h' };
+unsigned char const NU5_PARAM_ORCHARD_ACTIONS_MEMOS[16] =   { 'Z', 'T', 'x', 'I', 'd', 'O', 'r', 'c', 'A', 'c', 't', 'M', 'H', 'a', 's', 'h' };
+unsigned char const NU5_PARAM_ORCHARD_ACTIONS_NONCOMP[16] = { 'Z', 'T', 'x', 'I', 'd', 'O', 'r', 'c', 'A', 'c', 't', 'N', 'H', 'a', 's', 'h' };
 
 unsigned char const DISPATCHER_CLA[] = {
     BTCHIP_CLA, // btchip_apdu_setup,

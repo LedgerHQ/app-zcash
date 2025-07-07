@@ -52,6 +52,9 @@ extern unsigned char const NU5_PARAM_SAPLING_OUTPUTS[16];
 extern unsigned char const NU5_PARAM_SAPLING_OUTPUTS_COMPACT[16];
 extern unsigned char const NU5_PARAM_SAPLING_OUTPUTS_MEMO[16];
 extern unsigned char const NU5_PARAM_SAPLING_OUTPUTS_NONCOMPACT[16];
+extern unsigned char const NU5_PARAM_ORCHARD_ACTIONS_COMPACT[16];
+extern unsigned char const NU5_PARAM_ORCHARD_ACTIONS_MEMOS[16];
+extern unsigned char const NU5_PARAM_ORCHARD_ACTIONS_NONCOMP[16];
 
 #define HDKEY_VERSION_LENGTH 4
 

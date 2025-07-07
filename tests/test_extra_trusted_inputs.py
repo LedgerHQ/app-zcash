@@ -44,7 +44,6 @@ def test_NU5_transperent_2(cmd, transport):
 
     sig = sig.hex()
     assert len(sig) == TXID_LEN
-    #assert sig == "3200ec94a9a27d42321c7ace2884a65a343abb9755f3eba881e53834bdb4a3fed4432a1301000000cedb0e0000000000d7b6f03fadcecdf2"
     assert sig[8:8+32*2+8] == EXPECTED_TRUSTED_INPUT
     
 
@@ -97,8 +96,7 @@ def test_NU5_sapling_single(cmd, transport):
     assert sw == 0x9000
 
     sig = sig.hex()
-    assert len(sig) == TXID_LEN
-    #assert sig == "e1360c957489515ddfb5c564962e2c8cb2dc3c651c4a219e25e0b5e569f49d3300000000"
+    assert len(sig) == TXID_LEN    
     assert sig[8:8+32*2+8] == EXPECTED_TRUSTED_INPUT
 
 
@@ -150,7 +148,6 @@ def test_NU5_orchard(cmd, transport):
 
     sig = sig.hex()
     assert len(sig) == TXID_LEN
-    #assert sig == "e1360c957489515ddfb5c564962e2c8cb2dc3c651c4a219e25e0b5e569f49d3300000000"
     assert sig[8:8+32*2+8] == EXPECTED_TRUSTED_INPUT
 
 
@@ -209,5 +206,4 @@ def test_NU5_sapling_multi(cmd, transport):
 
     sig = sig.hex()
     assert len(sig) == TXID_LEN
-    #assert sig == "e1360c957489515ddfb5c564962e2c8cb2dc3c651c4a219e25e0b5e569f49d3300000000"
     assert sig[8:8+32*2+8] == EXPECTED_TRUSTED_INPUT
