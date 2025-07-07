@@ -387,7 +387,6 @@ void transaction_parse(unsigned char parseMode) {
                     // Ready to proceed
                     btchip_context_D.transactionContext.transactionState =
                         BTCHIP_TRANSACTION_DEFINED_WAIT_INPUT;
-                    
 
                     __attribute__((fallthrough));
                 }
