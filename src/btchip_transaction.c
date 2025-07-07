@@ -1131,7 +1131,7 @@ void transaction_parse(unsigned char parseMode) {
                     if (btchip_context_D.transactionDataRemaining < 1) {
                         goto ok;
                     }
-                    // Locktime
+                    
                     if (TX_VERSION == 5) {
 
                         uint8_t tmp[32];
@@ -1140,21 +1140,21 @@ void transaction_parse(unsigned char parseMode) {
                         blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, tmp);
                         memcpy(btchip_context_D.segwit.cache.hashedOutputs, tmp, 32);
                         PRINTF("--- RABL hashedOutputs HASH:\n%.*H\n", 32, btchip_context_D.segwit.cache.hashedOutputs); 
-
-                        // get anount of saplint spends/outputs and orchard actions
-
-                        PRINTF("RABL data remaining tmp: %d\n", btchip_context_D.transactionDataRemaining);
-                        btchip_context_D.transactionContext.saplingSpendRemaining = transaction_get_varint();
-                        PRINTF("RABL: SAP save, saplingSpendCount " DEBUG_LONG "\n",btchip_context_D.transactionContext.saplingSpendRemaining);
-
-                        btchip_context_D.saplingOutputCount = transaction_get_varint();
-                        PRINTF("RABL: SAP save, saplingOutputCount " DEBUG_LONG "\n",btchip_context_D.saplingOutputCount);
-
-                        btchip_context_D.orchardActionCount = transaction_get_varint();
-                        PRINTF("RABL: ORC save, orchardActionCount " DEBUG_LONG "\n",btchip_context_D.orchardActionCount);
-
                     }
-                    //transaction_offset_increase(4); // ????experity high
+
+                    // get anount of saplint spends/outputs and orchard actions
+
+                    btchip_context_D.transactionHashOption = 0;
+                    PRINTF("RABL data remaining tmp: %d\n", btchip_context_D.transactionDataRemaining);
+                    btchip_context_D.transactionContext.saplingSpendRemaining = transaction_get_varint();
+                    PRINTF("RABL: SAP save, saplingSpendCount " DEBUG_LONG "\n",btchip_context_D.transactionContext.saplingSpendRemaining);
+
+                    btchip_context_D.saplingOutputCount = transaction_get_varint();
+                    PRINTF("RABL: SAP save, saplingOutputCount " DEBUG_LONG "\n",btchip_context_D.saplingOutputCount);
+
+                    btchip_context_D.orchardActionCount = transaction_get_varint();
+                    PRINTF("RABL: ORC save, orchardActionCount " DEBUG_LONG "\n",btchip_context_D.orchardActionCount);
+                    btchip_context_D.transactionHashOption = TRANSACTION_HASH_FULL;
 
 
                     PRINTF("RABL data remaining : %d\n", btchip_context_D.transactionDataRemaining);
@@ -1561,34 +1561,49 @@ void transaction_parse(unsigned char parseMode) {
                         // No more data to read, ok
                         goto ok;
                     }
-
                     // read latest data ->
                     // check locktime
                     int value = 4;
                     check_transaction_available(value);
                     uint8_t locktime[4];
-                    // get lock time
+                    // get locktime
                     memcpy(locktime,btchip_context_D.transactionBufferPointer,value);
                     btchip_context_D.transactionBufferPointer += value;
                     btchip_context_D.transactionDataRemaining -= value;
+                    // add lock time to hash if not v5
+                    
+                    PRINTF("RABL: FINISH1 : transactionDataRemaining %d \n", btchip_context_D.transactionDataRemaining); 
+                    
 
                     // get extra data size
+                    btchip_context_D.transactionHashOption = 0;
                     btchip_context_D.transactionContext.scriptRemaining = transaction_get_varint();
-                    PRINTF("scriptRemaining %.*H\n", sizeof(btchip_context_D.transactionContext.scriptRemaining), &btchip_context_D.transactionContext.scriptRemaining); 
+                    btchip_context_D.transactionHashOption = TRANSACTION_HASH_FULL;
+                    PRINTF("RABL: FINISH2 : scriptRemaining %d \n", btchip_context_D.transactionContext.scriptRemaining); 
                     
-                    if (btchip_context_D.transactionContext.scriptRemaining !=4 ) {
-                        PRINTF("Only expiryHeight expected");
-                        btchip_context_D.trustedInputProcessed = 0;
-                        goto fail; 
+                    uint8_t expiryHeight[4];
+                    memcpy(expiryHeight, btchip_context_D.transactionBufferPointer, 4);
+                    if (TX_VERSION == 5) {
+                        // get expiryHeight
+                        uint8_t expiryHeight[4];
+                        check_transaction_available(4);
+                        memcpy(expiryHeight, btchip_context_D.transactionBufferPointer, 4);
+                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.transactionBufferPointer, 4); // expiryHeight
+                        PRINTF("expiryHeight expected %.*H\n", 4, btchip_context_D.transactionBufferPointer); 
+                        if (btchip_context_D.transactionContext.scriptRemaining !=4 ) {
+                            PRINTF("Only expiryHeight expected");
+                            goto fail; 
+                        }
+                    }
+                    else {
+                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, locktime, sizeof(locktime));
+                        //blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, expiryHeight, sizeof(expiryHeight));
+                        transaction_offset_increase(btchip_context_D.transactionDataRemaining);    
+                        btchip_context_D.transactionContext.scriptRemaining -= btchip_context_D.transactionDataRemaining;
                     }
 
-                    // get expiryHeight
-                    uint8_t expiryHeight[4];
-                    check_transaction_available(value);
-                    memcpy(expiryHeight, btchip_context_D.transactionBufferPointer, value);
-                    blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.transactionBufferPointer, value); // expiryHeight
-                    PRINTF("expiryHeight expected %.*H\n", value, btchip_context_D.transactionBufferPointer); 
-                    
+                    PRINTF("RABL FINAL %d\n", btchip_context_D.transactionDataRemaining); 
+                    //PRINTF("RABL  %.*H\n", sizeof(btchip_context_D.transactionDataRemaining), &btchip_context_D.transactionDataRemaining); 
                     // end: <- read latest data
 
                     
@@ -1669,15 +1684,13 @@ void transaction_parse(unsigned char parseMode) {
                         // blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, hashTMP);
                         // PRINTF("---RABL: FULL HASH:\n%.*H\n", DIGEST_SIZE, hashTMP);
 
-                        // Set the transaction state to parsed
-                        btchip_context_D.transactionContext.transactionState =
-                            BTCHIP_TRANSACTION_PARSED;
-                    } else {
-                        goto fail;
-                    }
+                        
+                    } 
 
+                    btchip_context_D.transactionContext.transactionState =
+                            BTCHIP_TRANSACTION_PARSED;
                     btchip_context_D.trustedInputProcessed = 1; 
-                    goto ok;
+                    continue;
                 }
 
                 case BTCHIP_TRANSACTION_PARSED: {
