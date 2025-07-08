@@ -13,7 +13,7 @@ from bitcoin_client.exception import ConditionOfUseNotSatisfiedError
 from utils import automation
 
 
-@automation("tests/automations/accept.json")
+@automation("automations/accept.json")
 def test_NU5_signature(cmd, transport):
     TXID_LEN = 112
     KEY_LEN = 268
@@ -77,7 +77,7 @@ def test_NU5_signature(cmd, transport):
     assert sig == "304402202b22627d88f9ecebf2ab586ffa970232cddad6eabb3289fa1359b2bc9f5554bc02207cfba5db7c01b89c5d540dcb1ada67d485ab1638c2151eaa78b4d368059c007801"
 
 
-@automation("tests/automations/accept.json")
+@automation("automations/accept.json")
 def test_NU5_signature_mult_inputs(cmd, transport):
     TXID_LEN = 112
     KEY_LEN = 268
@@ -218,7 +218,7 @@ def test_NU5_signature_mult_inputs(cmd, transport):
     assert [sig1.hex(), sig2.hex(), sig3.hex()] == SIGS
 
 
-@automation("tests/automations/accept.json")
+@automation("automations/accept.json")
 def test_NU5_signature_mult_outputs(cmd, transport):
     TXID_LEN = 112
     KEY_LEN = 268
@@ -281,7 +281,7 @@ def test_NU5_signature_mult_outputs(cmd, transport):
     assert sig.hex() == SIG
 
 
-@automation("tests/automations/accept.json")
+@automation("automations/accept.json")
 def test_NU6_with_tx_version_4(cmd, transport):
     sw, _ = transport.exchange_raw("e042000011000000000400008085202f895510e7c801")
     assert sw == 0x9000

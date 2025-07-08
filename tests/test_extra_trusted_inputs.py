@@ -13,8 +13,8 @@ from bitcoin_client.exception import ConditionOfUseNotSatisfiedError
 from utils import automation
 
 
-@automation("tests/automations/accept.json")
-def test_NU5_transperent_2(cmd, transport):
+@automation("automations/accept.json")
+def test_NU5_transperent(cmd, transport):
     # TXID == 132a43d4fea3b4bd3438e581a8ebf35597bb3a345aa68428ce7a1c32427da2a9
     TXID_LEN = 112
     EXPECTED_TRUSTED_INPUT = "a9a27d42321c7ace2884a65a343abb9755f3eba881e53834bdb4a3fed4432a1301000000"
@@ -47,7 +47,7 @@ def test_NU5_transperent_2(cmd, transport):
     assert sig[8:8+32*2+8] == EXPECTED_TRUSTED_INPUT
     
 
-@automation("tests/automations/accept.json")
+@automation("automations/accept.json")
 def test_NU5_sapling_single(cmd, transport):
     # TXID == 339df469e5b5e0259e214a1c653cdcb28c2c2e9664c5b5df5d518974950c36e1
     TXID_LEN = 112
@@ -100,7 +100,7 @@ def test_NU5_sapling_single(cmd, transport):
     assert sig[8:8+32*2+8] == EXPECTED_TRUSTED_INPUT
 
 
-@automation("tests/automations/accept.json")
+@automation("automations/accept.json")
 def test_NU5_orchard(cmd, transport):
     # TXID == 339df469e5b5e0259e214a1c653cdcb28c2c2e9664c5b5df5d518974950c36e1
     TXID_LEN = 112
@@ -151,7 +151,7 @@ def test_NU5_orchard(cmd, transport):
     assert sig[8:8+32*2+8] == EXPECTED_TRUSTED_INPUT
 
 
-@automation("tests/automations/accept.json")
+@automation("automations/accept.json")
 def test_NU5_sapling_multi(cmd, transport):
     # TXID == 14781dad69a57fc8a5572135623426fbb9081ca7f4a77976bd4ba932ce12f835
     TXID_LEN = 112
