@@ -1115,8 +1115,7 @@ void transaction_parse(unsigned char parseMode) {
                         memcpy(btchip_context_D.segwit.cache.hashedOutputs, tmp, 32);
                     }
 
-                    // get anount of saplint spends/outputs and orchard actions
-
+                    // get amount of sapling spends/outputs and orchard actions
                     btchip_context_D.transactionHashOption = 0;
                     btchip_context_D.transactionContext.saplingSpendRemaining = transaction_get_varint();
 
@@ -1179,7 +1178,7 @@ void transaction_parse(unsigned char parseMode) {
                 case BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS: {
                     
                     check_transaction_available(96);
-                    // update compact hash with cvg1
+                    // update compact hash with cv
                     blake2b_256_update(&btchip_context_D.transactionHashNonCompact.blake2b, btchip_context_D.transactionBufferPointer, 32);
                     btchip_context_D.transactionBufferPointer += 32;
                     btchip_context_D.transactionDataRemaining -= 32;
@@ -1231,9 +1230,8 @@ void transaction_parse(unsigned char parseMode) {
                         btchip_context_D.transactionContext.saplingOutputRemaining = btchip_context_D.saplingOutputCount;
                         
                         blake2b_256_init(&btchip_context_D.transactionHashCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS_COMPACT);
-                        goto ok;
                     } else {
-                        // No sapling outputs, just continue with extra data
+                        // saplingOutputCount == 0, just continue with extra data
                         btchip_context_D.transactionContext.transactionState =
                             BTCHIP_TRANSACTION_PROCESS_EXTRA;
                     }

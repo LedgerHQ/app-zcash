@@ -14,13 +14,13 @@ from utils import automation
 
 
 @automation("automations/accept.json")
-def test_NU5_transperent(cmd, transport):
+def test_NU5_transparent(cmd, transport):
     # TXID == 132a43d4fea3b4bd3438e581a8ebf35597bb3a345aa68428ce7a1c32427da2a9
     TXID_LEN = 112
     EXPECTED_TRUSTED_INPUT = "a9a27d42321c7ace2884a65a343abb9755f3eba881e53834bdb4a3fed4432a1301000000"
 
 
-    # new with transperent apdus
+    # new with transparent apdus
     sw, _ = transport.exchange_raw("e04200001100000001050000800a27a7265510e7c801")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e042800025e1360c957489515ddfb5c564962e2c8cb2dc3c651c4a219e25e0b5e569f49d33000000006b")
