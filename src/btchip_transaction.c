@@ -1180,6 +1180,10 @@ void transaction_parse(unsigned char parseMode) {
                 }
                 case BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS: {
                     
+                    if (btchip_context_D.transactionContext.saplingSpendRemaining == 0) {
+                        PRINTF("Sapling data corrupted, spends\n");
+                        goto fail;
+                    }
                     check_transaction_available(96);
                     // update compact hash with cv
                     blake2b_256_update(&btchip_context_D.transactionHashNonCompact.blake2b, btchip_context_D.transactionBufferPointer, 32);
@@ -1199,10 +1203,8 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionBufferPointer += 32;
                     btchip_context_D.transactionDataRemaining -= 32;
                     
-                    if (btchip_context_D.transactionContext.saplingSpendRemaining > 0) {
-                        btchip_context_D.transactionContext.saplingSpendRemaining -= 1;
-                    }
-
+                    btchip_context_D.transactionContext.saplingSpendRemaining -= 1;
+                    
                     if (btchip_context_D.transactionContext.saplingSpendRemaining == 0) {
                         btchip_context_D.transactionContext.transactionState = BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS_HASHING;
                         continue;
@@ -1245,6 +1247,11 @@ void transaction_parse(unsigned char parseMode) {
 
                 case BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_COMPACT: {
 
+                    if (btchip_context_D.transactionContext.saplingOutputRemaining == 0) {
+                        PRINTF("Sapling data corrupted, outputs compact\n");
+                        goto fail;
+                    }
+
                     long compact_size = 32+32+52; // cmu + ephemeral_key + enc_ciphertext[..52]
                     check_transaction_available(compact_size);
                     // update compact hash with cv
@@ -1252,9 +1259,7 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionBufferPointer += compact_size;
                     btchip_context_D.transactionDataRemaining -= compact_size;
                     
-                    if (btchip_context_D.transactionContext.saplingOutputRemaining > 0) {
-                        btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
-                    }
+                    btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
                     
                     if (btchip_context_D.transactionContext.saplingOutputRemaining ==0) {
                         blake2b_256_init(&btchip_context_D.transactionHashMemo.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS_MEMO);
@@ -1268,6 +1273,11 @@ void transaction_parse(unsigned char parseMode) {
 
                 case BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_MEMO: {
 
+                    if (btchip_context_D.transactionContext.saplingOutputRemaining == 0) {
+                        PRINTF("Sapling data corrupted, outputs memo\n");
+                        goto fail;
+                    }
+
                     const long memo_part_size = 128; // memo_size = 512 each APDU will contain quarter of the memo
                     check_transaction_available(memo_part_size);
                     // update compact hash with cv
@@ -1275,9 +1285,7 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionBufferPointer += memo_part_size;
                     btchip_context_D.transactionDataRemaining -= memo_part_size;
 
-                    if (btchip_context_D.transactionContext.saplingOutputRemaining > 0) {
-                        btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
-                    }
+                    btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
 
                     if (btchip_context_D.transactionContext.saplingOutputRemaining == 0) {
                         
@@ -1292,6 +1300,12 @@ void transaction_parse(unsigned char parseMode) {
                 }
 
                 case BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_NONCOMPACT: {
+                    
+                    if (btchip_context_D.transactionContext.saplingOutputRemaining == 0) {
+                        PRINTF("Sapling data corrupted, outputs noncompact\n");
+                        goto fail;
+                    }
+
                     const long non_compact_size = 128; // non_compact_size = 32+16+80
                     check_transaction_available(non_compact_size);
                     // update compact hash with cv
@@ -1299,9 +1313,7 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionBufferPointer += non_compact_size;
                     btchip_context_D.transactionDataRemaining -= non_compact_size;
 
-                    if (btchip_context_D.transactionContext.saplingOutputRemaining > 0) {
-                        btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
-                    }
+                    btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
 
                     if (btchip_context_D.transactionContext.saplingOutputRemaining == 0) {
                         btchip_context_D.transactionContext.transactionState =
@@ -1340,15 +1352,17 @@ void transaction_parse(unsigned char parseMode) {
                 }
 
                 case BTCHIP_TRANSACTION_PROCESS_ORCHARD_COMPACT: {
+                    if (btchip_context_D.transactionContext.orchardActionsRemaining == 0) {
+                        PRINTF("Orchard data corrupted, action compact\n");
+                        goto fail;
+                    }
                     long compact_size = 32+32+32+52; // nullifier + cmx + ephemeralKey + encCiphertext[..52]
                     check_transaction_available(compact_size);
                     blake2b_256_update(&btchip_context_D.transactionHashCompact.blake2b, btchip_context_D.transactionBufferPointer, compact_size);
                     btchip_context_D.transactionBufferPointer += compact_size;
                     btchip_context_D.transactionDataRemaining -= compact_size;
                     
-                    if (btchip_context_D.transactionContext.orchardActionsRemaining > 0) {
-                        btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
-                    }
+                    btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
                     
                     if (btchip_context_D.transactionContext.orchardActionsRemaining ==0) {
                         blake2b_256_init(&btchip_context_D.transactionHashMemo.blake2b, (uint8_t *) NU5_PARAM_ORCHARD_ACTIONS_MEMOS);
@@ -1361,6 +1375,10 @@ void transaction_parse(unsigned char parseMode) {
                 }
 
                 case BTCHIP_TRANSACTION_PROCESS_ORCHARD_MEMO: {
+                    if (btchip_context_D.transactionContext.orchardActionsRemaining == 0) {
+                        PRINTF("Orchard data corrupted, action memo\n");
+                        goto fail;
+                    }
                     const long memo_part_size = 128; // memo_size = 512 each APDU will contain quarter of the memo
                     check_transaction_available(memo_part_size);
                     // update compact hash with cv
@@ -1368,9 +1386,7 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionBufferPointer += memo_part_size;
                     btchip_context_D.transactionDataRemaining -= memo_part_size;
 
-                    if (btchip_context_D.transactionContext.orchardActionsRemaining > 0) {
-                        btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
-                    }
+                    btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
 
                     if (btchip_context_D.transactionContext.orchardActionsRemaining == 0) {
                         
@@ -1385,15 +1401,17 @@ void transaction_parse(unsigned char parseMode) {
                 }
 
                 case BTCHIP_TRANSACTION_PROCESS_ORCHARD_NONCOMPACT: {
+                    if (btchip_context_D.transactionContext.orchardActionsRemaining == 0) {
+                        PRINTF("Orchard data corrupted, action noncompact\n");
+                        goto fail;
+                    }
                     const long non_compact_size = 160; // non_compact_size = 32+32+16+80
                     check_transaction_available(non_compact_size);                    
                     blake2b_256_update(&btchip_context_D.transactionHashNonCompact.blake2b, btchip_context_D.transactionBufferPointer, non_compact_size);
                     btchip_context_D.transactionBufferPointer += non_compact_size;
                     btchip_context_D.transactionDataRemaining -= non_compact_size;
 
-                    if (btchip_context_D.transactionContext.orchardActionsRemaining > 0) {
-                        btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
-                    }
+                    btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
 
                     if (btchip_context_D.transactionContext.orchardActionsRemaining == 0) {
                         btchip_context_D.transactionContext.transactionState =
