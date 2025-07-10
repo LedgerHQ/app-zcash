@@ -1152,11 +1152,14 @@ void transaction_parse(unsigned char parseMode) {
                     int value = 8;
                     memcpy( btchip_context_D.saplingBalance, btchip_context_D.transactionBufferPointer, sizeof(btchip_context_D.saplingBalance));
                     btchip_context_D.transactionBufferPointer += value;
+                    btchip_context_D.transactionDataRemaining -= value;
+                    
 
                     
                     value = 32;
                     memcpy( btchip_context_D.saplingAnchor, btchip_context_D.transactionBufferPointer, sizeof(btchip_context_D.saplingAnchor));
                     btchip_context_D.transactionBufferPointer += value;
+                    btchip_context_D.transactionDataRemaining -= value;
 
                     if (btchip_context_D.transactionContext.saplingSpendRemaining > 0) {
                         // We have sapling spends
@@ -1196,7 +1199,9 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionBufferPointer += 32;
                     btchip_context_D.transactionDataRemaining -= 32;
                     
-                    btchip_context_D.transactionContext.saplingSpendRemaining -= 1;
+                    if (btchip_context_D.transactionContext.saplingSpendRemaining > 0) {
+                        btchip_context_D.transactionContext.saplingSpendRemaining -= 1;
+                    }
 
                     if (btchip_context_D.transactionContext.saplingSpendRemaining == 0) {
                         btchip_context_D.transactionContext.transactionState = BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS_HASHING;
@@ -1247,11 +1252,13 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionBufferPointer += compact_size;
                     btchip_context_D.transactionDataRemaining -= compact_size;
                     
-                    btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
+                    if (btchip_context_D.transactionContext.saplingOutputRemaining > 0) {
+                        btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
+                    }
                     
                     if (btchip_context_D.transactionContext.saplingOutputRemaining ==0) {
                         blake2b_256_init(&btchip_context_D.transactionHashMemo.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS_MEMO);
-                        // memo_size = 512 each APDU will contain halof of the memo
+                        // memo_size = 512 each APDU will contain quarter of the memo
                         btchip_context_D.transactionContext.saplingOutputRemaining = 4 * btchip_context_D.saplingOutputCount;
                         btchip_context_D.transactionContext.transactionState =
                             BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_MEMO;
@@ -1261,14 +1268,16 @@ void transaction_parse(unsigned char parseMode) {
 
                 case BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_MEMO: {
 
-                    const long memo_part_size = 128; // memo_size = 512 each APDU will contain qarter of the memo
+                    const long memo_part_size = 128; // memo_size = 512 each APDU will contain quarter of the memo
                     check_transaction_available(memo_part_size);
                     // update compact hash with cv
                     blake2b_256_update(&btchip_context_D.transactionHashMemo.blake2b, btchip_context_D.transactionBufferPointer, memo_part_size);
                     btchip_context_D.transactionBufferPointer += memo_part_size;
                     btchip_context_D.transactionDataRemaining -= memo_part_size;
 
-                    btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
+                    if (btchip_context_D.transactionContext.saplingOutputRemaining > 0) {
+                        btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
+                    }
 
                     if (btchip_context_D.transactionContext.saplingOutputRemaining == 0) {
                         
@@ -1290,7 +1299,9 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionBufferPointer += non_compact_size;
                     btchip_context_D.transactionDataRemaining -= non_compact_size;
 
-                    btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
+                    if (btchip_context_D.transactionContext.saplingOutputRemaining > 0) {
+                        btchip_context_D.transactionContext.saplingOutputRemaining -= 1;
+                    }
 
                     if (btchip_context_D.transactionContext.saplingOutputRemaining == 0) {
                         btchip_context_D.transactionContext.transactionState =
@@ -1335,11 +1346,13 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionBufferPointer += compact_size;
                     btchip_context_D.transactionDataRemaining -= compact_size;
                     
-                    btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
+                    if (btchip_context_D.transactionContext.orchardActionsRemaining > 0) {
+                        btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
+                    }
                     
                     if (btchip_context_D.transactionContext.orchardActionsRemaining ==0) {
                         blake2b_256_init(&btchip_context_D.transactionHashMemo.blake2b, (uint8_t *) NU5_PARAM_ORCHARD_ACTIONS_MEMOS);
-                        // memo_size = 512 each APDU will contain halof of the memo
+                        // memo_size = 512 each APDU will contain quarter of the memo
                         btchip_context_D.transactionContext.orchardActionsRemaining = 4 * btchip_context_D.orchardActionCount;
                         btchip_context_D.transactionContext.transactionState =
                             BTCHIP_TRANSACTION_PROCESS_ORCHARD_MEMO;
@@ -1348,14 +1361,16 @@ void transaction_parse(unsigned char parseMode) {
                 }
 
                 case BTCHIP_TRANSACTION_PROCESS_ORCHARD_MEMO: {
-                    const long memo_part_size = 128; // memo_size = 512 each APDU will contain qarter of the memo
+                    const long memo_part_size = 128; // memo_size = 512 each APDU will contain quarter of the memo
                     check_transaction_available(memo_part_size);
                     // update compact hash with cv
                     blake2b_256_update(&btchip_context_D.transactionHashMemo.blake2b, btchip_context_D.transactionBufferPointer, memo_part_size);
                     btchip_context_D.transactionBufferPointer += memo_part_size;
                     btchip_context_D.transactionDataRemaining -= memo_part_size;
 
-                    btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
+                    if (btchip_context_D.transactionContext.orchardActionsRemaining > 0) {
+                        btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
+                    }
 
                     if (btchip_context_D.transactionContext.orchardActionsRemaining == 0) {
                         
@@ -1376,7 +1391,9 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionBufferPointer += non_compact_size;
                     btchip_context_D.transactionDataRemaining -= non_compact_size;
 
-                    btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
+                    if (btchip_context_D.transactionContext.orchardActionsRemaining > 0) {
+                        btchip_context_D.transactionContext.orchardActionsRemaining -= 1;
+                    }
 
                     if (btchip_context_D.transactionContext.orchardActionsRemaining == 0) {
                         btchip_context_D.transactionContext.transactionState =
@@ -1406,6 +1423,8 @@ void transaction_parse(unsigned char parseMode) {
                     check_transaction_available(orch_dig_data_size);
                     
                     blake2b_256_update(&btchip_context_D.transactionOrchardFull.blake2b, btchip_context_D.transactionBufferPointer, orch_dig_data_size);
+                    btchip_context_D.transactionBufferPointer += orch_dig_data_size;
+                    btchip_context_D.transactionDataRemaining -= orch_dig_data_size;
                     btchip_context_D.transactionContext.transactionState =
                             BTCHIP_TRANSACTION_PROCESS_EXTRA; 
                             
@@ -1431,23 +1450,27 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionContext.scriptRemaining = transaction_get_varint();
                     btchip_context_D.transactionHashOption = TRANSACTION_HASH_FULL;
                     
-                    // get expiryHeight
                     uint8_t expiryHeight[4];
-                    memcpy(expiryHeight, btchip_context_D.transactionBufferPointer, 4);
 
                     if (TX_VERSION == 5) {
-                        check_transaction_available(4);
-                        memcpy(expiryHeight, btchip_context_D.transactionBufferPointer, 4);
-                        blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, btchip_context_D.transactionBufferPointer, 4); // expiryHeight
                         if (btchip_context_D.transactionContext.scriptRemaining !=4 ) {
                             PRINTF("Only expiryHeight expected");
                             goto fail; 
                         }
+                        // get expiryHeight
+                        check_transaction_available(4);
+                        memcpy(expiryHeight, btchip_context_D.transactionBufferPointer, 4);
+                        btchip_context_D.transactionBufferPointer += 4;
+                        btchip_context_D.transactionDataRemaining -= 4;
                     }
                     else {
+                        if (btchip_context_D.transactionContext.scriptRemaining != btchip_context_D.transactionDataRemaining) {
+                            PRINTF("Data error");
+                            goto fail; 
+                        }
                         blake2b_256_update(&btchip_context_D.transactionHashFull.blake2b, locktime, sizeof(locktime));
-                        transaction_offset_increase(btchip_context_D.transactionDataRemaining);    
                         btchip_context_D.transactionContext.scriptRemaining -= btchip_context_D.transactionDataRemaining;
+                        transaction_offset_increase(btchip_context_D.transactionDataRemaining);
                     }
                     
                     if (TX_VERSION == 5) {
