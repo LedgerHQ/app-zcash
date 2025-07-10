@@ -85,6 +85,32 @@ enum btchip_transaction_state_e {
     BTCHIP_TRANSACTION_PRESIGN_READY = 0x09,
     /** Transaction fully parsed, ready to be signed */
     BTCHIP_TRANSACTION_SIGN_READY = 0x0a,
+    /** Transaction fully parsed, ready to be signed */
+    // SAPLING
+    /** Transaction proccess sapling, spends general info  */
+    BTCHIP_TRANSACTION_PROCESS_SAPLING = 0x0b,
+    /** Transaction proccess sapling, spends both compact and non compact  */
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS = 0x0c,
+    /** Transaction proccess sapling, build sapling spend hash digest */
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_SPENDS_HASHING = 0x0e,    
+    /** Transaction proccess sapling, compact digest data */
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_COMPACT = 0x0f,    
+    /** Transaction proccess sapling, memo digest data */
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_MEMO = 0x10,
+    /** Transaction proccess sapling, non compact digest data */    
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_NONCOMPACT = 0x11,
+    /** Transaction proccess sapling, build sapling output hash digest */    
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUT_HASHING = 0x12,    
+    BTCHIP_TRANSACTION_PROCESS_SAPLING_FINAL_HASHING = 0x13, // TODO: RABL to be removed
+    // ORCHARD
+    /** Transaction proccess orchard, compact digest data */
+    BTCHIP_TRANSACTION_PROCESS_ORCHARD_COMPACT = 0x14,
+    /** Transaction proccess orchard, memo digest data */
+    BTCHIP_TRANSACTION_PROCESS_ORCHARD_MEMO = 0x15,
+    /** Transaction proccess orchard, non compact digest data */    
+    BTCHIP_TRANSACTION_PROCESS_ORCHARD_NONCOMPACT = 0x16,
+    /** Transaction proccess orchard, build actions hash digest */    
+    BTCHIP_TRANSACTION_PROCESS_ORCHARD_HASHING = 0x17,
 };
 typedef enum btchip_transaction_state_e btchip_transaction_state_t;
 
@@ -125,6 +151,10 @@ struct btchip_transaction_context_s {
     unsigned long int transactionCurrentInputOutput;
     /** Remaining script bytes to process for the current input or output */
     unsigned long int scriptRemaining;
+    
+    unsigned long saplingSpendRemaining;
+    unsigned long saplingOutputRemaining;
+    unsigned long orchardActionsRemaining;
 
     /** Persistent over signing components */
 
@@ -177,6 +207,16 @@ struct btchip_context_s {
     union multi_hash transactionHashAuthorization;
     /** Current hash to perform (TRANSACTION_HASH_) */
     unsigned char transactionHashOption;
+
+    /** Sapling digest hash stored across states  */
+    union multi_hash transactionSaplingFull;
+    /** Orchard digest hash stored across states  */
+    union multi_hash transactionOrchardFull;
+    
+    /** Sapling/Orchard digest parts stored across states  */
+    union multi_hash transactionHashCompact;
+    union multi_hash transactionHashMemo;
+    union multi_hash transactionHashNonCompact;
 
     /* Segregated Witness changes */
 
@@ -244,6 +284,14 @@ struct btchip_context_s {
     unsigned char nLockTime[4];
     unsigned char sigHashType[4];
     unsigned char consensusBranchId[4];
+
+    /* Sapling */
+    unsigned char saplingBalance[8];
+    unsigned char saplingAnchor[32];    
+    unsigned long saplingOutputCount;
+
+    /* orchard*/
+    unsigned long orchardActionCount;
 
     struct {
         unsigned char header_digest[DIGEST_SIZE];

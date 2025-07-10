@@ -36,9 +36,12 @@ def test_NU5_signature(cmd, transport):
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e042800022a245117c140000001976a914c8b56e00740e62449a053c15bdd4809f720b5cb588ac")
     assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800003000000")
+    assert sw == 0x9000
 
     sw, txid = transport.exchange_raw("e0428000090000000004f9081a00")
     txid = txid.hex()
+    print(f"MAY: txid: {txid}")
     assert sw == 0x9000
     assert len(txid) == TXID_LEN
 
@@ -98,6 +101,8 @@ def test_NU5_signature_mult_inputs(cmd, transport):
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e042800022957edd04000000001976a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
     assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800003000000")
+    assert sw == 0x9000
 
     sw, txid1 = transport.exchange_raw("e042800009000000000400000000")
     txid1 = txid1.hex()
@@ -118,6 +123,8 @@ def test_NU5_signature_mult_inputs(cmd, transport):
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e0428000220a1c1b00000000001976a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
     assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800003000000")
+    assert sw == 0x9000
 
     sw, txid2 = transport.exchange_raw("e042800009000000000400000000")
     txid2 = txid2.hex()
@@ -137,6 +144,8 @@ def test_NU5_signature_mult_inputs(cmd, transport):
     sw, _ = transport.exchange_raw("e04280000101")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e042800022889a2d00000000001976a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800003000000")
     assert sw == 0x9000
 
     sw, txid3 = transport.exchange_raw("e042800009000000000400000000")
@@ -229,6 +238,8 @@ def test_NU5_signature_mult_outputs(cmd, transport):
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e042800022957edd04000000001976a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
     assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800003000000")
+    assert sw == 0x9000
 
     sw, txid1 = transport.exchange_raw("e042800009000000000400000000")
     txid1 = txid1.hex()
@@ -288,7 +299,10 @@ def test_NU6_with_tx_version_4(cmd, transport):
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04280002201ae8700000000001976a9149014582e6407d13434d7dac8bb53e4616356501688ac")
     assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800003000000")
+    assert sw == 0x9000
     sw, txid = transport.exchange_raw("e042800014000000000f000000000000000000000000000000")
+    print(f"NU6: txid: {txid.hex()}")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e040000015058000002c80000085800000040000000000000000")
     assert sw == 0x9000
