@@ -1147,19 +1147,21 @@ void transaction_parse(unsigned char parseMode) {
                 }
                 
                 case BTCHIP_TRANSACTION_PROCESS_SAPLING: {
-                    check_transaction_available(40);
                     
                     int value = 8;
+                    check_transaction_available(value);
                     memcpy( btchip_context_D.saplingBalance, btchip_context_D.transactionBufferPointer, sizeof(btchip_context_D.saplingBalance));
                     btchip_context_D.transactionBufferPointer += value;
                     btchip_context_D.transactionDataRemaining -= value;
                     
 
-                    
-                    value = 32;
-                    memcpy( btchip_context_D.saplingAnchor, btchip_context_D.transactionBufferPointer, sizeof(btchip_context_D.saplingAnchor));
-                    btchip_context_D.transactionBufferPointer += value;
-                    btchip_context_D.transactionDataRemaining -= value;
+                    if (btchip_context_D.transactionContext.saplingSpendRemaining > 0) {
+                        value = 32;
+                        check_transaction_available(value);
+                        memcpy( btchip_context_D.saplingAnchor, btchip_context_D.transactionBufferPointer, sizeof(btchip_context_D.saplingAnchor));
+                        btchip_context_D.transactionBufferPointer += value;
+                        btchip_context_D.transactionDataRemaining -= value;
+                    }
 
                     if (btchip_context_D.transactionContext.saplingSpendRemaining > 0) {
                         // We have sapling spends
@@ -1171,7 +1173,25 @@ void transaction_parse(unsigned char parseMode) {
                         // init the sapling spends noncompact hash
                         blake2b_256_init(&btchip_context_D.transactionHashNonCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_SPENDS_NONCOMPACT);
                         goto ok;
-                    } else {
+                    } else if (btchip_context_D.transactionContext.saplingSpendRemaining == 0 && btchip_context_D.saplingOutputCount > 0) {
+                        // process shielding transaction when we got UTXO as a change from the shielding transaction
+                        btchip_context_D.transactionHashOption = 0;
+                        
+                        // Get empty sapling spends digest
+                        uint8_t saplingSpend[DIGEST_SIZE];
+                        blake2b_256_init(&btchip_context_D.transactionHashFull.blake2b, (uint8_t *)  NU5_PARAM_SAPLING_SPENDS);
+                        blake2b_256_final(&btchip_context_D.transactionHashFull.blake2b, saplingSpend); 
+
+                        blake2b_256_update(&btchip_context_D.transactionSaplingFull.blake2b, saplingSpend, sizeof(saplingSpend));
+
+                        btchip_context_D.transactionContext.transactionState = BTCHIP_TRANSACTION_PROCESS_SAPLING_OUTPUTS_COMPACT;
+                        
+                        btchip_context_D.transactionContext.saplingOutputRemaining = btchip_context_D.saplingOutputCount;
+                        
+                        blake2b_256_init(&btchip_context_D.transactionHashCompact.blake2b, (uint8_t *) NU5_PARAM_SAPLING_OUTPUTS_COMPACT);
+                        goto ok;
+                    }
+                    else {
                         // No sapling spends, just continue with extra data
                         btchip_context_D.transactionContext.transactionState =
                             BTCHIP_TRANSACTION_PROCESS_EXTRA; // TODO: should continue to outputs, not valid for current case
