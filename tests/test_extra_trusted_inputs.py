@@ -20,7 +20,7 @@ def test_NU5_transparent(cmd, transport):
     EXPECTED_TRUSTED_INPUT = "a9a27d42321c7ace2884a65a343abb9755f3eba881e53834bdb4a3fed4432a1301000000"
 
 
-    # new with transparent apdus
+    # with transparent apdus
     sw, _ = transport.exchange_raw("e04200001100000001050000800a27a7265510e7c801")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e042800025e1360c957489515ddfb5c564962e2c8cb2dc3c651c4a219e25e0b5e569f49d33000000006b")
@@ -55,7 +55,7 @@ def test_NU5_sapling_single(cmd, transport):
     SIG_LEN = 142
     EXPECTED_TRUSTED_INPUT = "e1360c957489515ddfb5c564962e2c8cb2dc3c651c4a219e25e0b5e569f49d3300000000"
 
-    # new with sapling apdus
+    # with sapling apdus
     sw, _ = transport.exchange_raw("e04200001100000000050000800a27a7265510e7c800")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04280000101")
@@ -108,7 +108,7 @@ def test_NU5_orchard(cmd, transport):
     SIG_LEN = 142
     EXPECTED_TRUSTED_INPUT = "4e1a6be05020adef1760a35aec3671402b57a3693d13e7d7dc8b73f6561c974100000000"
 
-    # new with sapling apdus
+    # with orchard apdus
     sw, _ = transport.exchange_raw("e04200001100000000050000800a27a7265510e7c800")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04280000101")
@@ -159,7 +159,7 @@ def test_NU5_sapling_multi(cmd, transport):
     SIG_LEN = 142
     EXPECTED_TRUSTED_INPUT = "35f812ce32a94bbd7679a7f4a71c08b9fb263462352157a5c87fa569ad1d781401000000"
 
-    # new with sapling apdus
+    # with sapling apdus
     sw, _ = transport.exchange_raw("e04200001100000001050000800a27a7265510e7c800")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04280000101")
@@ -204,6 +204,50 @@ def test_NU5_sapling_multi(cmd, transport):
     assert sw == 0x9000
 
 
+    sig = sig.hex()
+    assert len(sig) == TXID_LEN
+    assert sig[8:8+32*2+8] == EXPECTED_TRUSTED_INPUT
+
+@automation("automations/accept.json")
+def test_NU5_shielded(cmd, transport):
+    # TXID == ce3068ad41cf91bf2c5fa3a3dd1adb5e362cff92474fa1a9e20a2460d5a15861
+    TXID_LEN = 112
+    EXPECTED_TRUSTED_INPUT = "6158a1d560240ae2a9a14f4792ff2c365edb1adda3a35f2cbf91cf41ad6830ce00000000"
+
+    # transparent inputs+outputs + sapling outputs
+    sw, _ = transport.exchange_raw("e04200001100000000050000800a27a7265510e7c801")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800025c8cac5a1a3131c7842b5aa5fafe964b95514c2787932e0ba33342d783e20f828000000006a")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800032473044022056f4f3646dfedf12f7e54e9b7df23a128816540526b22a9bff458f3d54865cca02200e24886a8e69a3c2cc6d33")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800032d9144b2429c9ed58016c2a001964b59359baa5c793012102884a63ffe58171169f945ace55ba8a3f5166d2805b1e1d8f145a") 
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280000adba3def6a361ffffffff")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280000101")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280002228ed0800000000001976a914a8ac052222c8cd80c1baf3b5d6a0ae59ea52f63288ac")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800003000100")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280000840a3eaffffffffff")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280007416ee213af48ecea96d1932854dcfaed9f106b4cba41a3e95a0f57359ffd96271b1de229aecb05b40ef4150c38ff0f1a738191b26055208eb0eaf5d64df9202919a85be6dba4a3437f6e76ae3e1af5e5fd18b9442b0a92deb4bd89a0ff75dfbe5b65b7065a8ce795f182c6c25e8f4e470eb3e6438")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e0428000801ab0eb032c471a9a9437a77c67cee71e663f162cdb4808249e6decc3dafb0a01e52b06bd55dcaca52b016eb5a1f0c6f91ec360c58dcd3e1884fd8150bff182211076ada7a33a564a92dccae5d4de5ce3db724b43c0aa93ee4aa0c0fb62c36691af7c3fa94100770a84380f2ecbc535af9c4e05d3722d24c2eb210c66a8047ece")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800080cd6a6456fe52f360f4379e5b0f3cd92839a1f3589802b090cf7435d7a32a9acef85f3e1c6e4b27c540915b562d0eb48d6b6b34bf824c8288d1f873cf705dadf92c2ac67f0803b3df3d8ff2c6d8faae753eb2025a83cad4696d84c1be665642de572f5da0a3dd9c4bd4982d11dc11fe7598f6d6b6ffd9b31db21a586f8aadc10b")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800080c5e6d09f547bd7e409d3da080e849b41619bc1dd65582f4344525b95c0949d61b975739bee59aff4316c8da07775ff1765aca91fe3e5885c564c3471c6ab1931c272745ac4a48d1d121419520265d9ed52dec439d12b2c2ecced81a6c690f8cc336898a8edb2a336436d7e187740d328c6b7eba87673192ca5a40bd7289b0158")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280008052de64dd8e4d4315ad7ba07e43e574f32467de79710bfeb9e4693c60b980ee98207f457a1be6fdc2a8bbfa90c52f61feaced2d07b01cde652d45161293e922bc34a7a6003197171d72b079b2f01fffb5bf3ca6864696d7cc47d44b374b506bf0e65a8159cfbbd45444574dc40c8cbb4ed39a31f7bcd55aacaa2c551babc84927")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280008023d14a3ddd838b1ec22a79bf6b7f238410a19fd0d8a68da0411933000011f942abd24b6787d65f626bc8fb85f3879431606936a1f463b800e9c39c6f59c1b7dce9fda0493866a180e2cb113228bff68adb8f77f4887f1038ce53e6f920c978d9824926dddf4c386b0afc5ec9306b2823b9c33087ed5d10bd817c5e03c82c9cc8")
+    assert sw == 0x9000
+    sw, sig = transport.exchange_raw("e042800009000000000411a02d00")
+    assert sw == 0x9000
+    
     sig = sig.hex()
     assert len(sig) == TXID_LEN
     assert sig[8:8+32*2+8] == EXPECTED_TRUSTED_INPUT
