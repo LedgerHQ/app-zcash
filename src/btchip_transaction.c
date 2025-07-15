@@ -1365,8 +1365,17 @@ void transaction_parse(unsigned char parseMode) {
 
                     blake2b_256_update(&btchip_context_D.transactionSaplingFull.blake2b, btchip_context_D.saplingBalance, sizeof(btchip_context_D.saplingBalance));
                     
-                    btchip_context_D.transactionContext.transactionState =
+                    if (btchip_context_D.orchardActionCount > 0) {
+                        // init the orchard actions compact hash
+                        blake2b_256_init(&btchip_context_D.transactionHashCompact.blake2b, (uint8_t *) NU5_PARAM_ORCHARD_ACTIONS_COMPACT);
+
+                        btchip_context_D.transactionContext.orchardActionsRemaining = btchip_context_D.orchardActionCount;
+                        btchip_context_D.transactionContext.transactionState =
+                            BTCHIP_TRANSACTION_PROCESS_ORCHARD_COMPACT;
+                    } else {
+                        btchip_context_D.transactionContext.transactionState =
                             BTCHIP_TRANSACTION_PROCESS_EXTRA;
+                    }
                             
                     goto ok;
                 }
