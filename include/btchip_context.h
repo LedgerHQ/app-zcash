@@ -85,6 +85,8 @@ enum btchip_transaction_state_e {
     BTCHIP_TRANSACTION_PRESIGN_READY = 0x09,
     /** Transaction fully parsed, ready to be signed */
     BTCHIP_TRANSACTION_SIGN_READY = 0x0a,
+    /** Transaction defined, waiting for shielded data to be processed */
+    BTCHIP_TRANSACTION_GET_SHIELDED_DATA  = 0x0b,
 };
 typedef enum btchip_transaction_state_e btchip_transaction_state_t;
 
