@@ -1008,7 +1008,7 @@ void transaction_parse(unsigned char parseMode) {
                             .transactionRemainingInputsOutputs == 0) {
                         // No more outputs to hash, move forward
                         btchip_context_D.transactionContext.transactionState =
-                            BTCHIP_TRANSACTION_OUTPUT_HASHING_DONE;
+                            BTCHIP_TRANSACTION_GET_SHIELDED_DATA;
                         continue;
                     }
                     if (btchip_context_D.transactionDataRemaining < 1) {
@@ -1100,6 +1100,30 @@ void transaction_parse(unsigned char parseMode) {
                     btchip_context_D.transactionContext.scriptRemaining -=
                         dataAvailable;
                     break;
+                }
+                case BTCHIP_TRANSACTION_GET_SHIELDED_DATA: {
+                    PRINTF("Check shielded data \n");
+
+                    // get amount of sapling input/output and orchard actions
+                    check_transaction_available(3);
+                    uint8_t sapling_input, sapling_output, orchard_action;
+                    
+                    memcpy(&sapling_input, btchip_context_D.transactionBufferPointer, 1);
+                    btchip_context_D.transactionBufferPointer++;
+                    
+                    memcpy(&sapling_output, btchip_context_D.transactionBufferPointer, 1);
+                    btchip_context_D.transactionBufferPointer++;
+                    
+                    memcpy(&orchard_action, btchip_context_D.transactionBufferPointer, 1);
+                    btchip_context_D.transactionBufferPointer++;
+
+                    if (sapling_input!=0 || sapling_output!=0 || orchard_action!=0) {
+                        PRINTF("No shielded data expected\n");
+                        goto fail;
+                    }
+                    btchip_context_D.transactionContext.transactionState =
+                            BTCHIP_TRANSACTION_OUTPUT_HASHING_DONE;
+                    goto ok;
                 }
                 case BTCHIP_TRANSACTION_OUTPUT_HASHING_DONE: {
                     PRINTF("Output hashing done\n");
