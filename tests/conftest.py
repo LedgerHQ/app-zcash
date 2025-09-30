@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 def pytest_addoption(parser):
     parser.addoption("--hid",
                      action="store_true")
-    parser.addoption("--model", action="store", default="nanos")
+    parser.addoption("--model", action="store", default="nanosp")
 
 
 @pytest.fixture

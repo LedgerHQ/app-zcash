@@ -36,7 +36,6 @@ APPVERSION = "$(APPVERSION_M).$(APPVERSION_N).$(APPVERSION_P)"
 APP_SOURCE_PATH += src
 
 # Application icons
-ICON_NANOS = icons/nanos_app_zcash.gif
 ICON_NANOX = icons/nanox_app_zcash.gif
 ICON_NANOSP = icons/nanox_app_zcash.gif
 ICON_STAX = icons/stax_app_zcash.gif
