@@ -40,6 +40,14 @@ ICON_NANOX = icons/nanox_app_zcash.gif
 ICON_NANOSP = $(ICON_NANOX)
 ICON_STAX = icons/stax_app_zcash.png
 ICON_FLEX = icons/flex_app_zcash.png
+ICON_APEX_P = icons/apex_app_zcash.png
+
+ifeq ($(TARGET_NAME),$(filter $(TARGET_NAME),TARGET_STAX TARGET_FLEX))
+    ICON_HOME = C_zcash_64px
+else ifeq ($(TARGET_NAME),TARGET_APEX_P)
+    ICON_HOME = C_zcash_48px
+endif
+DEFINES += ICON_HOME=$(ICON_HOME)
 
 # Application allowed derivation curves
 CURVE_APP_LOAD_PARAMS = secp256k1
@@ -57,7 +65,7 @@ VARIANT_VALUES = zcash
 ########################################
 #     Application custom permissions   #
 ########################################
-ifeq ($(TARGET_NAME),$(filter $(TARGET_NAME),TARGET_NANOX TARGET_STAX TARGET_FLEX))
+ifeq ($(TARGET_NAME),$(filter $(TARGET_NAME),TARGET_NANOX TARGET_STAX TARGET_FLEX TARGET_APEX_P))
 HAVE_APPLICATION_FLAG_BOLOS_SETTINGS = 1
 endif
 
@@ -84,10 +92,5 @@ APP_SOURCE_FILES += ${BOLOS_SDK}/lib_standard_app/crypto_helpers.c
 
 DEFINES   += BIP44_COIN_TYPE=133 BIP44_COIN_TYPE_2=133 COIN_P2PKH_VERSION=7352 COIN_P2SH_VERSION=7357 COIN_FAMILY=1 COIN_COINID=\"Zcash\" COIN_COINID_HEADER=\"ZCASH\" COIN_COLOR_HDR=0x3790CA COIN_COLOR_DB=0x9BC8E5 COIN_COINID_NAME=\"Zcash\" COIN_COINID_SHORT=\"ZEC\" COIN_KIND=COIN_KIND_ZCASH
 DEFINES   += TCS_LOADER_PATCH_VERSION=0
-
-ifeq ($(TARGET_NAME),$(filter $(TARGET_NAME),TARGET_STAX TARGET_FLEX))
-DEFINES += COIN_ICON=C_$(COIN)_64px
-DEFINES += COIN_ICON_BITMAP=C_$(COIN)_64px_bitmap
-endif
 
 include $(BOLOS_SDK)/Makefile.standard_app

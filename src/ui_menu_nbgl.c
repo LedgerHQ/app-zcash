@@ -89,7 +89,7 @@ void ui_idle_flow(void) {
   switches[0].initState = N_btchip.pubKeyRequestRestriction;
 
   nbgl_useCaseHomeAndSettings(APPNAME,
-                              &C_zcash_64px,
+                              &ICON_HOME,
                               NULL,
                               INIT_HOME_PAGE,
                               &settingContents,
