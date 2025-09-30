@@ -37,9 +37,9 @@ APP_SOURCE_PATH += src
 
 # Application icons
 ICON_NANOX = icons/nanox_app_zcash.gif
-ICON_NANOSP = icons/nanox_app_zcash.gif
-ICON_STAX = icons/stax_app_zcash.gif
-ICON_FLEX = icons/flex_app_zcash.gif
+ICON_NANOSP = $(ICON_NANOX)
+ICON_STAX = icons/stax_app_zcash.png
+ICON_FLEX = icons/flex_app_zcash.png
 
 # Application allowed derivation curves
 CURVE_APP_LOAD_PARAMS = secp256k1
