@@ -17,8 +17,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - model: nanos
-            SDK: "$NANOS_SDK"
           - model: nanox
             SDK: "$NANOX_SDK"
           - model: nanosp
@@ -27,6 +25,8 @@ jobs:
             SDK: "$STAX_SDK"
           - model: flex
             SDK: "$FLEX_SDK"
+          - model: apex_p
+            SDK: "$APEX_P_SDK"
 
     runs-on: ubuntu-latest
 
@@ -52,11 +52,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - model: nanos
           - model: nanox
           - model: nanosp
           - model: stax
           - model: flex
+          - model: apex_p
 
     needs: job_build
     runs-on: ubuntu-latest

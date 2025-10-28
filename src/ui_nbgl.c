@@ -23,9 +23,9 @@
 
 #include "btchip_bagl_extensions.h"
 
-typedef enum { 
-    MESSAGE_TYPE, 
-    TRANSACTION_TYPE 
+typedef enum {
+    MESSAGE_TYPE,
+    TRANSACTION_TYPE
 } flow_type_t;
 
 enum {
@@ -137,7 +137,7 @@ static void status_callback(bool confirm) {
 // Prompt Cancel
 static void prompt_cancel(flow_type_t type) {
   switch (type) {
-      case MESSAGE_TYPE: 
+      case MESSAGE_TYPE:
           nbgl_useCaseConfirm("Reject message", NULL, "Yes, Reject",
                   "Go back to message", abandon_status);
           break;
@@ -149,8 +149,8 @@ static void prompt_cancel(flow_type_t type) {
   }
 }
 
-static void prompt_cancel_message(void) { 
-    prompt_cancel(MESSAGE_TYPE); 
+static void prompt_cancel_message(void) {
+    prompt_cancel(MESSAGE_TYPE);
 }
 
 static void prompt_cancel_transaction(void) {
@@ -198,7 +198,7 @@ static void transaction_fee_callback(int token, uint8_t index) {
                                           .tuneId = TUNE_TAP_CASUAL};
 
         nbgl_pageContent_t content = {.type = INFO_LONG_PRESS,
-                                      .infoLongPress.icon = &C_zcash_64px,
+                                      .infoLongPress.icon = &ICON_HOME,
                                       .infoLongPress.text = "Sign transaction\nto send ZCash?",
                                       .infoLongPress.longPressText = "Hold to sign",
                                       .infoLongPress.longPressToken = CONFIRM_TOKEN,
@@ -223,14 +223,14 @@ static void continue_review(flow_type_t type) {
   uiContext.tagValueList.pairs = uiContext.tagValues;
   uiContext.tagValueList.nbPairs = uiContext.nbPairs;
 
-  uiContext.infoLongPress.icon = &C_zcash_64px;
+  uiContext.infoLongPress.icon = &ICON_HOME;
   uiContext.infoLongPress.longPressText = "Hold to sign";
   uiContext.infoLongPress.longPressToken = 1;
   uiContext.infoLongPress.tuneId = TUNE_TAP_CASUAL;
   uiContext.infoLongPress.text = uiContext.prompt;
 
   switch (type) {
-      case MESSAGE_TYPE: 
+      case MESSAGE_TYPE:
           nbgl_useCaseStaticReview(&uiContext.tagValueList, &uiContext.infoLongPress,
                   "Cancel", message_review_callback);
           break;
@@ -249,14 +249,14 @@ static void continue_message_review(void) {
 // UI Start
 static void ui_start(void (*cb)(void), flow_type_t type) {
   switch (type) {
-      case MESSAGE_TYPE: 
-          nbgl_useCaseReviewStart(&C_zcash_64px, "Review\nmessage", NULL,
+      case MESSAGE_TYPE:
+          nbgl_useCaseReviewStart(&ICON_HOME, "Review\nmessage", NULL,
                   "Cancel", continue_message_review,
                   prompt_cancel_message);
           break;
 
       case TRANSACTION_TYPE:
-          nbgl_useCaseReviewStart(&C_zcash_64px, "Review transaction\nto send ZCash", NULL,
+          nbgl_useCaseReviewStart(&ICON_HOME, "Review transaction\nto send ZCash", NULL,
                   "Cancel", cb, prompt_cancel_transaction);
           break;
   }
@@ -383,7 +383,7 @@ void ui_request_change_path_approval_flow(void) {
 
     ui_transaction_start(ui_request_change_path_approval_flow);
   } else {
-    nbgl_useCaseChoice(&C_round_warning_64px, "Unusual\nchange path",
+    nbgl_useCaseChoice(&IMPORTANT_CIRCLE_ICON, "Unusual\nchange path",
                        vars.tmp_warning.derivation_path, "Continue",
                        "Reject if not sure", transaction_review_callback);
   }
@@ -398,7 +398,7 @@ void ui_request_segwit_input_approval_flow(void) {
 
     ui_transaction_start(ui_request_segwit_input_approval_flow);
   } else {
-    nbgl_useCaseChoice(&C_round_warning_64px, "Unverified inputs",
+    nbgl_useCaseChoice(&IMPORTANT_CIRCLE_ICON, "Unverified inputs",
                        "Update Ledger Live\nor third party software",
                        "Continue", "Reject if not sure",
                        transaction_review_callback);
@@ -414,7 +414,7 @@ void ui_request_pubkey_approval_flow(void) {
 
     ui_transaction_start(ui_request_pubkey_approval_flow);
   } else {
-    nbgl_useCaseChoice(&C_zcash_64px, "Export public key", NULL,
+    nbgl_useCaseChoice(&ICON_HOME, "Export public key", NULL,
                        "Approve", "Reject", transaction_review_callback);
   }
 }
@@ -423,7 +423,7 @@ void ui_request_sign_path_approval_flow(void) {
   uiContext.approved_cb = approved_user_action_signtx_callback;
   uiContext.abandon_cb = abandon_user_action_signtx_callback;
 
-  nbgl_useCaseChoice(&C_round_warning_64px, "Unusual\nsign path",
+  nbgl_useCaseChoice(&IMPORTANT_CIRCLE_ICON, "Unusual\nsign path",
                      vars.tmp_warning.derivation_path, "Continue",
                      "Reject if not sure", transaction_review_callback);
 }
@@ -446,7 +446,7 @@ void ui_display_token_flow(void) {
   uiContext.abandon_status = "Token\nrejected";
   uiContext.approved_status = "TOKEN\nCONFIRMED";
 
-  nbgl_useCaseChoice(&C_zcash_64px, "Confirm token",
+  nbgl_useCaseChoice(&ICON_HOME, "Confirm token",
                      (char *)G_io_apdu_buffer + 200, "Approve", "Reject",
                      status_callback);
 }
@@ -459,18 +459,18 @@ static void unusual_derivation_cb(bool status) {
   }
 }
 static void warn_unusual_derivation_path(void) {
-  nbgl_useCaseChoice(&C_round_warning_64px, "Unusual\nderivation path", NULL,
+  nbgl_useCaseChoice(&IMPORTANT_CIRCLE_ICON, "Unusual\nderivation path", NULL,
                      "Continue", "Reject if not sure", unusual_derivation_cb);
 }
 
 static void prompt_public_key(bool warning) {
 
   if (warning) {
-    nbgl_useCaseReviewStart(&C_zcash_64px, "Verify ZCash\naddress", NULL,
+    nbgl_useCaseReviewStart(&ICON_HOME, "Verify ZCash\naddress", NULL,
                             "Cancel", warn_unusual_derivation_path,
                             abandon_status);
   } else {
-    nbgl_useCaseReviewStart(&C_zcash_64px, "Verify ZCash\naddress", NULL,
+    nbgl_useCaseReviewStart(&ICON_HOME, "Verify ZCash\naddress", NULL,
                             "Cancel", display_pubkey_callback, abandon_status);
   }
 }
