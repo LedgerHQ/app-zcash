@@ -80,9 +80,58 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: zcash-app-${{ matrix.model }}
-          path: tests/zcash-bin
+          path: tests/standalone/zcash-bin
 
       - name: Run tests
         run: |
-          cd tests && pip install -r requirements.txt && SPECULOS=/speculos/speculos.py pytest --model=${{ matrix.model }}
+          TEST_DIR="tests/standalone"
+          cd $TEST_DIR && pip install -r requirements.txt && SPECULOS=/speculos/speculos.py pytest --model=${{ matrix.model }}
 
+  job_test_swap:
+    name: Swap Tests
+    strategy:
+      matrix:
+        include:
+          - model: nanox
+          - model: nanosp
+          - model: stax
+          - model: flex
+          - model: apex_p
+
+    needs: job_build
+    runs-on: ubuntu-latest
+    
+    container:
+      image: ghcr.io/ledgerhq/speculos:latest
+      ports:
+        - 1234:1234
+        - 9999:9999
+        - 40000:40000
+        - 41000:41000
+        - 42000:42000
+        - 43000:43000
+      options: --entrypoint /bin/bash
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v2
+        # with:
+        #   fetch-depth: 0
+
+      - name: Download ZCash app binary
+        uses: actions/download-artifact@v4
+        with:
+          name: zcash-app-${{ matrix.model }}
+          path: tests/swap/zcash-bin
+
+      - name: Install build dependencies
+        run: |
+          apt-get update && apt-get install -y build-essential python3-dev
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r tests/swap/requirements.txt
+
+      - name: Run swap tests
+        run: |
+          cd "tests/swap" && SPECULOS=/speculos/speculos.py pytest --device=${{ matrix.model }}

@@ -28,8 +28,8 @@ APPNAME = "Zcash"
 
 # Application version
 APPVERSION_M=2
-APPVERSION_N=4
-APPVERSION_P=3
+APPVERSION_N=5
+APPVERSION_P=0
 APPVERSION = "$(APPVERSION_M).$(APPVERSION_N).$(APPVERSION_P)"
 
 # Application source files
@@ -61,6 +61,9 @@ VARIANT_VALUES = zcash
 
 # Enabling DEBUG flag will enable PRINTF and disable optimizations
 #DEBUG = 1
+
+# Enable SWAP
+ENABLE_SWAP = 1
 
 ########################################
 #     Application custom permissions   #
