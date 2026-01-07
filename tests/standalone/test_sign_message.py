@@ -6,8 +6,9 @@ from utils import automation
 def test_sign_message(cmd):
     result = cmd.sign_message(
             message = "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks.",
-            bip32_path = "m/44'/1'/0'/0/0"
+            bip32_path = "m/44'/133'/0'/0/0",
     )
 
-    assert result == "MEQCIANoKhOE+1y3y4Rg5vp1b98a3ecMgDxNUTLLpFSxRVWeAiAad+PJ2XhxreRsvaqLGDC5xcD1uJhQ5F/mGo7yR8qWGQ=="
+    print(result)
+    assert result == "MUUCIQDZt/sSeUiqgUTCLWz2AWwdPKn05D0Su9iu1zxUb1S5OwIgFZd6seHE0WjRFb4QAdlWYhOmt1/FvCgtILfz1QGe1YM="
 
