@@ -1,4 +1,4 @@
-use ledger_device_sdk::hash::{blake2::Blake2b_256, HashInit as _};
+use ledger_device_sdk::hash::{blake2::Blake2b_256, sha2::Sha2_256, HashInit as _};
 use zcash_primitives::transaction::{
     txid::{
         ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
@@ -27,7 +27,7 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
         .branch_id
         .expect("branch_id should be set at this point");
 
-    if let Some(TxVersion::V4 | TxVersion::V5) = ctx.tx_info.tx_version {
+    if let Some(TxVersion::V5) = ctx.tx_info.tx_version {
         let prevouts_hash = {
             let mut hash = [0u8; 32];
             ok!(ctx.hashers.prevouts_hasher.finalize(&mut hash));
@@ -112,6 +112,17 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
 
         debug!(
             "Transaction ID hash: {}",
+            HexSlice(&ctx.trusted_input_info.tx_id)
+        );
+    } else if let Some(TxVersion::V4) = ctx.tx_info.tx_version {
+        let mut first_round_hash = [0u8; 32];
+        ok!(ctx.hashers.v4_tx_hasher.finalize(&mut first_round_hash));
+
+        let mut second_round_hasher = Sha2_256::new();
+        ok!(second_round_hasher.hash(&first_round_hash, &mut ctx.trusted_input_info.tx_id));
+
+        debug!(
+            "V4 transaction ID hash: {}",
             HexSlice(&ctx.trusted_input_info.tx_id)
         );
     } else {

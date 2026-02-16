@@ -18,6 +18,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use ledger_device_sdk::ecc::{Secp256k1, SeedDerive as _};
 use ledger_device_sdk::hash::blake2::Blake2b_256;
+use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::hash::HashInit;
 use ledger_device_sdk::io::Comm;
 
@@ -50,6 +51,9 @@ pub struct Hashers {
     pub tx_non_compact_hasher: Blake2b_256,
 
     pub tx_full_hasher: Blake2b_256,
+
+    // Legacy V4 txid is SHA256d over the V4-encoded transaction bytes.
+    pub v4_tx_hasher: Sha2_256,
 }
 
 #[derive(Default)]

@@ -3,6 +3,7 @@ use ::orchard::bundle::commitments::{
 };
 use alloc::{string::ToString, vec::Vec};
 use core::{iter, mem};
+use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 use zcash_primitives::transaction::sighash_v5::{
     ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
@@ -32,7 +33,7 @@ use crate::log::{debug, error, info};
 use crate::parser::compute::{finalize_signature_hash, finalize_signature_input_hash};
 use crate::parser::reader::ByteReader;
 use crate::settings::Settings;
-use crate::utils::blake2b_256_pers::{AsWriter, Blake2b256Personalization};
+use crate::utils::blake2b_256_pers::{AsWriter, AsWriterB as _, Blake2b256Personalization};
 use crate::utils::{check_output_displayable, secure_memcmp, CheckDispOutput, HexSlice};
 use crate::{app_ui::sign::ui_display_tx, utils::base58_address::Base58Address};
 use crate::{
@@ -66,7 +67,7 @@ impl TrustedInputMode {
     }
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone, Copy)]
 pub enum ParserMode {
     #[default]
     TrustedInput,
@@ -276,56 +277,79 @@ impl Parser {
         let input_count: usize = ok!(CompactSize::read_t(&mut *reader));
         info!("Input count: {}", input_count);
 
-        // In case of Signature mode, continue computing Tx hash from previous state
-        if self.mode == ParserMode::Signature && ctx.tx_state.is_tx_parsed_once {
-            info!("Resume TX hashing for signing");
-            info!("TX Version {:X?}", version);
-            info!("TX prevout hash {}", HexSlice(&ctx.tx_info.prevouts_hash));
-            info!("TX sequence hash {}", HexSlice(&ctx.tx_info.sequence_hash));
+        match (self.mode, ctx.tx_state.is_tx_parsed_once) {
+            // Normal flow for TrustedInput and Signature modes
+            (ParserMode::TrustedInput, _) | (ParserMode::Signature, false) => {
+                match version {
+                    TxVersion::V5 => {
+                        debug!("Init V5 tx hashers");
+                        ctx.hashers
+                            .prevouts_hasher
+                            .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION);
+                        ctx.hashers
+                            .sequence_hasher
+                            .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION);
+                        ctx.hashers
+                            .outputs_hasher
+                            .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION);
+                        ctx.hashers
+                            .amounts_hasher
+                            .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION);
+                        ctx.hashers
+                            .scripts_hasher
+                            .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION);
+                        ctx.hashers
+                            .sapling_hasher
+                            .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION);
+                        ctx.hashers
+                            .orchard_hasher
+                            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION);
+                    }
+                    // Support V4 in trusted input mode (Transaction ID computation)
+                    TxVersion::V4 if ParserMode::TrustedInput == self.mode => {
+                        debug!("Init V4 txid hasher");
+                        ctx.hashers.v4_tx_hasher = Sha2_256::new();
+                        version
+                            .write(&mut ctx.hashers.v4_tx_hasher.as_writer())
+                            .expect("cannot fail");
+                        CompactSize::write(&mut ctx.hashers.v4_tx_hasher.as_writer(), input_count)
+                            .expect("cannot fail");
+                    }
+                    _ => {
+                        error!(
+                            "Unsupported transaction version: {:?} in mode {:?}",
+                            version, self.mode
+                        );
+                        return Err(ParserError::from_str("Unsupported transaction version"));
+                    }
+                }
+            }
+            // In case of Signature mode, continue computing Tx hash from previous state
+            (ParserMode::Signature, true) => {
+                info!("Resume TX hashing for signing");
+                info!("TX Version {:X?}", version);
+                info!("TX prevout hash {}", HexSlice(&ctx.tx_info.prevouts_hash));
+                info!("TX sequence hash {}", HexSlice(&ctx.tx_info.sequence_hash));
 
-            info!("Compute headers hash");
+                info!("Compute headers hash");
 
-            let full_hasher = &mut ctx.hashers.tx_full_hasher;
-            full_hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION);
+                let full_hasher = &mut ctx.hashers.tx_full_hasher;
+                full_hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION);
 
-            ok!(version.write(&mut full_hasher.as_writer()));
-            ok!(full_hasher.update(&u32::from(consensus_branch_id).to_le_bytes()));
-            ok!(full_hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
-            ok!(full_hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
+                ok!(version.write(&mut full_hasher.as_writer()));
+                ok!(full_hasher.update(&u32::from(consensus_branch_id).to_le_bytes()));
+                ok!(full_hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
+                ok!(full_hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
 
-            // Save header_digest
-            ok!(full_hasher.finalize(&mut ctx.tx_info.header_digest));
+                // Save header_digest
+                ok!(full_hasher.finalize(&mut ctx.tx_info.header_digest));
 
-            info!("NU5 header digest {}", HexSlice(&ctx.tx_info.header_digest));
+                info!("NU5 header digest {}", HexSlice(&ctx.tx_info.header_digest));
 
-            ctx.hashers
-                .prevouts_hasher
-                .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION);
-        } else {
-            // Normal flow, reinit hashers
-            // Init TX hashers for V5 version
-            debug!("Init Tx hashers");
-            ctx.hashers
-                .prevouts_hasher
-                .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION);
-            ctx.hashers
-                .sequence_hasher
-                .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION);
-            ctx.hashers
-                .outputs_hasher
-                .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION);
-            ctx.hashers
-                .amounts_hasher
-                .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION);
-            ctx.hashers
-                .scripts_hasher
-                .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION);
-            ctx.hashers
-                .sapling_hasher
-                .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION);
-            ctx.hashers
-                .orchard_hasher
-                .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION);
+                ctx.hashers
+                    .prevouts_hasher
+                    .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION);
+            }
         }
 
         ctx.tx_info.total_amount = 0;
@@ -346,7 +370,16 @@ impl Parser {
     ) -> Result<(), ParserError> {
         let prevout = ok!(OutPoint::read(&mut *reader));
 
-        ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
+        // TODO: use match
+        match ctx.tx_info.tx_version.expect("should be set at this point") {
+            TxVersion::V5 => {
+                ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
+            }
+            TxVersion::V4 => {
+                ok!(prevout.write(ctx.hashers.v4_tx_hasher.as_writer()));
+            }
+            _ => unreachable!("we should only support V4 and V5 at this point"),
+        }
 
         let script_size: usize = ok!(CompactSize::read_t(&mut *reader));
 
@@ -506,7 +539,16 @@ impl Parser {
         let mut script_sig = Script::default();
         // NOTE: take/deallocate self.script_bytes here
         script_sig.0 .0 = mem::take(&mut self.script_bytes);
-        ok!(script_sig.write(ctx.hashers.scripts_hasher.as_writer()));
+
+        match ctx.tx_info.tx_version.expect("should be set at this point") {
+            TxVersion::V5 => {
+                ok!(script_sig.write(ctx.hashers.scripts_hasher.as_writer()));
+            }
+            TxVersion::V4 => {
+                ok!(script_sig.write(ctx.hashers.v4_tx_hasher.as_writer()));
+            }
+            _ => unreachable!("we should only support V4 and V5 at this point"),
+        }
 
         info!("Script sig: {:?}", script_sig);
 
@@ -517,7 +559,20 @@ impl Parser {
         };
         info!("Sequence: {:X?}", sequence);
 
-        ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
+        match ctx.tx_info.tx_version.expect("should be set at this point") {
+            TxVersion::V5 => {
+                ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
+            }
+            TxVersion::V4 => {
+                //ok!(ctx.hashers.v4_tx_hasher.update(&sequence.to_le_bytes()));
+                ok!(ctx
+                    .hashers
+                    .v4_tx_hasher
+                    .as_writer()
+                    .dbg_update(&sequence.to_le_bytes()));
+            }
+            _ => unreachable!("we should only support V4 and V5 at this point"),
+        }
 
         if ctx.tx_state.is_tx_parsed_once {
             ok!(script_sig.write(ctx.hashers.prevouts_hasher.as_writer()));
@@ -539,7 +594,7 @@ impl Parser {
 
                     self.state = ParserState::TransactionPresignReady;
 
-                    // Skip traling bytes if any
+                    // Skip trailing bytes if any
                     ok!(reader.advance(reader.remaining_len()));
                 }
 
@@ -558,11 +613,18 @@ impl Parser {
 
     fn parse_input_hashing_done(
         &mut self,
-        _ctx: &mut ParserCtx<'_>,
+        ctx: &mut ParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         let output_count: usize = ok!(CompactSize::read_t(&mut *reader));
         info!("Output count: {}", output_count);
+
+        if ctx.tx_info.tx_version.expect("should be set at this point") == TxVersion::V4 {
+            ok!(CompactSize::write(
+                &mut ctx.hashers.v4_tx_hasher.as_writer(),
+                output_count
+            ));
+        }
 
         self.output_count = output_count;
         self.state = ParserState::WaitOutput;
@@ -594,7 +656,21 @@ impl Parser {
             );
         }
 
-        ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
+        match ctx.tx_info.tx_version.expect("should be set at this point") {
+            TxVersion::V5 => {
+                ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
+            }
+            TxVersion::V4 => {
+                //ok!(ctx.hashers.v4_tx_hasher.update(&amount.to_i64_le_bytes()));
+                ok!(ctx
+                    .hashers
+                    .v4_tx_hasher
+                    .as_writer()
+                    .dbg_update(&amount.to_i64_le_bytes()));
+            }
+            _ => unreachable!("we should only support V4 and V5 at this point"),
+        }
+
         let script_size: usize = ok!(CompactSize::read_t(&mut *reader));
 
         if script_size > MAX_SCRIPT_SIZE {
@@ -647,7 +723,16 @@ impl Parser {
         let mut script_pubkey = Script::default();
         // NOTE: take/deallocate self.script_bytes here
         script_pubkey.0 .0 = mem::take(&mut self.script_bytes);
-        ok!(script_pubkey.write(&mut ctx.hashers.outputs_hasher.as_writer()));
+
+        match ctx.tx_info.tx_version.expect("should be set at this point") {
+            TxVersion::V5 => {
+                ok!(script_pubkey.write(&mut ctx.hashers.outputs_hasher.as_writer()));
+            }
+            TxVersion::V4 => {
+                ok!(script_pubkey.write(&mut ctx.hashers.v4_tx_hasher.as_writer()));
+            }
+            _ => unreachable!("we should only support V4 and V5 at this point"),
+        }
 
         info!("Output script pubkey: {:?}", script_pubkey);
 
@@ -703,7 +788,13 @@ impl Parser {
 
         info!("Locktime: {:X?}", ctx.tx_info.locktime);
 
-        let extra_data_len = ok!(reader.read_u8());
+        let extra_data_len: usize = ok!(CompactSize::read_t(&mut *reader));
+        info!("Extra data length: {}", extra_data_len);
+        info!(
+            "Extra data {}",
+            HexSlice(&reader.remaining_slice()[..extra_data_len])
+        );
+
         if let Some(TxVersion::V5) = ctx.tx_info.tx_version {
             if extra_data_len != 4 {
                 error!(
@@ -714,10 +805,31 @@ impl Parser {
                     "Invalid extra data length for expiry height",
                 ));
             }
+        } else if extra_data_len != reader.remaining_len() {
+            error!(
+                "Expected extra data length to be {}, got {}",
+                reader.remaining_len(),
+                extra_data_len
+            );
+            return Err(ParserError::from_str("Invalid extra data length"));
         }
 
         ctx.tx_info.expiry_height = ok!(reader.read_u32_le());
         info!("Expiry height: {:X?}", ctx.tx_info.expiry_height);
+
+        if let Some(TxVersion::V4) = ctx.tx_info.tx_version {
+            ok!(ctx
+                .hashers
+                .v4_tx_hasher
+                .update(&ctx.tx_info.locktime.to_le_bytes()));
+
+            ok!(ctx
+                .hashers
+                .v4_tx_hasher
+                .update(&ctx.tx_info.expiry_height.to_le_bytes()));
+
+            ok!(ctx.hashers.v4_tx_hasher.update(reader.remaining_slice()));
+        }
 
         ctx.trusted_input_info.is_input_processed = true;
         self.state = ParserState::TransactionParsed;

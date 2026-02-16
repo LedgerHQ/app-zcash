@@ -4,7 +4,7 @@ use crate::{
     log::{debug, error, info},
     parser::{ParserCtx, ParserMode, ParserSourceError},
     settings::Settings,
-    utils::{read_u32, Endianness},
+    utils::{read_u32, Endianness, HexSlice},
     AppSW,
 };
 use ledger_device_sdk::{
@@ -80,7 +80,7 @@ pub fn handler_get_trusted_input(
                 .trusted_input_key()
                 .ok_or(AppSW::TechnicalProblem)?,
         );
-        debug!("HMAC input: {:02X?}", comm.get(0, TRUSTED_INPUT_SIZE));
+        debug!("HMAC input: {}", HexSlice(comm.get(0, TRUSTED_INPUT_SIZE)));
 
         hmac_sha256_signer
             .update(comm.get(0, TRUSTED_INPUT_SIZE))

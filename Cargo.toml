@@ -21,6 +21,7 @@ zcash_protocol = { git = "https://github.com/Fingolfin69/librustzcash.git", bran
 zcash_encoding = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 zcash_transparent = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 orchard = { path = "./vendor/orchard", default-features = false }
+num_enum = { version = "0.7.5", default-features = false }
 
 [patch.crates-io]
 # Used in orchard
