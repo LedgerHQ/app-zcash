@@ -97,6 +97,8 @@ pub struct TrustedInputInfo {
 #[derive(Default)]
 pub struct TxSigningState {
     pub is_tx_parsed_once: bool,
+    pub already_signed_input_count: usize,
+    pub total_input_count: usize,
 }
 
 /// Transaction context holding state between APDU chunks.
@@ -365,7 +367,15 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         true,
     )?;
 
-    ctx.is_signing_finished = true;
+    ctx.tx_signing_state.already_signed_input_count = ctx
+        .tx_signing_state
+        .already_signed_input_count
+        .saturating_add(1);
+
+    if ctx.tx_signing_state.already_signed_input_count == ctx.tx_signing_state.total_input_count {
+        info!("All inputs have been signed, TX signing is finished");
+        ctx.is_signing_finished = true;
+    }
 
     Ok(())
 }

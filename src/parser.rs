@@ -354,6 +354,12 @@ impl Parser {
 
         ctx.tx_info.total_amount = 0;
         self.input_count = input_count;
+
+        // Set total_input_count for signing
+        if let ParserMode::Signature = self.mode {
+            ctx.tx_state.total_input_count = self.input_count;
+        }
+
         self.state = if self.input_count == 0 {
             ParserState::InputHashingDone
         } else {
