@@ -357,7 +357,9 @@ impl Parser {
 
         // Set total_input_count for signing
         if let ParserMode::Signature = self.mode {
-            ctx.tx_state.total_input_count = self.input_count;
+            if !ctx.tx_state.is_tx_parsed_once  {
+                ctx.tx_state.total_input_count = self.input_count;
+            }
         }
 
         self.state = if self.input_count == 0 {
