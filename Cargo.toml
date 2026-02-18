@@ -57,24 +57,21 @@ legacy_path = []
 curve = ["secp256k1"]
 path = ["44'/133'"]
 name = "Zcash"
+flags = "0x800"
 
 [package.metadata.ledger.nanox]
-flags = "0xa00"
 icon = "icons/nanox_app_zcash.gif"
 
 [package.metadata.ledger.nanosplus]
-flags = "0x800"
 icon = "icons/nanox_app_zcash.gif"
 
 [package.metadata.ledger.stax]
 icon = "icons/stax_app_zcash.gif"
 
 [package.metadata.ledger.flex]
-flags = "0xa00"
 icon = "icons/flex_app_zcash.gif"
 
 [package.metadata.ledger.apex_p]
-flags = "0xa00"
 icon = "icons/apex_app_zcash.gif"
 
 [lints.rust]
