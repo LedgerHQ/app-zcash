@@ -1,6 +1,6 @@
 [package]
-name = "app-zcash-rust"
-version = "0.0.1"
+name = "Zcash"
+version = "3.0.0"
 authors = ["Ledger"]
 edition = "2021"
 
