@@ -5,8 +5,11 @@ authors = ["Ledger"]
 edition = "2021"
 
 [dependencies]
-ledger_device_sdk = "1.*"
-ledger_secure_sdk_sys = "1.*"
+#ledger_device_sdk = "1.*"
+#ledger_secure_sdk_sys = "1.*"
+ledger_device_sdk = { git = "https://github.com/Fingolfin69/ledger-device-rust-sdk.git", branch = "bn-rollback-os_registry_get_current_app_tag" }
+ledger_secure_sdk_sys = { git = "https://github.com/Fingolfin69/ledger-device-rust-sdk.git", branch = "bn-rollback-os_registry_get_current_app_tag" }
+
 include_gif = "1.*"
 core2 = { version = "0.3.0", default-features = false }
 hex = { version = "0.4.3", default-features = false, features = [
