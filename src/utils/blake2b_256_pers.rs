@@ -4,7 +4,7 @@ use core2::io::Write;
 use ledger_device_sdk::hash::{blake2::Blake2b_256, HashInit as _};
 use ledger_secure_sdk_sys::{cx_blake2b_init2_no_throw, cx_blake2b_t, cx_hash_t};
 
-use crate::{log::error, utils::HexSlice};
+use crate::log::error;
 
 pub trait Blake2b256Personalization {
     fn init_with_perso(&mut self, personalization: &[u8]);
@@ -87,21 +87,8 @@ impl<'w> AsWriterB<'w> for Sha2_256 {
     }
 }
 
-impl Sha256IoWriter<'_> {
-    pub fn dbg_update(&mut self, buf: &[u8]) -> core2::io::Result<()> {
-        //debug!("MOO: {}", HexSlice(buf));
-
-        self.0.update(buf).map_err(|err| {
-            error!("Sha256IoWriter update error {:?}", err);
-            core2::io::Error::new(core2::io::ErrorKind::Other, "Sha256 update error")
-        })
-    }
-}
-
 impl Write for Sha256IoWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> core2::io::Result<usize> {
-        //debug!("MOO: {}", HexSlice(buf));
-
         self.0.update(buf).map_err(|err| {
             error!("Sha256IoWriter write error {:?}", err);
             core2::io::Error::new(core2::io::ErrorKind::Other, "Sha256 update error")

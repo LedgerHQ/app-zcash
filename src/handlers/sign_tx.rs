@@ -374,8 +374,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
 
     info!(
         "Signed input {}/{}",
-        ctx.tx_signing_state.already_signed_input_count,
-        ctx.tx_signing_state.total_input_count
+        ctx.tx_signing_state.already_signed_input_count, ctx.tx_signing_state.total_input_count
     );
 
     if ctx.tx_signing_state.already_signed_input_count == ctx.tx_signing_state.total_input_count {

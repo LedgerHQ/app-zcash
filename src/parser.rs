@@ -357,7 +357,7 @@ impl Parser {
 
         // Set total_input_count for signing
         if let ParserMode::Signature = self.mode {
-            if !ctx.tx_state.is_tx_parsed_once  {
+            if !ctx.tx_state.is_tx_parsed_once {
                 ctx.tx_state.total_input_count = self.input_count;
             }
         }
@@ -572,12 +572,7 @@ impl Parser {
                 ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
             }
             TxVersion::V4 => {
-                //ok!(ctx.hashers.v4_tx_hasher.update(&sequence.to_le_bytes()));
-                ok!(ctx
-                    .hashers
-                    .v4_tx_hasher
-                    .as_writer()
-                    .dbg_update(&sequence.to_le_bytes()));
+                ok!(ctx.hashers.v4_tx_hasher.update(&sequence.to_le_bytes()));
             }
             _ => unreachable!("we should only support V4 and V5 at this point"),
         }
@@ -669,12 +664,7 @@ impl Parser {
                 ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
             }
             TxVersion::V4 => {
-                //ok!(ctx.hashers.v4_tx_hasher.update(&amount.to_i64_le_bytes()));
-                ok!(ctx
-                    .hashers
-                    .v4_tx_hasher
-                    .as_writer()
-                    .dbg_update(&amount.to_i64_le_bytes()));
+                ok!(ctx.hashers.v4_tx_hasher.update(&amount.to_i64_le_bytes()));
             }
             _ => unreachable!("we should only support V4 and V5 at this point"),
         }
