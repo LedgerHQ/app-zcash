@@ -255,7 +255,8 @@ pub fn handler_hash_input_finalize_full(
                 ParserSourceError::Hash(_) => AppSW::TechnicalProblem,
                 ParserSourceError::AppSW(sw) => sw,
                 ParserSourceError::UserDenied => {
-                    // User rejected output after review, mark transaction as finished
+                    // User rejected output after review, mark review and transaction as finished
+                    ctx.is_review_finished = true;
                     ctx.is_signing_finished = true;
                     AppSW::Deny
                 }
