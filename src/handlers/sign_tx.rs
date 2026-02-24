@@ -144,8 +144,16 @@ impl<'s> TxContext<'s> {
 
     #[inline(always)]
     pub fn reset(&mut self, mode: ParserMode) {
-        let swap_params = self.swap_params;
-        *self = TxContext::new(swap_params, mode);
+        // Don't reset home and swap params, they're not part of TX state
+        self.is_review_finished = false;
+        self.is_extra_header_data_set = false;
+        self.is_signing_finished = false;
+        self.tx_signing_state = TxSigningState::default();
+        self.tx_info = TxInfo::default();
+        self.trusted_input_info = TrustedInputInfo::default();
+        self.hashers = Hashers::default();
+        self.parser = Parser::new(mode);
+        self.output_parser = OutputParser::new();
     }
 
     pub fn set_transaction_trusted_input_idx(&mut self, idx: u32) {
