@@ -302,22 +302,24 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
         };
         show_status_and_home_if_needed(&ins, &mut tx_ctx, &status);
 
-        // Cache the flag before potential ctx reset
-        let is_signing_finished = tx_ctx.is_finished();
+        let is_error = status != AppSW::Ok;
+        let is_finished = tx_ctx.is_finished();
 
         // Reset transaction context in case of error during transaction signing
         if let (
-            Instruction::HashInputStart { .. }
+            Instruction::GetTrustedInput { .. }
+            | Instruction::HashInputStart { .. }
             | Instruction::HashFinalizeFull { .. }
             | Instruction::HashSign,
             true,
-        ) = (ins, status != AppSW::Ok)
+        ) = (ins, is_error)
         {
             tx_ctx.reset(Default::default());
         }
 
-        // In swap mode, exit after transaction is finished (signed or rejected)
-        if tx_ctx.swap_params.is_some() && is_signing_finished {
+        // In swap mode, exit after transaction is finished (signed or rejected) or on any error status,
+        // to let the Exchange app handle the post-transaction flow (e.g. broadcasting or showing error to user)
+        if tx_ctx.swap_params.is_some() && (is_finished || is_error) {
             return status == AppSW::Ok;
         }
     }

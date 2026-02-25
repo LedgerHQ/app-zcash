@@ -265,7 +265,6 @@ pub fn handler_hash_input_finalize_full(
                         "Swap error with common code {}, app code {}, message {:?}",
                         common_code, app_code, message
                     );
-                    ctx.is_finished = true;
 
                     // Original app sends IncorrectData for any swap error, so we do the same
                     AppSW::IncorrectData
