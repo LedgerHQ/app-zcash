@@ -55,6 +55,7 @@ use crate::consts::{
     P1_HASH_INPUT_START_NEXT, P1_NEXT, P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE,
     P2_HASH_INPUT_START_SAPLING,
 };
+use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
     consts::{
         INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_WALLET_PUBLIC_KEY,
@@ -346,6 +347,11 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
 
 /// In case of runtime problems, return an internal error and exit the app
 pub fn panic_handler(info: &PanicInfo) -> ! {
+    if let Some(swap_panic_handler) = get_swap_panic_handler() {
+        // This handler is no-return
+        swap_panic_handler(info);
+    }
+
     error!("Panicking: {:?}\n", info);
     ledger_device_sdk::exiting_panic(info)
 }
