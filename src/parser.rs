@@ -788,22 +788,8 @@ impl Parser {
 
         let extra_data_len: usize = ok!(CompactSize::read_t(&mut *reader));
         info!("Extra data length: {}", extra_data_len);
-        info!(
-            "Extra data {}",
-            HexSlice(&reader.remaining_slice()[..extra_data_len])
-        );
 
-        if let Some(TxVersion::V5) = ctx.tx_info.tx_version {
-            if extra_data_len != 4 {
-                error!(
-                    "Expected extra data length to be 4 for expiry height, got {}",
-                    extra_data_len
-                );
-                return Err(ParserError::from_str(
-                    "Invalid extra data length for expiry height",
-                ));
-            }
-        } else if extra_data_len != reader.remaining_len() {
+        if extra_data_len != reader.remaining_len() {
             error!(
                 "Expected extra data length to be {}, got {}",
                 reader.remaining_len(),
@@ -811,6 +797,11 @@ impl Parser {
             );
             return Err(ParserError::from_str("Invalid extra data length"));
         }
+
+        info!(
+            "Extra data {}",
+            HexSlice(&reader.remaining_slice()[..extra_data_len])
+        );
 
         ctx.tx_info.expiry_height = ok!(reader.read_u32_le());
         info!("Expiry height: {:X?}", ctx.tx_info.expiry_height);
