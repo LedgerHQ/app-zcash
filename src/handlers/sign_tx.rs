@@ -103,10 +103,8 @@ pub struct TxSigningState {
 
 /// Transaction context holding state between APDU chunks.
 pub struct TxContext<'a> {
-    is_review_finished: bool,
-
     is_extra_header_data_set: bool,
-    is_signing_finished: bool,
+    is_finished: bool,
     pub tx_signing_state: TxSigningState,
 
     pub tx_info: TxInfo,
@@ -125,10 +123,8 @@ pub struct TxContext<'a> {
 impl<'s> TxContext<'s> {
     pub fn new(swap_params: Option<&'s CreateTxParams>, mode: ParserMode) -> TxContext<'s> {
         TxContext {
-            is_review_finished: false,
-
             is_extra_header_data_set: false,
-            is_signing_finished: false,
+            is_finished: false,
             tx_signing_state: Default::default(),
 
             tx_info: Default::default(),
@@ -142,12 +138,10 @@ impl<'s> TxContext<'s> {
         }
     }
 
-    #[inline(always)]
     pub fn reset(&mut self, mode: ParserMode) {
         // Don't reset home and swap params, they're not part of TX state
-        self.is_review_finished = false;
         self.is_extra_header_data_set = false;
-        self.is_signing_finished = false;
+        self.is_finished = false;
         self.tx_signing_state = TxSigningState::default();
         self.tx_info = TxInfo::default();
         self.trusted_input_info = TrustedInputInfo::default();
@@ -160,14 +154,9 @@ impl<'s> TxContext<'s> {
         self.trusted_input_info.input_idx = idx.into();
     }
 
-    // Get review status
-    pub fn is_review_finished(&self) -> bool {
-        self.is_review_finished
-    }
-
     // Get signing finished or rejected by user status
-    pub fn is_signing_finished(&self) -> bool {
-        self.is_signing_finished
+    pub fn is_finished(&self) -> bool {
+        self.is_finished
     }
 }
 
@@ -263,9 +252,8 @@ pub fn handler_hash_input_finalize_full(
                 ParserSourceError::Hash(_) => AppSW::TechnicalProblem,
                 ParserSourceError::AppSW(sw) => sw,
                 ParserSourceError::UserDenied => {
-                    // User rejected output after review, mark review and transaction as finished
-                    ctx.is_review_finished = true;
-                    ctx.is_signing_finished = true;
+                    // User rejected output after review, mark transaction as finished
+                    ctx.is_finished = true;
                     AppSW::Deny
                 }
                 ParserSourceError::SwapError {
@@ -277,7 +265,7 @@ pub fn handler_hash_input_finalize_full(
                         "Swap error with common code {}, app code {}, message {:?}",
                         common_code, app_code, message
                     );
-                    ctx.is_signing_finished = true;
+                    ctx.is_finished = true;
 
                     // Original app sends IncorrectData for any swap error, so we do the same
                     AppSW::IncorrectData
@@ -286,12 +274,9 @@ pub fn handler_hash_input_finalize_full(
             }
         })?;
 
-    if ctx.output_parser.is_finished() {
-        ctx.is_review_finished = true;
-        if !ctx.tx_signing_state.is_tx_parsed_once {
-            info!("Set TX parsed once flag");
-            ctx.tx_signing_state.is_tx_parsed_once = true;
-        }
+    if ctx.output_parser.is_finished() && !ctx.tx_signing_state.is_tx_parsed_once {
+        info!("Set TX parsed once flag");
+        ctx.tx_signing_state.is_tx_parsed_once = true;
     }
 
     Ok(())
@@ -388,7 +373,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
 
     if ctx.tx_signing_state.already_signed_input_count == ctx.tx_signing_state.total_input_count {
         info!("All inputs have been signed, TX signing is finished");
-        ctx.is_signing_finished = true;
+        ctx.is_finished = true;
     }
 
     Ok(())

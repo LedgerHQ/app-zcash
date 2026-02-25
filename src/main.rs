@@ -204,7 +204,7 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
         }
         (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
         | (Instruction::HashSign, AppSW::Ok)
-            if tx_ctx.is_signing_finished() =>
+            if tx_ctx.is_finished() =>
         {
             (true, StatusType::Transaction)
         }
@@ -303,7 +303,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
         show_status_and_home_if_needed(&ins, &mut tx_ctx, &status);
 
         // Cache the flag before potential ctx reset
-        let is_signing_finished = tx_ctx.is_signing_finished();
+        let is_signing_finished = tx_ctx.is_finished();
 
         // Reset transaction context in case of error during transaction signing
         if let (
