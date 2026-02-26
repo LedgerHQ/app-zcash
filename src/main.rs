@@ -33,14 +33,13 @@ mod log;
 mod parser;
 mod settings;
 mod swap;
+mod tx;
 mod utils;
 
 use core::mem;
 
 use app_ui::menu::ui_menu_main;
-use handlers::{
-    get_public_key::handler_get_public_key, get_version::handler_get_version, sign_tx::TxContext,
-};
+use handlers::{get_public_key::handler_get_public_key, get_version::handler_get_version};
 use ledger_device_sdk::nbgl::StatusType;
 use ledger_device_sdk::{io::StatusWords, libcall::swap::CreateTxParams};
 use ledger_device_sdk::{
@@ -48,6 +47,7 @@ use ledger_device_sdk::{
     nbgl::init_comm,
     random::rand_bytes,
 };
+use tx::TxContext;
 
 use crate::consts::{
     P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,

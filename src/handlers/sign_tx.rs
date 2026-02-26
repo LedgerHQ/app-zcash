@@ -14,151 +14,17 @@
  *  See the License for the specific language governing permissions and
  *  limitations under the License.
  *****************************************************************************/
-use alloc::string::String;
-use alloc::vec::Vec;
 use ledger_device_sdk::ecc::{Secp256k1, SeedDerive as _};
 use ledger_device_sdk::hash::blake2::Blake2b_256;
-use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::hash::HashInit;
 use ledger_device_sdk::io::Comm;
 
-use ledger_device_sdk::libcall::swap::CreateTxParams;
-use ledger_device_sdk::nbgl::NbglHomeAndSettings;
-
-use zcash_primitives::transaction::TxVersion;
-use zcash_protocol::consensus::BranchId;
-
 use crate::log::{debug, error, info};
-use crate::parser::{OutputParser, Parser, ParserCtx, ParserMode, ParserSourceError};
+use crate::parser::{OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError};
+use crate::tx::TxContext;
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
 use crate::utils::{check_bip44_compliance, Bip44CheckMode, HexSlice};
 use crate::AppSW;
-
-#[derive(Default)]
-pub struct Hashers {
-    // Transparent transaction hashers
-    pub prevouts_hasher: Blake2b_256,
-    pub sequence_hasher: Blake2b_256,
-    pub outputs_hasher: Blake2b_256,
-    pub amounts_hasher: Blake2b_256,
-    pub scripts_hasher: Blake2b_256,
-
-    pub orchard_hasher: Blake2b_256,
-    pub sapling_hasher: Blake2b_256,
-
-    pub tx_memo_hasher: Blake2b_256,
-    pub tx_compact_hasher: Blake2b_256,
-    pub tx_non_compact_hasher: Blake2b_256,
-
-    pub tx_full_hasher: Blake2b_256,
-
-    // Legacy V4 txid is SHA256d over the V4-encoded transaction bytes.
-    pub v4_tx_hasher: Sha2_256,
-}
-
-#[derive(Default)]
-pub struct TxOutput {
-    pub amount: u64,
-    pub address: String,
-    pub is_change: bool,
-}
-
-#[derive(Default)]
-pub struct TxInfo {
-    pub tx_version: Option<TxVersion>,
-    pub branch_id: Option<BranchId>,
-    pub locktime: u32,
-    pub sighash_type: u8,
-    pub expiry_height: u32,
-    pub total_amount: u64,
-
-    pub outputs: Vec<TxOutput>,
-    pub is_change_found: bool,
-    pub change_pk_hash: [u8; 20],
-
-    pub prevouts_hash: [u8; 32],
-    pub sequence_hash: [u8; 32],
-    pub outputs_hash: [u8; 32],
-    pub amounts_hash: [u8; 32],
-    pub scripts_hash: [u8; 32],
-
-    pub header_digest: [u8; 32],
-}
-
-#[derive(Default)]
-pub struct TrustedInputInfo {
-    // Transaction input to catch for a Trusted Input lookup
-    pub input_idx: Option<u32>,
-    pub is_input_processed: bool,
-    pub amount: u64,
-    pub tx_id: [u8; 32],
-}
-
-#[derive(Default)]
-pub struct TxSigningState {
-    pub is_tx_parsed_once: bool,
-    pub already_signed_input_count: usize,
-    pub total_input_count: usize,
-}
-
-/// Transaction context holding state between APDU chunks.
-pub struct TxContext<'a> {
-    is_extra_header_data_set: bool,
-    is_finished: bool,
-    pub tx_signing_state: TxSigningState,
-
-    pub tx_info: TxInfo,
-    pub trusted_input_info: TrustedInputInfo,
-    pub hashers: Hashers,
-
-    pub home: NbglHomeAndSettings,
-    pub parser: Parser,
-    pub output_parser: OutputParser,
-    /// Swap parameters if running in swap mode.
-    /// Used to validate the transaction against the Exchange's request.
-    pub swap_params: Option<&'a CreateTxParams>,
-}
-
-// Implement constructor for TxInfo with default values
-impl<'s> TxContext<'s> {
-    pub fn new(swap_params: Option<&'s CreateTxParams>, mode: ParserMode) -> TxContext<'s> {
-        TxContext {
-            is_extra_header_data_set: false,
-            is_finished: false,
-            tx_signing_state: Default::default(),
-
-            tx_info: Default::default(),
-            trusted_input_info: Default::default(),
-            hashers: Default::default(),
-
-            home: Default::default(),
-            parser: Parser::new(mode),
-            output_parser: OutputParser::new(),
-            swap_params,
-        }
-    }
-
-    pub fn reset(&mut self, mode: ParserMode) {
-        // Don't reset home and swap params, they're not part of TX state
-        self.is_extra_header_data_set = false;
-        self.is_finished = false;
-        self.tx_signing_state = TxSigningState::default();
-        self.tx_info = TxInfo::default();
-        self.trusted_input_info = TrustedInputInfo::default();
-        self.hashers = Hashers::default();
-        self.parser = Parser::new(mode);
-        self.output_parser = OutputParser::new();
-    }
-
-    pub fn set_transaction_trusted_input_idx(&mut self, idx: u32) {
-        self.trusted_input_info.input_idx = idx.into();
-    }
-
-    // Get signing finished or rejected by user status
-    pub fn is_finished(&self) -> bool {
-        self.is_finished
-    }
-}
 
 pub fn handler_hash_input_start(
     comm: &mut Comm,
@@ -239,7 +105,7 @@ pub fn handler_hash_input_finalize_full(
 
     ctx.output_parser
         .parse(
-            &mut crate::parser::OutputParserCtx {
+            &mut OutputParserCtx {
                 tx_info: &mut ctx.tx_info,
                 hashers: &mut ctx.hashers,
                 swap_params: ctx.swap_params,
@@ -253,7 +119,7 @@ pub fn handler_hash_input_finalize_full(
                 ParserSourceError::AppSW(sw) => sw,
                 ParserSourceError::UserDenied => {
                     // User rejected output after review, mark transaction as finished
-                    ctx.is_finished = true;
+                    ctx.set_finished();
                     AppSW::Deny
                 }
                 ParserSourceError::SwapError {
@@ -308,7 +174,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         return Err(AppSW::WrongApduLength);
     }
 
-    if ctx.tx_signing_state.is_tx_parsed_once && !ctx.is_extra_header_data_set {
+    if ctx.tx_signing_state.is_tx_parsed_once && !ctx.is_extra_header_data_set() {
         // not used path size 1 + not used auth len 1 + locktime 4 + sighhash ty 1 +  expiry height 4
         const EXTRA_HEADER_DATA_LEN: usize = 11;
         if data.len() != EXTRA_HEADER_DATA_LEN {
@@ -326,7 +192,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         ctx.tx_info.sighash_type = sighash_type;
         ctx.tx_info.expiry_height = expiry_height;
 
-        ctx.is_extra_header_data_set = true;
+        ctx.set_extra_header_data();
 
         return Ok(());
     }
@@ -372,7 +238,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
 
     if ctx.tx_signing_state.already_signed_input_count == ctx.tx_signing_state.total_input_count {
         info!("All inputs have been signed, TX signing is finished");
-        ctx.is_finished = true;
+        ctx.set_finished();
     }
 
     Ok(())

@@ -67,8 +67,8 @@ pub use legacy::get_check_address_params;
 #[cfg(not(feature = "legacy_path"))]
 pub use swap::get_check_address_params;
 
-use crate::handlers::sign_tx::TxOutput;
 use crate::swap::panic_handler::{set_swap_panic_handler, swap_panic_handler};
+use crate::tx::TxOutput;
 use crate::{
     consts::{ZCASH_DECIMALS, ZCASH_TICKER},
     log::{debug, error, info},

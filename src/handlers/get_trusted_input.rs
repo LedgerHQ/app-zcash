@@ -1,9 +1,9 @@
 use crate::{
     consts::TRUSTED_INPUT_SIZE,
-    handlers::sign_tx::TxContext,
     log::{debug, error, info},
     parser::{ParserCtx, ParserMode, ParserSourceError},
     settings::Settings,
+    tx::TxContext,
     utils::{read_u32, Endianness, HexSlice},
     AppSW,
 };
