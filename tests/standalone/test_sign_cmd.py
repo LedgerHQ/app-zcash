@@ -1,15 +1,40 @@
 # pylint: disable=C0301
 
 import pytest
+
 from ragger.error import ExceptionRAPDU
+from ragger.navigator import NavigateWithScenario
+from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
 from application_client.zcash_command_sender import ZcashCommandSender, Errors
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
 from application_client.zcash_verify_sign import check_tx_v5_signature_validity
 
+def extension(cls):
+    def wrapper(func):
+        setattr(cls, func.__name__, func)
+        return func
+    return wrapper
+
+# Special approve navigation that doesn't wait for the last screen,
+# as it is a "transaction signed" shown after all inputs signed and not after the review is finished.
+@extension(NavigateWithScenario)
+def review_approve(self):
+    scenario = NavigationScenarioData(self.device, self.backend, UseCase.TX_REVIEW, True)
+    # Don't wait for last USE_CASE_STATUS_DISMISS screen
+    if self.device.touchable:
+        scenario.validation = scenario.validation[:-1]
+
+    self.navigator.navigate_until_text_and_compare(
+        navigate_instruction=scenario.navigation,
+        validation_instructions=scenario.validation,
+        text=scenario.pattern,
+        path=self.screenshot_path,
+        test_case_name=self.test_name,
+        screen_change_after_last_instruction=False)
 
 
-def test_sign_tx_v5_simple(backend, scenario_navigator):
+def test_sign_tx_v5_simple(backend, scenario_navigator: NavigateWithScenario):
     LOCKTIME = 0x00
     EXPIRY = 0x00
     SIGHASH_TYPE = 0x01
@@ -455,6 +480,7 @@ def test_sign_tx_with_v4_nu6_input(backend, scenario_navigator):
 
     txid = txid_raw[4:4+32 + 4 + 8]
     txid = txid.hex()
+    # https://api.blockchair.com/zcash/raw/transaction/3e5a39fa931ed6266042d7553f68d365cbb5da358fb0cffa0e66a3259ce8d30a
     assert txid == "0ad3e89c25a3660efacfb08f35dab5cb65d3683f55d7426026d61e93fa395a3e0000000062e52a0300000000"
 
     assert sw == 0x9000

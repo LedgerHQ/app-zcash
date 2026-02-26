@@ -378,7 +378,6 @@ impl Parser {
     ) -> Result<(), ParserError> {
         let prevout = ok!(OutPoint::read(&mut *reader));
 
-        // TODO: use match
         match ctx.tx_info.tx_version.expect("should be set at this point") {
             TxVersion::V5 => {
                 ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
