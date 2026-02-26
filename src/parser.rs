@@ -32,7 +32,7 @@ use crate::log::{debug, error, info};
 use crate::parser::compute::{finalize_signature_hash, finalize_signature_input_hash};
 use crate::parser::reader::ByteReader;
 use crate::settings::Settings;
-use crate::tx::{Hashers, TrustedInputInfo, TxInfo, TxOutput, TxSigningState};
+use crate::tx::{Hashers, SupportedTxVersion, TrustedInputInfo, TxInfo, TxOutput, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter, AsWriterB as _, Blake2b256Personalization};
 use crate::utils::{CheckDispOutput, HexSlice, check_output_displayable, secure_memcmp};
 use crate::{AppSW, swap};
@@ -280,55 +280,35 @@ impl Parser {
         let input_count: usize = ok!(CompactSize::read_t(&mut *reader));
         info!("Input count: {}", input_count);
 
-        match (self.mode, ctx.tx_state.is_tx_parsed_once) {
+        match (self.mode, version, ctx.tx_state.is_tx_parsed_once) {
             // Normal flow for TrustedInput and Signature modes
-            (ParserMode::TrustedInput, _) | (ParserMode::Signature, false) => {
-                match version {
-                    TxVersion::V5 => {
-                        debug!("Init V5 tx hashers");
-                        ctx.hashers
-                            .prevouts_hasher
-                            .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION);
-                        ctx.hashers
-                            .sequence_hasher
-                            .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION);
-                        ctx.hashers
-                            .outputs_hasher
-                            .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION);
-                        ctx.hashers
-                            .amounts_hasher
-                            .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION);
-                        ctx.hashers
-                            .scripts_hasher
-                            .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION);
-                        ctx.hashers
-                            .sapling_hasher
-                            .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION);
-                        ctx.hashers
-                            .orchard_hasher
-                            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION);
-                    }
-                    // Support V4 in trusted input mode (Transaction ID computation)
-                    TxVersion::V4 if ParserMode::TrustedInput == self.mode => {
-                        debug!("Init V4 txid hasher");
-                        ctx.hashers.v4_tx_hasher = Sha2_256::new();
-                        version
-                            .write(&mut ctx.hashers.v4_tx_hasher.as_writer())
-                            .expect("cannot fail");
-                        CompactSize::write(&mut ctx.hashers.v4_tx_hasher.as_writer(), input_count)
-                            .expect("cannot fail");
-                    }
-                    _ => {
-                        error!(
-                            "Unsupported transaction version: {:?} in mode {:?}",
-                            version, self.mode
-                        );
-                        return Err(ParserError::from_str("Unsupported transaction version"));
-                    }
-                }
+            (ParserMode::TrustedInput, TxVersion::V5, _)
+            | (ParserMode::Signature, TxVersion::V5, false) => {
+                debug!("Init V5 tx hashers");
+                ctx.hashers
+                    .prevouts_hasher
+                    .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION);
+                ctx.hashers
+                    .sequence_hasher
+                    .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION);
+                ctx.hashers
+                    .outputs_hasher
+                    .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION);
+                ctx.hashers
+                    .amounts_hasher
+                    .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION);
+                ctx.hashers
+                    .scripts_hasher
+                    .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION);
+                ctx.hashers
+                    .sapling_hasher
+                    .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION);
+                ctx.hashers
+                    .orchard_hasher
+                    .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION);
             }
             // In case of Signature mode, continue computing Tx hash from previous state
-            (ParserMode::Signature, true) => {
+            (ParserMode::Signature, TxVersion::V5, true) => {
                 info!("Resume TX hashing for signing");
                 info!("TX Version {:X?}", version);
                 info!("TX prevout hash {}", HexSlice(&ctx.tx_info.prevouts_hash));
@@ -347,11 +327,28 @@ impl Parser {
                 // Save header_digest
                 ok!(full_hasher.finalize(&mut ctx.tx_info.header_digest));
 
-                info!("NU5 header digest {}", HexSlice(&ctx.tx_info.header_digest));
+                info!("V5 header digest {}", HexSlice(&ctx.tx_info.header_digest));
 
                 ctx.hashers
                     .prevouts_hasher
                     .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION);
+            }
+            // Support V4 in trusted input mode (Transaction ID computation)
+            (ParserMode::TrustedInput, TxVersion::V4, _) => {
+                debug!("Init V4 txid hasher");
+                ctx.hashers.v4_tx_hasher = Sha2_256::new();
+                version
+                    .write(&mut ctx.hashers.v4_tx_hasher.as_writer())
+                    .expect("cannot fail");
+                CompactSize::write(&mut ctx.hashers.v4_tx_hasher.as_writer(), input_count)
+                    .expect("cannot fail");
+            }
+            _ => {
+                error!(
+                    "Unsupported transaction version: {:?} in mode {:?} with is_tx_parsed_once={}",
+                    version, self.mode, ctx.tx_state.is_tx_parsed_once
+                );
+                return Err(ParserError::from_str("Unsupported transaction version"));
             }
         }
 
@@ -405,7 +402,7 @@ impl Parser {
         ctx.tx_info.expiry_height = ok!(reader.read_u32_le());
         info!("Expiry height: {:X?}", ctx.tx_info.expiry_height);
 
-        if let Some(TxVersion::V4) = ctx.tx_info.tx_version {
+        if let SupportedTxVersion::V4 = ctx.tx_info.tx_version() {
             ok!(ctx
                 .hashers
                 .v4_tx_hasher

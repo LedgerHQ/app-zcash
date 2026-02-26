@@ -1,3 +1,5 @@
+use crate::tx::SupportedTxVersion;
+
 use super::*;
 
 impl Parser {
@@ -8,14 +10,13 @@ impl Parser {
     ) -> Result<(), ParserError> {
         let prevout = ok!(OutPoint::read(&mut *reader));
 
-        match ctx.tx_info.tx_version.expect("should be set at this point") {
-            TxVersion::V5 => {
+        match ctx.tx_info.tx_version() {
+            SupportedTxVersion::V5 => {
                 ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
             }
-            TxVersion::V4 => {
+            SupportedTxVersion::V4 => {
                 ok!(prevout.write(ctx.hashers.v4_tx_hasher.as_writer()));
             }
-            _ => unreachable!("we should only support V4 and V5 at this point"),
         }
 
         let script_size: usize = ok!(CompactSize::read_t(&mut *reader));
@@ -177,14 +178,13 @@ impl Parser {
         // NOTE: take/deallocate self.script_bytes here
         script_sig.0.0 = mem::take(&mut self.script_bytes);
 
-        match ctx.tx_info.tx_version.expect("should be set at this point") {
-            TxVersion::V5 => {
+        match ctx.tx_info.tx_version() {
+            SupportedTxVersion::V5 => {
                 ok!(script_sig.write(ctx.hashers.scripts_hasher.as_writer()));
             }
-            TxVersion::V4 => {
+            SupportedTxVersion::V4 => {
                 ok!(script_sig.write(ctx.hashers.v4_tx_hasher.as_writer()));
             }
-            _ => unreachable!("we should only support V4 and V5 at this point"),
         }
 
         info!("Script sig: {:?}", script_sig);
@@ -196,14 +196,13 @@ impl Parser {
         };
         info!("Sequence: {:X?}", sequence);
 
-        match ctx.tx_info.tx_version.expect("should be set at this point") {
-            TxVersion::V5 => {
+        match ctx.tx_info.tx_version() {
+            SupportedTxVersion::V5 => {
                 ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
             }
-            TxVersion::V4 => {
+            SupportedTxVersion::V4 => {
                 ok!(ctx.hashers.v4_tx_hasher.update(&sequence.to_le_bytes()));
             }
-            _ => unreachable!("we should only support V4 and V5 at this point"),
         }
 
         if ctx.tx_state.is_tx_parsed_once {
@@ -251,7 +250,7 @@ impl Parser {
         let output_count: usize = ok!(CompactSize::read_t(&mut *reader));
         info!("Output count: {}", output_count);
 
-        if ctx.tx_info.tx_version.expect("should be set at this point") == TxVersion::V4 {
+        if let SupportedTxVersion::V4 = ctx.tx_info.tx_version() {
             ok!(CompactSize::write(
                 &mut ctx.hashers.v4_tx_hasher.as_writer(),
                 output_count
@@ -288,14 +287,13 @@ impl Parser {
             );
         }
 
-        match ctx.tx_info.tx_version.expect("should be set at this point") {
-            TxVersion::V5 => {
+        match ctx.tx_info.tx_version() {
+            SupportedTxVersion::V5 => {
                 ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
             }
-            TxVersion::V4 => {
+            SupportedTxVersion::V4 => {
                 ok!(ctx.hashers.v4_tx_hasher.update(&amount.to_i64_le_bytes()));
             }
-            _ => unreachable!("we should only support V4 and V5 at this point"),
         }
 
         let script_size: usize = ok!(CompactSize::read_t(&mut *reader));

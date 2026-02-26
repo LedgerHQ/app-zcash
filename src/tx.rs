@@ -61,6 +61,27 @@ pub struct TxInfo {
     pub header_digest: [u8; 32],
 }
 
+pub enum SupportedTxVersion {
+    V4,
+    V5,
+}
+
+impl TxInfo {
+    // Call only after header parsing is finished, otherwise it may panic if tx_version or branch_id is not set yet.
+    pub fn tx_version(&self) -> SupportedTxVersion {
+        match self
+            .tx_version
+            .expect("TX version should be set at this point of the parsing")
+        {
+            TxVersion::V4 => SupportedTxVersion::V4,
+            TxVersion::V5 => SupportedTxVersion::V5,
+            _ => unreachable!(
+                "Unsupported transaction version, should have been rejected at version parsing"
+            ),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct TrustedInputInfo {
     // Transaction input to catch for a Trusted Input lookup

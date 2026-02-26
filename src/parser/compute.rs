@@ -1,15 +1,13 @@
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
-use zcash_primitives::transaction::{
-    TxVersion,
-    txid::{
-        ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
-        ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TX_PERSONALIZATION_PREFIX,
-    },
+use zcash_primitives::transaction::txid::{
+    ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
+    ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TX_PERSONALIZATION_PREFIX,
 };
 
 use crate::{
-    log::{debug, error, info},
+    log::{debug, info},
     parser::{ParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, ok},
+    tx::SupportedTxVersion,
     utils::{
         HexSlice,
         blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _},
@@ -27,112 +25,107 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
         .branch_id
         .expect("branch_id should be set at this point");
 
-    if let Some(TxVersion::V5) = ctx.tx_info.tx_version {
-        let prevouts_hash = {
-            let mut hash = [0u8; 32];
-            ok!(ctx.hashers.prevouts_hasher.finalize(&mut hash));
-            hash
-        };
-        debug!("Prevouts hash: {}", HexSlice(&prevouts_hash));
+    match ctx.tx_info.tx_version() {
+        SupportedTxVersion::V5 => {
+            let prevouts_hash = {
+                let mut hash = [0u8; 32];
+                ok!(ctx.hashers.prevouts_hasher.finalize(&mut hash));
+                hash
+            };
+            debug!("Prevouts hash: {}", HexSlice(&prevouts_hash));
 
-        let sequence_hash = {
-            let mut hash = [0u8; 32];
-            ok!(ctx.hashers.sequence_hasher.finalize(&mut hash));
-            hash
-        };
-        debug!("Sequence hash: {}", HexSlice(&sequence_hash));
+            let sequence_hash = {
+                let mut hash = [0u8; 32];
+                ok!(ctx.hashers.sequence_hasher.finalize(&mut hash));
+                hash
+            };
+            debug!("Sequence hash: {}", HexSlice(&sequence_hash));
 
-        let outputs_hash = {
-            let mut hash = [0u8; 32];
-            ok!(ctx.hashers.outputs_hasher.finalize(&mut hash));
-            hash
-        };
-        debug!("Outputs hash: {}", HexSlice(&outputs_hash));
+            let outputs_hash = {
+                let mut hash = [0u8; 32];
+                ok!(ctx.hashers.outputs_hasher.finalize(&mut hash));
+                hash
+            };
+            debug!("Outputs hash: {}", HexSlice(&outputs_hash));
 
-        let header_hash = {
-            let mut hash = [0u8; 32];
+            let header_hash = {
+                let mut hash = [0u8; 32];
+
+                let mut hasher = Blake2b_256::default();
+                hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION);
+
+                ok!(tx_version.write(&mut hasher.as_writer()));
+
+                ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+
+                ok!(hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
+                ok!(hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
+
+                ok!(hasher.finalize(&mut hash));
+                hash
+            };
+            debug!("Header hash: {}", HexSlice(&header_hash));
+
+            let transparent_hash = {
+                let mut hash = [0u8; 32];
+
+                let mut hasher = Blake2b_256::default();
+                hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION);
+
+                ok!(hasher.update(&prevouts_hash));
+                ok!(hasher.update(&sequence_hash));
+                ok!(hasher.update(&outputs_hash));
+
+                ok!(hasher.finalize(&mut hash));
+                hash
+            };
+            debug!("Transparent hash: {}", HexSlice(&transparent_hash));
+
+            let sapling_hash = {
+                let mut hash = [0u8; 32];
+                ok!(ctx.hashers.sapling_hasher.finalize(&mut hash));
+                hash
+            };
+            debug!("Sapling hash: {}", HexSlice(&sapling_hash));
+
+            let orchard_hash = {
+                let mut hash = [0u8; 32];
+                ok!(ctx.hashers.orchard_hasher.finalize(&mut hash));
+                hash
+            };
+            debug!("Orchard hash: {}", HexSlice(&orchard_hash));
+
+            let mut personalization = [0u8; 16];
+            personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
+            personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
 
             let mut hasher = Blake2b_256::default();
-            hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION);
+            hasher.init_with_perso(&personalization);
 
-            ok!(tx_version.write(&mut hasher.as_writer()));
+            ok!(hasher.update(&header_hash));
+            ok!(hasher.update(&transparent_hash));
+            ok!(hasher.update(&sapling_hash));
+            ok!(hasher.update(&orchard_hash));
 
-            ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+            ok!(hasher.finalize(&mut ctx.trusted_input_info.tx_id));
 
-            ok!(hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
-            ok!(hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
+            debug!(
+                "Transaction ID hash: {}",
+                HexSlice(&ctx.trusted_input_info.tx_id)
+            );
+        }
+        SupportedTxVersion::V4 => {
+            let mut first_round_hash = [0u8; 32];
+            ok!(ctx.hashers.v4_tx_hasher.finalize(&mut first_round_hash));
 
-            ok!(hasher.finalize(&mut hash));
-            hash
-        };
-        debug!("Header hash: {}", HexSlice(&header_hash));
+            let mut second_round_hasher = Sha2_256::new();
+            ok!(second_round_hasher.hash(&first_round_hash, &mut ctx.trusted_input_info.tx_id));
 
-        let transparent_hash = {
-            let mut hash = [0u8; 32];
-
-            let mut hasher = Blake2b_256::default();
-            hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION);
-
-            ok!(hasher.update(&prevouts_hash));
-            ok!(hasher.update(&sequence_hash));
-            ok!(hasher.update(&outputs_hash));
-
-            ok!(hasher.finalize(&mut hash));
-            hash
-        };
-        debug!("Transparent hash: {}", HexSlice(&transparent_hash));
-
-        let sapling_hash = {
-            let mut hash = [0u8; 32];
-            ok!(ctx.hashers.sapling_hasher.finalize(&mut hash));
-            hash
-        };
-        debug!("Sapling hash: {}", HexSlice(&sapling_hash));
-
-        let orchard_hash = {
-            let mut hash = [0u8; 32];
-            ok!(ctx.hashers.orchard_hasher.finalize(&mut hash));
-            hash
-        };
-        debug!("Orchard hash: {}", HexSlice(&orchard_hash));
-
-        let mut personalization = [0u8; 16];
-        personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
-        personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
-
-        let mut hasher = Blake2b_256::default();
-        hasher.init_with_perso(&personalization);
-
-        ok!(hasher.update(&header_hash));
-        ok!(hasher.update(&transparent_hash));
-        ok!(hasher.update(&sapling_hash));
-        ok!(hasher.update(&orchard_hash));
-
-        ok!(hasher.finalize(&mut ctx.trusted_input_info.tx_id));
-
-        debug!(
-            "Transaction ID hash: {}",
-            HexSlice(&ctx.trusted_input_info.tx_id)
-        );
-    } else if let Some(TxVersion::V4) = ctx.tx_info.tx_version {
-        let mut first_round_hash = [0u8; 32];
-        ok!(ctx.hashers.v4_tx_hasher.finalize(&mut first_round_hash));
-
-        let mut second_round_hasher = Sha2_256::new();
-        ok!(second_round_hasher.hash(&first_round_hash, &mut ctx.trusted_input_info.tx_id));
-
-        debug!(
-            "V4 transaction ID hash: {}",
-            HexSlice(&ctx.trusted_input_info.tx_id)
-        );
-    } else {
-        error!(
-            "TX ID computation for versions other than V4, V5 is not implemented {:?}",
-            tx_version
-        );
-        return Err(ParserError::from_str(
-            "TX ID computation for versions other than V4, V5 is not implemented",
-        ));
+            debug!(
+                "V4 transaction ID hash: {}",
+                HexSlice(&ctx.trusted_input_info.tx_id)
+            );
+        }
     }
 
     Ok(())
