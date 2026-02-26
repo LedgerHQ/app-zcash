@@ -1,5 +1,5 @@
 [package]
-name = "Zcash"
+name = "zcash"
 version = "3.0.0"
 authors = ["Ledger"]
 edition = "2021"

@@ -3,26 +3,6 @@
 version = 4
 
 [[package]]
-name = "Zcash"
-version = "3.0.0"
-dependencies = [
- "arrayvec",
- "bs58",
- "core2 0.3.3",
- "hex",
- "image",
- "include_gif",
- "ledger_device_sdk",
- "ledger_secure_sdk_sys",
- "num_enum",
- "orchard",
- "zcash_encoding",
- "zcash_primitives",
- "zcash_protocol",
- "zcash_transparent",
-]
-
-[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2010,6 +1990,26 @@ name = "y4m"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
+
+[[package]]
+name = "zcash"
+version = "3.0.0"
+dependencies = [
+ "arrayvec",
+ "bs58",
+ "core2 0.3.3",
+ "hex",
+ "image",
+ "include_gif",
+ "ledger_device_sdk",
+ "ledger_secure_sdk_sys",
+ "num_enum",
+ "orchard",
+ "zcash_encoding",
+ "zcash_primitives",
+ "zcash_protocol",
+ "zcash_transparent",
+]
 
 [[package]]
 name = "zcash_address"
