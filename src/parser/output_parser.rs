@@ -120,12 +120,12 @@ impl OutputParser {
 
                     let mut script = Script::default();
                     // NOTE: take/deallocate self.script_bytes here
-                    script.0 .0 = mem::take(&mut self.script_bytes);
+                    script.0.0 = mem::take(&mut self.script_bytes);
                     ok!(script.write(ctx.hashers.outputs_hasher.as_writer()));
 
                     if let output @ (CheckDispOutput::Change | CheckDispOutput::Displayable) =
                         check_output_displayable(
-                            &script.0 .0,
+                            &script.0.0,
                             self.current_output_amount,
                             &ctx.tx_info.change_pk_hash,
                         )
@@ -138,7 +138,7 @@ impl OutputParser {
                         }
 
                         let address =
-                            ok!(Base58Address::from_output_script(&script.0 .0)).to_string();
+                            ok!(Base58Address::from_output_script(&script.0.0)).to_string();
                         debug!("address_string: {}", &address);
 
                         ctx.tx_info.outputs.push(TxOutput {

@@ -1,6 +1,6 @@
 use ledger_device_sdk::io::Comm;
 
-use crate::{tx::TxContext, AppSW};
+use crate::{AppSW, tx::TxContext};
 
 pub fn handler_sign_msg(
     _comm: &mut Comm,

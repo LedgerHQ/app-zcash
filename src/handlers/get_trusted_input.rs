@@ -1,14 +1,14 @@
 use crate::{
+    AppSW,
     consts::TRUSTED_INPUT_SIZE,
     log::{debug, error, info},
     parser::{ParserCtx, ParserMode, ParserSourceError},
     settings::Settings,
     tx::TxContext,
-    utils::{read_u32, Endianness, HexSlice},
-    AppSW,
+    utils::{Endianness, HexSlice, read_u32},
 };
 use ledger_device_sdk::{
-    hmac::{sha2::Sha2_256 as HmacSha256, HMACInit},
+    hmac::{HMACInit, sha2::Sha2_256 as HmacSha256},
     io::Comm,
     random::rand_bytes,
 };

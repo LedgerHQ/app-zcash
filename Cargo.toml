@@ -2,7 +2,7 @@
 name = "zcash"
 version = "3.0.0"
 authors = ["Ledger"]
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 ledger_device_sdk = "1.*"

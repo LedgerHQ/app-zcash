@@ -238,7 +238,7 @@ fn init_trusted_input_key_storage() {
 }
 
 // --8<-- [start:sample_main]
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn sample_main(arg0: u32) {
     if arg0 != 0 {
         // We have been started by the Exchange application through the os_lib_call API

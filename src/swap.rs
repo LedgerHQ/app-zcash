@@ -47,13 +47,12 @@ use core::fmt::Write;
 use core::str;
 use ledger_device_sdk::libcall::LibCallCommand;
 use ledger_device_sdk::libcall::{
-    self,
+    self, SwapAppErrorCodeTrait,
     string::uint256_to_float,
     swap::{
         self, CheckAddressParams, CreateTxParams, PrintableAmountParams, SwapError,
         SwapErrorCommonCode, SwapResult,
     },
-    SwapAppErrorCodeTrait,
 };
 
 pub(crate) mod panic_handler;

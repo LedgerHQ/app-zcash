@@ -175,7 +175,7 @@ impl Parser {
 
         let mut script_sig = Script::default();
         // NOTE: take/deallocate self.script_bytes here
-        script_sig.0 .0 = mem::take(&mut self.script_bytes);
+        script_sig.0.0 = mem::take(&mut self.script_bytes);
 
         match ctx.tx_info.tx_version.expect("should be set at this point") {
             TxVersion::V5 => {
@@ -349,7 +349,7 @@ impl Parser {
 
         let mut script_pubkey = Script::default();
         // NOTE: take/deallocate self.script_bytes here
-        script_pubkey.0 .0 = mem::take(&mut self.script_bytes);
+        script_pubkey.0.0 = mem::take(&mut self.script_bytes);
 
         match ctx.tx_info.tx_version.expect("should be set at this point") {
             TxVersion::V5 => {

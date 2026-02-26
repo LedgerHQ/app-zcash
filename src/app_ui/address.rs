@@ -17,7 +17,7 @@
 
 use ledger_device_sdk::nbgl::NbglAddressReview;
 
-use crate::{app_ui::load_glyph, AppSW};
+use crate::{AppSW, app_ui::load_glyph};
 
 pub fn ui_display_pk(addr: &str) -> Result<bool, AppSW> {
     // Display the address confirmation screen.

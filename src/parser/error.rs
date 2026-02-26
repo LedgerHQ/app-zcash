@@ -3,13 +3,13 @@ use core2::io::Error as IoError;
 
 use ledger_device_sdk::hash::HashError;
 use ledger_device_sdk::hmac::HMACError;
-use ledger_device_sdk::libcall::swap::SwapError;
 use ledger_device_sdk::libcall::SwapAppErrorCodeTrait;
+use ledger_device_sdk::libcall::swap::SwapError;
 
 use zcash_protocol::value::BalanceError;
 
-use crate::swap::SwapAppErrorCode;
 use crate::AppSW;
+use crate::swap::SwapAppErrorCode;
 
 // NOTE: `#[allow(dead_code)]` due to false positive in current nightly toolchain
 #[allow(dead_code)]

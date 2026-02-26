@@ -11,18 +11,18 @@ use zcash_primitives::transaction::sighash_v5::{
 };
 
 use core2::io::Read;
-use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::hash::HashInit;
-use ledger_device_sdk::hmac::{sha2::Sha2_256 as HmacSha256, HMACInit};
+use ledger_device_sdk::hash::blake2::Blake2b_256;
+use ledger_device_sdk::hmac::{HMACInit, sha2::Sha2_256 as HmacSha256};
 use num_enum::TryFromPrimitive;
 use zcash_encoding::CompactSize;
 use zcash_primitives::encoding::ReadBytesExt;
+use zcash_primitives::transaction::TxVersion;
 use zcash_primitives::transaction::txid::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_OUTPUTS_HASH_PERSONALIZATION,
     ZCASH_PREVOUTS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_SEQUENCE_HASH_PERSONALIZATION,
 };
-use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 use zcash_protocol::value::Zatoshis;
 use zcash_transparent::address::Script;
@@ -34,13 +34,13 @@ use crate::parser::reader::ByteReader;
 use crate::settings::Settings;
 use crate::tx::{Hashers, TrustedInputInfo, TxInfo, TxOutput, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter, AsWriterB as _, Blake2b256Personalization};
-use crate::utils::{check_output_displayable, secure_memcmp, CheckDispOutput, HexSlice};
+use crate::utils::{CheckDispOutput, HexSlice, check_output_displayable, secure_memcmp};
+use crate::{AppSW, swap};
 use crate::{app_ui::sign::ui_display_tx, utils::base58_address::Base58Address};
 use crate::{
     consts::{MAX_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, TRUSTED_INPUT_TOTAL_SIZE},
     utils::base58_address::ToBase58Address,
 };
-use crate::{swap, AppSW};
 use error::ok;
 
 pub use error::{ParserError, ParserSourceError};
@@ -359,10 +359,10 @@ impl Parser {
         self.input_count = input_count;
 
         // Set total_input_count for signing
-        if let ParserMode::Signature = self.mode {
-            if !ctx.tx_state.is_tx_parsed_once {
-                ctx.tx_state.total_input_count = self.input_count;
-            }
+        if let ParserMode::Signature = self.mode
+            && !ctx.tx_state.is_tx_parsed_once
+        {
+            ctx.tx_state.total_input_count = self.input_count;
         }
 
         self.state = if self.input_count == 0 {

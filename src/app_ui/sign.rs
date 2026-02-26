@@ -15,9 +15,9 @@
  *  limitations under the License.
  *****************************************************************************/
 use crate::{
+    AppSW,
     app_ui::load_glyph,
     consts::{ZCASH_DECIMALS_DIV, ZCASH_TICKER},
-    AppSW,
 };
 
 use alloc::{format, string::String, vec::Vec};

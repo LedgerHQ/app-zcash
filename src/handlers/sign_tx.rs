@@ -15,16 +15,16 @@
  *  limitations under the License.
  *****************************************************************************/
 use ledger_device_sdk::ecc::{Secp256k1, SeedDerive as _};
-use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::hash::HashInit;
+use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::io::Comm;
 
+use crate::AppSW;
 use crate::log::{debug, error, info};
 use crate::parser::{OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError};
 use crate::tx::TxContext;
+use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
-use crate::utils::{check_bip44_compliance, Bip44CheckMode, HexSlice};
-use crate::AppSW;
 
 pub fn handler_hash_input_start(
     comm: &mut Comm,

@@ -1,18 +1,18 @@
-use ledger_device_sdk::hash::{blake2::Blake2b_256, sha2::Sha2_256, HashInit as _};
+use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
 use zcash_primitives::transaction::{
+    TxVersion,
     txid::{
         ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
         ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TX_PERSONALIZATION_PREFIX,
     },
-    TxVersion,
 };
 
 use crate::{
     log::{debug, error, info},
-    parser::{ok, ParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION},
+    parser::{ParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, ok},
     utils::{
-        blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _},
         HexSlice,
+        blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _},
     },
 };
 

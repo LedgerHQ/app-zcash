@@ -1,9 +1,9 @@
 use crate::{
+    AppSW,
     utils::{
         bip32_path::Bip32Path,
         hashers::{Hash160, ToHash160},
     },
-    AppSW,
 };
 
 pub type CompressedPublicKey = [u8; 33];
