@@ -164,7 +164,12 @@ pub fn check_output_displayable(
     CheckDispOutput::Displayable
 }
 
-pub fn check_bip44_compliance(path: &Bip32Path, is_change_path: bool) -> bool {
+pub enum Bip44CheckMode {
+    Full { is_change_path: bool },
+    OnlyCoinType,
+}
+
+pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const BIP44_PATH_LEN: usize = 5;
     const BIP44_PURPOSE_OFFSET: usize = 0;
     const BIP44_COIN_TYPE_OFFSET: usize = 1;
@@ -194,22 +199,24 @@ pub fn check_bip44_compliance(path: &Bip32Path, is_change_path: bool) -> bool {
         return false;
     }
 
-    let account = path[BIP44_ACCOUNT_OFFSET] & 0x7FFF_FFFF;
-    if account > MAX_BIP44_ACCOUNT_RECOMMENDED {
-        error!("Bad Bip44 account");
-        return false;
-    }
+    if let Bip44CheckMode::Full { is_change_path } = mode {
+        let account = path[BIP44_ACCOUNT_OFFSET] & 0x7FFF_FFFF;
+        if account > MAX_BIP44_ACCOUNT_RECOMMENDED {
+            error!("Bad Bip44 account");
+            return false;
+        }
 
-    let change = path[BIP44_CHANGE_OFFSET];
-    if change != if is_change_path { 1 } else { 0 } {
-        error!("Bad Bip44 change");
-        return false;
-    }
+        let change = path[BIP44_CHANGE_OFFSET];
+        if change != if is_change_path { 1 } else { 0 } {
+            error!("Bad Bip44 change");
+            return false;
+        }
 
-    let address_index = path[BIP44_ADDRESS_INDEX_OFFSET] & 0x7FFF_FFFF;
-    if address_index > MAX_BIP44_ADDRESS_INDEX_RECOMMENDED {
-        error!("Bad Bip44 address index");
-        return false;
+        let address_index = path[BIP44_ADDRESS_INDEX_OFFSET] & 0x7FFF_FFFF;
+        if address_index > MAX_BIP44_ADDRESS_INDEX_RECOMMENDED {
+            error!("Bad Bip44 address index");
+            return false;
+        }
     }
 
     true

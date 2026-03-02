@@ -14,148 +14,17 @@
  *  See the License for the specific language governing permissions and
  *  limitations under the License.
  *****************************************************************************/
-use alloc::string::String;
-use alloc::vec::Vec;
 use ledger_device_sdk::ecc::{Secp256k1, SeedDerive as _};
-use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::hash::HashInit;
+use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::io::Comm;
 
-use ledger_device_sdk::libcall::swap::CreateTxParams;
-use ledger_device_sdk::nbgl::NbglHomeAndSettings;
-
-use zcash_primitives::transaction::TxVersion;
-use zcash_protocol::consensus::BranchId;
-
-use crate::log::{debug, error, info};
-use crate::parser::{OutputParser, Parser, ParserCtx, ParserMode, ParserSourceError};
-use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
-use crate::utils::{check_bip44_compliance, HexSlice};
 use crate::AppSW;
-
-#[derive(Default)]
-pub struct Hashers {
-    // Transparent transaction hashers
-    pub prevouts_hasher: Blake2b_256,
-    pub sequence_hasher: Blake2b_256,
-    pub outputs_hasher: Blake2b_256,
-    pub amounts_hasher: Blake2b_256,
-    pub scripts_hasher: Blake2b_256,
-
-    pub orchard_hasher: Blake2b_256,
-    pub sapling_hasher: Blake2b_256,
-
-    pub tx_memo_hasher: Blake2b_256,
-    pub tx_compact_hasher: Blake2b_256,
-    pub tx_non_compact_hasher: Blake2b_256,
-
-    pub tx_full_hasher: Blake2b_256,
-}
-
-#[derive(Default)]
-pub struct TxOutput {
-    pub amount: u64,
-    pub address: String,
-    pub is_change: bool,
-}
-
-#[derive(Default)]
-pub struct TxInfo {
-    pub tx_version: Option<TxVersion>,
-    pub branch_id: Option<BranchId>,
-    pub locktime: u32,
-    pub sighash_type: u8,
-    pub expiry_height: u32,
-    pub total_amount: u64,
-
-    pub outputs: Vec<TxOutput>,
-    pub is_change_found: bool,
-    pub change_pk_hash: [u8; 20],
-
-    pub prevouts_hash: [u8; 32],
-    pub sequence_hash: [u8; 32],
-    pub outputs_hash: [u8; 32],
-    pub amounts_hash: [u8; 32],
-    pub scripts_hash: [u8; 32],
-
-    pub header_digest: [u8; 32],
-}
-
-#[derive(Default)]
-pub struct TrustedInputInfo {
-    // Transaction input to catch for a Trusted Input lookup
-    pub input_idx: Option<u32>,
-    pub is_input_processed: bool,
-    pub amount: u64,
-    pub tx_id: [u8; 32],
-}
-
-#[derive(Default)]
-pub struct TxSigningState {
-    pub is_tx_parsed_once: bool,
-}
-
-/// Transaction context holding state between APDU chunks.
-pub struct TxContext<'a> {
-    is_review_finished: bool,
-
-    is_extra_header_data_set: bool,
-    is_signing_finished: bool,
-    pub tx_signing_state: TxSigningState,
-
-    pub tx_info: TxInfo,
-    pub trusted_input_info: TrustedInputInfo,
-    pub hashers: Hashers,
-
-    pub home: NbglHomeAndSettings,
-    pub parser: Parser,
-    pub output_parser: OutputParser,
-    /// Swap parameters if running in swap mode.
-    /// Used to validate the transaction against the Exchange's request.
-    pub swap_params: Option<&'a CreateTxParams>,
-}
-
-// Implement constructor for TxInfo with default values
-impl<'s> TxContext<'s> {
-    pub fn new(swap_params: Option<&'s CreateTxParams>, mode: ParserMode) -> TxContext<'s> {
-        TxContext {
-            is_review_finished: false,
-
-            is_extra_header_data_set: false,
-            is_signing_finished: false,
-            tx_signing_state: Default::default(),
-
-            tx_info: Default::default(),
-            trusted_input_info: Default::default(),
-            hashers: Default::default(),
-
-            home: Default::default(),
-            parser: Parser::new(mode),
-            output_parser: OutputParser::new(),
-            swap_params,
-        }
-    }
-
-    #[inline(always)]
-    pub fn reset(&mut self, mode: ParserMode) {
-        let swap_params = self.swap_params;
-        *self = TxContext::new(swap_params, mode);
-    }
-
-    pub fn set_transaction_trusted_input_idx(&mut self, idx: u32) {
-        self.trusted_input_info.input_idx = idx.into();
-    }
-
-    // Get review status
-    pub fn is_review_finished(&self) -> bool {
-        self.is_review_finished
-    }
-
-    // Get signing finished or rejected by user status
-    pub fn is_signing_finished(&self) -> bool {
-        self.is_signing_finished
-    }
-}
+use crate::log::{debug, error, info};
+use crate::parser::{OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError};
+use crate::tx::TxContext;
+use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
+use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
 
 pub fn handler_hash_input_start(
     comm: &mut Comm,
@@ -221,7 +90,12 @@ pub fn handler_hash_input_finalize_full(
 
         info!("Change pk hash: {}", HexSlice(&ctx.tx_info.change_pk_hash));
 
-        if !check_bip44_compliance(&path, true) {
+        if !check_bip44_compliance(
+            &path,
+            Bip44CheckMode::Full {
+                is_change_path: true,
+            },
+        ) {
             error!("Change address path not Bip44 compliant");
             return Err(AppSW::ConditionsOfUseNotSatisfied);
         }
@@ -231,7 +105,7 @@ pub fn handler_hash_input_finalize_full(
 
     ctx.output_parser
         .parse(
-            &mut crate::parser::OutputParserCtx {
+            &mut OutputParserCtx {
                 tx_info: &mut ctx.tx_info,
                 hashers: &mut ctx.hashers,
                 swap_params: ctx.swap_params,
@@ -245,7 +119,7 @@ pub fn handler_hash_input_finalize_full(
                 ParserSourceError::AppSW(sw) => sw,
                 ParserSourceError::UserDenied => {
                     // User rejected output after review, mark transaction as finished
-                    ctx.is_signing_finished = true;
+                    ctx.set_finished();
                     AppSW::Deny
                 }
                 ParserSourceError::SwapError {
@@ -257,7 +131,6 @@ pub fn handler_hash_input_finalize_full(
                         "Swap error with common code {}, app code {}, message {:?}",
                         common_code, app_code, message
                     );
-                    ctx.is_signing_finished = true;
 
                     // Original app sends IncorrectData for any swap error, so we do the same
                     AppSW::IncorrectData
@@ -266,12 +139,9 @@ pub fn handler_hash_input_finalize_full(
             }
         })?;
 
-    if ctx.output_parser.is_finished() {
-        ctx.is_review_finished = true;
-        if !ctx.tx_signing_state.is_tx_parsed_once {
-            info!("Set TX parsed once flag");
-            ctx.tx_signing_state.is_tx_parsed_once = true;
-        }
+    if ctx.output_parser.is_finished() && !ctx.tx_signing_state.is_tx_parsed_once {
+        info!("Set TX parsed once flag");
+        ctx.tx_signing_state.is_tx_parsed_once = true;
     }
 
     Ok(())
@@ -304,7 +174,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         return Err(AppSW::WrongApduLength);
     }
 
-    if ctx.tx_signing_state.is_tx_parsed_once && !ctx.is_extra_header_data_set {
+    if ctx.tx_signing_state.is_tx_parsed_once && !ctx.is_extra_header_data_set() {
         // not used path size 1 + not used auth len 1 + locktime 4 + sighhash ty 1 +  expiry height 4
         const EXTRA_HEADER_DATA_LEN: usize = 11;
         if data.len() != EXTRA_HEADER_DATA_LEN {
@@ -322,7 +192,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         ctx.tx_info.sighash_type = sighash_type;
         ctx.tx_info.expiry_height = expiry_height;
 
-        ctx.is_extra_header_data_set = true;
+        ctx.set_extra_header_data();
 
         return Ok(());
     }
@@ -342,7 +212,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
     let path_data = &data[..path_len];
     let path: Bip32Path = path_data.try_into()?;
 
-    if !check_bip44_compliance(&path, false) {
+    if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
         error!("Output address path not Bip44 compliant");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
@@ -356,7 +226,20 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         true,
     )?;
 
-    ctx.is_signing_finished = true;
+    ctx.tx_signing_state.already_signed_input_count = ctx
+        .tx_signing_state
+        .already_signed_input_count
+        .saturating_add(1);
+
+    info!(
+        "Signed input {}/{}",
+        ctx.tx_signing_state.already_signed_input_count, ctx.tx_signing_state.total_input_count
+    );
+
+    if ctx.tx_signing_state.already_signed_input_count == ctx.tx_signing_state.total_input_count {
+        info!("All inputs have been signed, TX signing is finished");
+        ctx.set_finished();
+    }
 
     Ok(())
 }

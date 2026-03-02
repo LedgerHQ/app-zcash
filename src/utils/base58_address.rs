@@ -3,11 +3,11 @@ use arrayvec::ArrayString;
 pub type Base58Address = ArrayString<TRANSPARENT_ADDRESS_B58_LEN>;
 
 use crate::{
+    AppSW,
     utils::{
-        hashers::{sha256_checksum, Hash160},
+        hashers::{Hash160, sha256_checksum},
         output_script_is_op_return, output_script_is_regular,
     },
-    AppSW,
 };
 
 pub const TRANSPARENT_ADDRESS_B58_LEN: usize = 35;
@@ -27,7 +27,7 @@ pub trait ToBase58Address {
         hash160: &Hash160,
     ) -> Result<ArrayString<TRANSPARENT_ADDRESS_B58_LEN>, AppSW>;
     fn from_output_script(script: &[u8])
-        -> Result<ArrayString<TRANSPARENT_ADDRESS_B58_LEN>, AppSW>;
+    -> Result<ArrayString<TRANSPARENT_ADDRESS_B58_LEN>, AppSW>;
 }
 
 impl ToBase58Address for ArrayString<TRANSPARENT_ADDRESS_B58_LEN> {

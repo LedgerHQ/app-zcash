@@ -15,15 +15,15 @@
  *  limitations under the License.
  *****************************************************************************/
 use crate::{
+    AppSW,
     app_ui::load_glyph,
     consts::{ZCASH_DECIMALS_DIV, ZCASH_TICKER},
-    AppSW,
 };
 
 use alloc::{format, string::String, vec::Vec};
 use ledger_device_sdk::nbgl::{Field, NbglReview};
 
-use crate::handlers::sign_tx::TxOutput;
+use crate::tx::TxOutput;
 
 fn format_zec_amount(amount: u64) -> String {
     // ZEC has 8 decimal places

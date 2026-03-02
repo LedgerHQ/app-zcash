@@ -1,9 +1,9 @@
-use ledger_device_sdk::nvm::*;
 use ledger_device_sdk::NVMData;
+use ledger_device_sdk::nvm::*;
 
 // This is necessary to store the object in NVM and not in RAM
 const SETTINGS_SIZE: usize = 10;
-#[link_section = ".nvm_data"]
+#[unsafe(link_section = ".nvm_data")]
 static mut DATA: NVMData<AtomicStorage<[u8; SETTINGS_SIZE]>> =
     NVMData::new(AtomicStorage::new(&[0u8; SETTINGS_SIZE]));
 
@@ -23,7 +23,7 @@ impl TrustedKeySettings {
     }
 }
 
-#[link_section = ".nvm_data"]
+#[unsafe(link_section = ".nvm_data")]
 static mut TRUSTED_INPUT_KEY: NVMData<AtomicStorage<TrustedKeySettings>> =
     NVMData::new(AtomicStorage::new(&TrustedKeySettings::default()));
 
@@ -76,11 +76,7 @@ impl Settings {
         let storage = unsafe { (*data).get_ref() };
         let s = *storage.get_ref();
 
-        if s.is_initialized {
-            Some(s.key)
-        } else {
-            None
-        }
+        if s.is_initialized { Some(s.key) } else { None }
     }
 
     pub fn set_trusted_input_key(&mut self, trusted_input_key: [u8; 32]) {

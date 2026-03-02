@@ -9,7 +9,7 @@ from ragger.backend.interface import BackendInterface, RAPDU
 from ragger.bip import pack_derivation_path
 
 from application_client.zcash_transaction import (
-    split_tx_to_chunks_v5,
+    split_tx_to_chunks,
     split_tx_v5_for_hash_input,
 )
 from application_client.zcash_utils import write_varint
@@ -156,9 +156,11 @@ class ZcashCommandSender:
             yield response
 
     def get_trusted_input(
-        self, transaction: bytes, trusted_input_idx: int
+        self, transaction: bytes,
+        trusted_input_idx: int,
+        is_v4_nu6: bool = False
     )  -> RAPDU:
-        chunks = split_tx_to_chunks_v5(transaction)
+        chunks = split_tx_to_chunks(transaction, is_v4_nu6)
         # convert trusted-input index to 4 bytes big endian
         trusted_idx = pack(">I", trusted_input_idx)
         # prepend the trusted input index to the first chunk

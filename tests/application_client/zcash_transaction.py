@@ -60,22 +60,26 @@ class Transaction:
 # NOTE: lockTime and expiryHeight are, for some reason,
 # serialized at the end of the transaction data
 # (as if it was a v4 transaction format).
-def split_tx_to_chunks_v5(buf: bytes) -> list[bytes]:
-    # pylint: disable=R0914 disable=R0915
+def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
+    # pylint: disable=R0914 disable=R0915 disable=R0912
 
     i = 0
+    locktime = bytes()
+    expiry = bytes()
     chunks = []
 
-    header_size = 4 * 5
-    header_quirk_size = 4 * 3
+    header_v5_size = 4 * 5
+    header_v4_size = 4 * 3
 
-    locktime = buf[header_quirk_size:header_quirk_size+4]
-    expiry   = buf[header_quirk_size+4:header_quirk_size+4*2]
-
-    i += header_size
+    if is_v4_nu6:
+        i += header_v4_size
+    else:
+        locktime = buf[header_v4_size:header_v4_size+4]
+        expiry   = buf[header_v4_size+4:header_v4_size+4*2]
+        i += header_v5_size
 
     vin_n, i = read_compactsize(buf, i)
-    header_bytes = bytes(buf[0:header_quirk_size]) + bytes(buf[i - 1:i])
+    header_bytes = bytes(buf[0:header_v4_size]) + bytes(buf[i - 1:i])
     chunks.append(header_bytes)
 
     for _ in range(vin_n):
@@ -175,10 +179,15 @@ def split_tx_to_chunks_v5(buf: bytes) -> list[bytes]:
         i += 1 + 8 + 32
         chunks.append(buf[digest_start:i])
 
-    assert i == len(buf), "Transaction splitting did not consume all bytes!"
-
     # Extra data
-    chunks.append(locktime + pack("b", 0x04) + expiry)
+    if is_v4_nu6:
+        chunks.append(buf[i:])
+        i += len(buf[i:])
+    else:
+        chunks.append(locktime + pack("b", 0x04) + expiry)
+
+    print(f"Not consumed bytes: {buf[i:].hex()}")
+    assert i == len(buf), "Transaction splitting did not consume all bytes!"
 
     return chunks
 

@@ -1,12 +1,13 @@
 [package]
-name = "app-zcash-rust"
-version = "0.0.1"
+name = "zcash"
+version = "3.0.0"
 authors = ["Ledger"]
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 ledger_device_sdk = "1.*"
 ledger_secure_sdk_sys = "1.*"
+
 include_gif = "1.*"
 core2 = { version = "0.3.0", default-features = false }
 hex = { version = "0.4.3", default-features = false, features = [
@@ -21,6 +22,7 @@ zcash_protocol = { git = "https://github.com/Fingolfin69/librustzcash.git", bran
 zcash_encoding = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 zcash_transparent = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 orchard = { path = "./vendor/orchard", default-features = false }
+num_enum = { version = "0.7.5", default-features = false }
 
 [patch.crates-io]
 # Used in orchard
@@ -51,9 +53,9 @@ legacy_path = []
 
 [package.metadata.ledger]
 curve = ["secp256k1"]
-flags = "0"
 path = ["44'/133'"]
 name = "Zcash"
+flags = "0x800"
 
 [package.metadata.ledger.nanox]
 icon = "icons/nanox_app_zcash.gif"

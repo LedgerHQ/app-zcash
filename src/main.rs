@@ -33,14 +33,13 @@ mod log;
 mod parser;
 mod settings;
 mod swap;
+mod tx;
 mod utils;
 
 use core::mem;
 
 use app_ui::menu::ui_menu_main;
-use handlers::{
-    get_public_key::handler_get_public_key, get_version::handler_get_version, sign_tx::TxContext,
-};
+use handlers::{get_public_key::handler_get_public_key, get_version::handler_get_version};
 use ledger_device_sdk::nbgl::StatusType;
 use ledger_device_sdk::{io::StatusWords, libcall::swap::CreateTxParams};
 use ledger_device_sdk::{
@@ -48,6 +47,7 @@ use ledger_device_sdk::{
     nbgl::init_comm,
     random::rand_bytes,
 };
+use tx::TxContext;
 
 use crate::consts::{
     P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
@@ -55,6 +55,7 @@ use crate::consts::{
     P1_HASH_INPUT_START_NEXT, P1_NEXT, P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE,
     P2_HASH_INPUT_START_SAPLING,
 };
+use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
     consts::{
         INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_WALLET_PUBLIC_KEY,
@@ -198,16 +199,13 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
         return;
     }
 
-    #[cfg_attr(
-        any(target_os = "nanox", target_os = "nanosplus"),
-        allow(unused_variables)
-    )]
     let (show_status, status_type) = match (ins, status) {
         (Instruction::GetPubkey { display: true }, AppSW::Deny | AppSW::Ok) => {
             (true, StatusType::Address)
         }
-        (Instruction::HashFinalizeFull { .. }, AppSW::Deny | AppSW::Ok)
-            if tx_ctx.is_review_finished() =>
+        (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
+        | (Instruction::HashSign, AppSW::Ok)
+            if tx_ctx.is_finished() =>
         {
             (true, StatusType::Transaction)
         }
@@ -215,7 +213,6 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
     };
 
     if show_status {
-        #[cfg(not(any(target_os = "nanox", target_os = "nanosplus")))]
         {
             use ledger_device_sdk::nbgl::NbglReviewStatus;
 
@@ -241,7 +238,7 @@ fn init_trusted_input_key_storage() {
 }
 
 // --8<-- [start:sample_main]
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn sample_main(arg0: u32) {
     if arg0 != 0 {
         // We have been started by the Exchange application through the os_lib_call API
@@ -306,22 +303,24 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
         };
         show_status_and_home_if_needed(&ins, &mut tx_ctx, &status);
 
-        // Cache the flag before potential ctx reset
-        let is_signing_finished = tx_ctx.is_signing_finished();
+        let is_error = status != AppSW::Ok;
+        let is_finished = tx_ctx.is_finished();
 
         // Reset transaction context in case of error during transaction signing
         if let (
-            Instruction::HashInputStart { .. }
+            Instruction::GetTrustedInput { .. }
+            | Instruction::HashInputStart { .. }
             | Instruction::HashFinalizeFull { .. }
             | Instruction::HashSign,
             true,
-        ) = (ins, status != AppSW::Ok)
+        ) = (ins, is_error)
         {
             tx_ctx.reset(Default::default());
         }
 
-        // In swap mode, exit after transaction is finished (signed or rejected)
-        if tx_ctx.swap_params.is_some() && is_signing_finished {
+        // In swap mode, exit after transaction is finished (signed or rejected) or on any error status,
+        // to let the Exchange app handle the post-transaction flow (e.g. broadcasting or showing error to user)
+        if tx_ctx.swap_params.is_some() && (is_finished || is_error) {
             return status == AppSW::Ok;
         }
     }
@@ -348,6 +347,11 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
 
 /// In case of runtime problems, return an internal error and exit the app
 pub fn panic_handler(info: &PanicInfo) -> ! {
+    if let Some(swap_panic_handler) = get_swap_panic_handler() {
+        // This handler is no-return
+        swap_panic_handler(info);
+    }
+
     error!("Panicking: {:?}\n", info);
     ledger_device_sdk::exiting_panic(info)
 }

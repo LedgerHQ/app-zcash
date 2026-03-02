@@ -1,7 +1,7 @@
 use core::ptr;
 use core2::io::Write;
 
-use ledger_device_sdk::hash::{blake2::Blake2b_256, HashInit as _};
+use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256};
 use ledger_secure_sdk_sys::{cx_blake2b_init2_no_throw, cx_blake2b_t, cx_hash_t};
 
 use crate::log::error;
@@ -63,12 +63,42 @@ impl Write for Blake2b256IoWriter<'_> {
 //                         size_t        perso_len)
 //  ```
 unsafe fn init_blake2b256_with_perso(ctx: *mut cx_hash_t, perso: *const u8, perso_len: usize) {
-    let _err = cx_blake2b_init2_no_throw(
-        ctx as *mut cx_blake2b_t,
-        256,
-        ptr::null_mut(),
-        0,
-        perso as _,
-        perso_len,
-    );
+    unsafe {
+        let _err = cx_blake2b_init2_no_throw(
+            ctx as *mut cx_blake2b_t,
+            256,
+            ptr::null_mut(),
+            0,
+            perso as _,
+            perso_len,
+        );
+    }
+}
+
+use ledger_device_sdk::hash::sha2::Sha2_256;
+
+pub struct Sha256IoWriter<'w>(&'w mut Sha2_256);
+
+pub trait AsWriterB<'w> {
+    fn as_writer(&'w mut self) -> Sha256IoWriter<'w>;
+}
+
+impl<'w> AsWriterB<'w> for Sha2_256 {
+    fn as_writer(&'w mut self) -> Sha256IoWriter<'w> {
+        Sha256IoWriter(self)
+    }
+}
+
+impl Write for Sha256IoWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> core2::io::Result<usize> {
+        self.0.update(buf).map_err(|err| {
+            error!("Sha256IoWriter write error {:?}", err);
+            core2::io::Error::new(core2::io::ErrorKind::Other, "Sha256 update error")
+        })?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> core2::io::Result<()> {
+        unimplemented!("flush is not supported for Sha256IoWriter")
+    }
 }

@@ -1,6 +1,10 @@
 # pylint: disable=C0301
 
-from application_client.zcash_command_sender import ZcashCommandSender
+import pytest
+
+from ragger.error import ExceptionRAPDU
+
+from application_client.zcash_command_sender import Errors, ZcashCommandSender
 from application_client.zcash_response_unpacker import unpack_trusted_input_response
 
 TRUSTED_INPUT_RESPONSE_HEX_LEN = 112
@@ -184,6 +188,38 @@ def test_trusted_input_mixed_v5(backend):
     assert txid.hex() == "cf6f7dba13fc42b798bd325ea16206ecb8d9ff716e2d3ea057e235a71d584e49"
     assert idx == trusted_input_idx
     assert amount == 1900000
+
+def test_trusted_input_v4_nu6(backend):
+    #   "0400008085202f89016939d74e3d2b915e10d739e4b9e8aab51a2d9e2c46acde3b7ff2f0d344ec8412000000006b48304502210097fe7d23fa987152ba20d1866292f9d5c3a73f0d13b3b8f3aa8e2af58d01094c022043fabe3f7b6dcce1b8dea4010f9b97afbe3b625760f2c97bceaa191344b61fc6012103fa6cc45c6e74329a47794ed716525d4b13c4f939adc85e3349ef613eb351bf72feffffff0110573500000000001976a91473adfb2d0c78d99ba2090f27d9adcfcbc712168288ac00000000000000000000000000000000000000"
+    TX_BYTES = bytes.fromhex(
+        "0400008085202f89f04dec4d" +
+        "02" +
+        "ffc3d6a9f3ce6b33c05b7499746418b7bbcb17c9a866524a564987bc49b3e294010000006a" +
+        "47304402205adbc4bd6f79d13382f7164a45896c163061649eb39ad21eb7e59e7977f400c202203ade10c6b9a9807791fa6d" +
+        "0bf2c4c3d7bcb4215175e8f2145662a4e8e4c09bdd012103fa6cc45c6e74329a47794ed716525d4b13c4f939adc85e3349ef" +
+        "613eb351bf72feffffff" +
+        "8d191647f23b95ac8d4fd5cf33d946c24a6107046deeaae83704b832dac59217000000006b" +
+        "483045022100f3ca4de2dc6a5c3b00b2cfe31346c050485c65528f7baa24b77fb2507da00dfc0220593452243ded66620cbe" +
+        "c5a698e8b2209e5d54c3106fc5ecbd7621bd1acb6f34012103fa6cc45c6e74329a47794ed716525d4b13c4f939adc85e3349" +
+        "ef613eb351bf72feffffff" +
+        "02" +
+        "70af8b00000000001976a9140a773e79f573c395ebee90498d944dedd733e88988ac" +
+        "f9261a00000000001976a914657114e0abfc055161fcf9c95c5e238c59bc30cb88ac" +
+        "000000" + # sapling, orchard counters
+        "00000000" + "0f" + "00000000" + # locktime + len(expiry + extra data) + expiry
+        "0000000000000000000000" # extra data
+    )
+
+    trusted_input_idx = 0
+
+    client = ZcashCommandSender(backend)
+
+    resp = client.get_trusted_input(TX_BYTES, trusted_input_idx, is_v4_nu6=True).data
+    txid, idx, amount, _, _ = unpack_trusted_input_response(resp)
+
+    assert txid.hex() == "0dcd7781100e0c31c57ee63193c943460c4c7bfbbbe528c03f108903c49c6603"
+    assert idx == trusted_input_idx
+    assert amount == 9154416
 
 def test_trusted_input_transparent_v5_old_1(backend):
     EXPECTED_TRUSTED_INPUT = "a9a27d42321c7ace2884a65a343abb9755f3eba881e53834bdb4a3fed4432a1301000000"
@@ -533,3 +569,60 @@ def test_trusted_input_mixed_v5_old(backend): #inputs from transparent+sapling+o
     sig = sig.hex()
     assert len(sig) == TXID_LEN
     assert sig[8:8+32*2+8] == EXPECTED_TRUSTED_INPUT
+
+def test_trusted_input_v4_nu6_old(backend):
+    transport = ZcashCommandSender(backend)
+    sw, _ = transport.exchange_raw("e042000011000000010400008085202f89f04dec4d02")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800025ffc3d6a9f3ce6b33c05b7499746418b7bbcb17c9a866524a564987bc49b3e294010000006a")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280003247304402205adbc4bd6f79d13382f7164a45896c163061649eb39ad21eb7e59e7977f400c202203ade10c6b9a9807791fa6d")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e0428000320bf2c4c3d7bcb4215175e8f2145662a4e8e4c09bdd012103fa6cc45c6e74329a47794ed716525d4b13c4f939adc85e3349ef")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280000a613eb351bf72feffffff")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e0428000258d191647f23b95ac8d4fd5cf33d946c24a6107046deeaae83704b832dac59217000000006b")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800032483045022100f3ca4de2dc6a5c3b00b2cfe31346c050485c65528f7baa24b77fb2507da00dfc0220593452243ded66620cbe")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800032c5a698e8b2209e5d54c3106fc5ecbd7621bd1acb6f34012103fa6cc45c6e74329a47794ed716525d4b13c4f939adc85e3349")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280000bef613eb351bf72feffffff")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280000102")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280002270af8b00000000001976a9140a773e79f573c395ebee90498d944dedd733e88988ac")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800022f9261a00000000001976a914657114e0abfc055161fcf9c95c5e238c59bc30cb88ac")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800003000000")
+    assert sw == 0x9000
+    sw, txid = transport.exchange_raw("e042800014000000000f000000000000000000000000000000000000")
+    assert sw == 0x9000
+
+    txid = txid[4:4+32 + 4 + 8]
+    txid = txid.hex()
+
+    # https://api.blockchair.com/zcash/raw/transaction/03669cc40389103fc028e5bbfb7b4c0c4643c99331e67ec5310c0e108177cd0d
+    assert txid == "0dcd7781100e0c31c57ee63193c943460c4c7bfbbbe528c03f108903c49c660301000000f9261a0000000000"
+
+def test_trusted_input_v4_nu6_sapling_not_supported(backend):
+    transport = ZcashCommandSender(backend)
+
+    sw, _ = transport.exchange_raw("e042000011000000000400008085202f89f04dec4d00")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e04280000101")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800022a0860100000000001976a914b8ee676250052133c7540e65e7e3aa23d874d99688ac")
+    assert sw == 0x9000
+    sw, _ = transport.exchange_raw("e042800003000000")
+    assert sw == 0x9000
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        sw, _ = transport.exchange_raw(
+            "e04280003200000000fd37095f85310038c10100000000000116778d3c7b2905946f72e7c0d95adc03e0b8433019de032e9869cca6d83d"
+        )
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert len(e.value.data) == 0

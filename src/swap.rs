@@ -47,14 +47,15 @@ use core::fmt::Write;
 use core::str;
 use ledger_device_sdk::libcall::LibCallCommand;
 use ledger_device_sdk::libcall::{
-    self,
+    self, SwapAppErrorCodeTrait,
     string::uint256_to_float,
     swap::{
         self, CheckAddressParams, CreateTxParams, PrintableAmountParams, SwapError,
         SwapErrorCommonCode, SwapResult,
     },
-    SwapAppErrorCodeTrait,
 };
+
+pub(crate) mod panic_handler;
 
 #[cfg(feature = "legacy_path")]
 mod legacy;
@@ -65,7 +66,8 @@ pub use legacy::get_check_address_params;
 #[cfg(not(feature = "legacy_path"))]
 pub use swap::get_check_address_params;
 
-use crate::handlers::sign_tx::TxOutput;
+use crate::swap::panic_handler::{set_swap_panic_handler, swap_panic_handler};
+use crate::tx::TxOutput;
 use crate::{
     consts::{ZCASH_DECIMALS, ZCASH_TICKER},
     log::{debug, error, info},
@@ -303,6 +305,13 @@ pub fn swap_main(arg0: u32) {
         LibCallCommand::SwapSignTransaction => {
             debug!("Received SwapSignTransaction command\n");
             let mut params = swap::sign_tx_params(arg0);
+
+            // SAFETY: at this point, the app is initialized,
+            // so we can safely set the panic handler
+            unsafe {
+                set_swap_panic_handler(swap_panic_handler);
+            }
+
             // Call normal_main with Swap parameter set to enter the special Swap flow
             let success = crate::normal_main(Some(&params));
             // Return to Exchange, forwarding the result
