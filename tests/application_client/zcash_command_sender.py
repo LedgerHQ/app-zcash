@@ -61,6 +61,7 @@ class InsType(IntEnum):
     GET_VERSION = 0xC4
     GET_APP_NAME = 0x04
     GET_WALLET_PUBLIC_KEY = 0x40
+    GET_UFVK = 0x50
     GET_TRUSTED_INPUT = 0x42
     HASH_INPUT_START = 0x44
     HASH_INPUT_FINALIZE_FULL = 0x4A
@@ -139,6 +140,15 @@ class ZcashCommandSender:
             ins=InsType.GET_WALLET_PUBLIC_KEY,
             p1=P1.P1_FIRST,
             p2=P2.P2_NONE,
+            data=pack_derivation_path(path),
+        )
+
+    def get_ufvk(self, path: str, display: bool = False) -> RAPDU:
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.GET_UFVK,
+            p1=P1.P1_GET_PUBLIC_KEY_DISPLAY if display else P1.P1_GET_PUBLIC_KEY_NO_DISPLAY,
+            p2=0x02, # OrchardFvk = 0x2,
             data=pack_derivation_path(path),
         )
 

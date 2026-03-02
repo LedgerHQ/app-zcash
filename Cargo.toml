@@ -5,12 +5,11 @@ authors = ["Ledger"]
 edition = "2024"
 
 [dependencies]
-ledger_device_sdk = { version = "1.34.0", features = ["sys"] }
+#ledger_device_sdk = { version = "1.34.0", features = ["sys"] }
+ledger_device_sdk = { path = "depz/ledger-device-rust-sdk/ledger_device_sdk", features = ["sys"] }
+#ledger_device_sdk = { git = "https://github.com/LedgerHQ/ledger-device-rust-sdk.git", branch = "y333/zip32_derivation_support", features = ["sys"] }
+ledger_zcash_crypto = { path = "ledger_zcash_crypto" }
 core2 = { version = "0.3.0", default-features = false }
-hex = { version = "0.4.3", default-features = false, features = [
-    "serde",
-    "alloc",
-] }
 arrayvec = { version = "0.7.6", default-features = false }
 bs58 = { version = "0.5.1", default-features = false }
 
@@ -18,6 +17,7 @@ zcash_primitives = { git = "https://github.com/Fingolfin69/librustzcash.git", br
 zcash_protocol = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 zcash_encoding = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 zcash_transparent = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
+
 orchard = { path = "./vendor/orchard", default-features = false }
 num_enum = { version = "0.7.5", default-features = false }
 zeroize = { version = "1.6.0", default-features = false }
@@ -33,6 +33,7 @@ sapling-crypto = { path = "./vendor/sapling-crypto" }
 # Used by multiple deps
 spin = { path = "./vendor/spin" }
 portable-atomic = { git = "https://github.com/taiki-e/portable-atomic.git", tag = "v1.12.0" }
+reddsa = { path = "./vendor/reddsa" }
 
 [build-dependencies]
 image = "0.25.7"
@@ -42,16 +43,20 @@ opt-level = 'z'
 lto = 'fat'
 
 [features]
-default = ["ledger_device_sdk/nano_nbgl", "legacy_path"]
+default = ["ledger_device_sdk/nano_nbgl", "legacy_path", "test_zip32_stub"]
 
 # Enables debug logging
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
 
 legacy_path = []
+# TODO: Remove this once speculos supports ZIP32 derivations
+test_zip32_stub = []
 
 [package.metadata.ledger]
 curve = ["secp256k1"]
-path = ["44'/133'"]
+# TODO: change when speculos supports ZIP32 derivations
+#curve = ["secp256k1", "jubjub"]
+path = ["44'/133'", "32'/133'"]
 name = "Zcash"
 flags = "0x800"
 

@@ -53,3 +53,21 @@ def test_get_public_key_confirm_refused(backend, scenario_navigator):
     # Assert that we have received a refusal
     assert e.value.status == Errors.SW_DENY
     assert len(e.value.data) == 0
+
+
+def test_get_ufvk_no_confirm(backend):
+    REF_ORCHARD_FVK_ACC_0 = bytes.fromhex(
+        "e129bb7d06ed69a5ac01a664482ec9987fd19c40940bf76d98eb8b952974852949b0128d5072f9f92c7f7e8eb49a5434d2c04b67a30a55946d8322df3e484426f6151235e5897d34196943cb8f968312f1c8fba9ed82830b59f801b6de5da835"
+    )
+
+    REF_ORCHARD_FVK_ACC_1 = bytes.fromhex(
+        "60efdc2aee5ec6fc6632655b5fef524275f11e2486fbb757253772b95e95b0259ca56bd0928f774c00663ef101075663eef4643346bc9171c0800c23c2e8c809880c97b34333ac38e48af5f0ee64c721c9a1847138a874d42b5ee72b41ab6e1e"
+    )
+
+    client = ZcashCommandSender(backend)
+    response = client.get_ufvk(path="m/32'/133'/0'").data
+    assert response == REF_ORCHARD_FVK_ACC_0
+
+    client = ZcashCommandSender(backend)
+    response = client.get_ufvk(path="m/32'/133'/1'").data
+    assert response == REF_ORCHARD_FVK_ACC_1

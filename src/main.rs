@@ -23,6 +23,7 @@ mod app_ui;
 mod handlers {
     pub mod get_public_key;
     pub mod get_trusted_input;
+    pub mod get_ufvk;
     pub mod get_version;
     pub mod sign_msg;
     pub mod sign_tx;
@@ -38,7 +39,10 @@ mod utils;
 use core::mem;
 
 use app_ui::menu::ui_menu_main;
-use handlers::{get_public_key::handler_get_public_key, get_version::handler_get_version};
+use handlers::{
+    get_public_key::handler_get_public_key, get_ufvk::handler_get_ufvk,
+    get_version::handler_get_version,
+};
 use ledger_device_sdk::log::{debug, error};
 use ledger_device_sdk::nbgl::StatusType;
 use ledger_device_sdk::{io::StatusWords, libcall::swap::CreateTxParams};
@@ -59,7 +63,7 @@ use crate::consts::{
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
     consts::{
-        INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_WALLET_PUBLIC_KEY,
+        INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_UFVK, INS_GET_WALLET_PUBLIC_KEY,
         INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN, INS_SIGN_MESSAGE,
         ZCASH_CLA,
     },
@@ -123,11 +127,33 @@ impl From<AppSW> for Reply {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum GetUfvkMode {
+    Ufvk = 0x0,
+    OrchardAddress = 0x1,
+    OrchardFvk = 0x2,
+}
+
+impl TryFrom<u8> for GetUfvkMode {
+    type Error = AppSW;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(GetUfvkMode::Ufvk),
+            0x01 => Ok(GetUfvkMode::OrchardAddress),
+            0x02 => Ok(GetUfvkMode::OrchardFvk),
+            _ => Err(AppSW::WrongP1P2),
+        }
+    }
+}
+
 /// Possible input commands received through APDUs.
 #[derive(Debug)]
 pub enum Instruction {
     GetVersion,
     GetPubkey { display: bool },
+    GetUfvk { display: bool, mode: GetUfvkMode },
     GetTrustedInput { first: bool, next: bool },
     HashInputStart { first: bool, continue_hashing: bool },
     HashFinalizeFull { is_change: bool },
@@ -158,6 +184,10 @@ impl TryFrom<ApduHeader> for Instruction {
                 0,
             ) => Ok(Instruction::GetPubkey {
                 display: value.p1 == P1_GET_PUBLIC_KEY_DISPLAY,
+            }),
+            (INS_GET_UFVK, p1, p2) if p1 <= 1 => Ok(Instruction::GetUfvk {
+                display: value.p1 == P1_GET_PUBLIC_KEY_DISPLAY,
+                mode: GetUfvkMode::try_from(value.p2)?,
             }),
             (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
                 first: p1 == P1_FIRST,
@@ -330,6 +360,7 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
     match ins {
         Instruction::GetVersion => handler_get_version(comm),
         Instruction::GetPubkey { display } => handler_get_public_key(comm, *display),
+        Instruction::GetUfvk { display, mode } => handler_get_ufvk(comm, *display, *mode),
         Instruction::GetTrustedInput { first, next } => {
             handler_get_trusted_input(comm, ctx, *first, *next)
         }

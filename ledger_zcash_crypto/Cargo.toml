@@ -1,0 +1,21 @@
+[package]
+name = "ledger_zcash_crypto"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+hex = { version = "0.4.3", default-features =   false, features = ["alloc"] }
+ledger_device_sdk = { path = "../depz/ledger-device-rust-sdk/ledger_device_sdk", default-features = false, features = ["sys"] }
+pasta_curves = { version = "0.5", default-features = false }
+
+[dev-dependencies]
+ff = { version = "0.13", default-features = false }
+
+
+[features]
+default = ["montgomery_fallback"]
+
+montgomery_fallback = []
