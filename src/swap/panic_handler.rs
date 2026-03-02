@@ -2,7 +2,7 @@ use core::panic::PanicInfo;
 
 use ledger_device_sdk::io;
 
-use crate::error;
+use crate::log::error;
 
 static mut SWAP_PANIC_HANDLER: Option<fn(&PanicInfo) -> !> = None;
 
@@ -18,8 +18,8 @@ pub(crate) unsafe fn set_swap_panic_handler(handler: fn(&PanicInfo) -> !) {
     }
 }
 
-pub(crate) fn swap_panic_handler(_info: &PanicInfo) -> ! {
-    error!("Swap panic happened! {:#?}", _info);
+pub(crate) fn swap_panic_handler(info: &PanicInfo) -> ! {
+    error!("Swap panic happened! {:#?}", info);
 
     let mut comm = io::Comm::new();
     comm.reply(io::StatusWords::Panic);
