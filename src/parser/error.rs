@@ -11,8 +11,8 @@ use zcash_protocol::value::BalanceError;
 use crate::AppSW;
 use crate::swap::SwapAppErrorCode;
 
-// NOTE: `#[allow(dead_code)]` due to false positive in current nightly toolchain
-#[allow(dead_code)]
+// NOTE: `#[allow(unused)]` is used due to false positive warnings, as it is only used for debug logs.
+#[allow(unused)]
 #[derive(Debug)]
 pub enum ParserSourceError {
     Io(IoError),
@@ -78,8 +78,10 @@ impl From<SwapError<SwapAppErrorCode>> for ParserSourceError {
 #[derive(Debug)]
 pub struct ParserError {
     pub source: ParserSourceError,
+    // NOTE: `#[allow(unused)]` is used due to false positive warnings, as it is only used for debug logs.
     #[allow(unused)]
     pub file: &'static str,
+    // NOTE: `#[allow(unused)]` is used due to false positive warnings, as it is only used for debug logs.
     #[allow(unused)]
     pub line: u32,
 }

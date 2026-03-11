@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 pub const ZCASH_TICKER: &str = "ZEC";
 
 pub const ZCASH_DECIMALS: u32 = 8;
@@ -8,34 +7,13 @@ pub const MAX_SCRIPT_SIZE: usize = 1024 * 2;
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
 
 pub const ZCASH_CLA: u8 = 0xE0;
-pub const ZCASH_ADM_CLA: u8 = 0xD0;
-pub const ZCASH_NFCPAYMENT_CLA: u8 = 0xF0;
-
-pub const INS_SETUP: u8 = 0x20;
-pub const INS_VERIFY_PIN: u8 = 0x22;
-pub const INS_GET_OPERATION_MODE: u8 = 0x24;
-pub const INS_SET_OPERATION_MODE: u8 = 0x26;
-pub const INS_SET_KEYBOARD_CFG: u8 = 0x28;
 pub const INS_GET_WALLET_PUBLIC_KEY: u8 = 0x40;
 pub const INS_GET_TRUSTED_INPUT: u8 = 0x42;
 pub const INS_HASH_INPUT_START: u8 = 0x44;
-pub const INS_HASH_INPUT_FINALIZE: u8 = 0x46;
 pub const INS_HASH_SIGN: u8 = 0x48;
 pub const INS_HASH_INPUT_FINALIZE_FULL: u8 = 0x4A;
-pub const INS_GET_INTERNAL_CHAIN_INDEX: u8 = 0x4C;
 pub const INS_SIGN_MESSAGE: u8 = 0x4E;
-pub const INS_GET_TRANSACTION_LIMIT: u8 = 0xA0;
-pub const INS_SET_TRANSACTION_LIMIT: u8 = 0xA2;
-pub const INS_IMPORT_PRIVATE_KEY: u8 = 0xB0;
-pub const INS_GET_PUBLIC_KEY: u8 = 0xB2;
-pub const INS_DERIVE_BIP32_KEY: u8 = 0xB4;
-pub const INS_SIGNVERIFY_IMMEDIATE: u8 = 0xB6;
-pub const INS_GET_RANDOM: u8 = 0xC0;
-pub const INS_GET_ATTESTATION: u8 = 0xC2;
 pub const INS_GET_FIRMWARE_VERSION: u8 = 0xC4;
-pub const INS_COMPOSE_MOFN_ADDRESS: u8 = 0xC6;
-pub const INS_GET_POS_SEED: u8 = 0xCA;
-pub const INS_DEBUG: u8 = 0xD0;
 
 pub const P1_FIRST: u8 = 0x00;
 pub const P1_NEXT: u8 = 0x80;
@@ -45,8 +23,6 @@ pub const P1_GET_PUBLIC_KEY_DISPLAY: u8 = 0x01;
 
 pub const P1_HASH_INPUT_START_FIRST: u8 = 0x00;
 pub const P1_HASH_INPUT_START_NEXT: u8 = 0x80;
-pub const P2_HASH_INPUT_START_NEW: u8 = 0x00;
-pub const P2_HASH_INPUT_START_OVERWINTER: u8 = 0x04;
 pub const P2_HASH_INPUT_START_SAPLING: u8 = 0x05;
 pub const P2_HASH_INPUT_START_CONTINUE: u8 = 0x80;
 
@@ -54,39 +30,6 @@ pub const P1_FINALIZE_FULL_MORE: u8 = 0x00;
 pub const P1_FINALIZE_FULL_LAST: u8 = 0x80;
 pub const P1_FINALIZE_FULL_CHANGEINFO: u8 = 0xFF;
 pub const P2_FINALIZE_FULL_DEFAULT: u8 = 0x00;
-
-pub const SW_PIN_REMAINING_ATTEMPTS: u16 = 0x63C0;
-pub const SW_INCORRECT_LENGTH: u16 = 0x6700;
-pub const SW_COMMAND_INCOMPATIBLE_FILE_STRUCTURE: u16 = 0x6981;
-pub const SW_SECURITY_STATUS_NOT_SATISFIED: u16 = 0x6982;
-pub const SW_CONDITIONS_OF_USE_NOT_SATISFIED: u16 = 0x6985;
-pub const SW_INCORRECT_DATA: u16 = 0x6A80;
-pub const SW_NOT_ENOUGH_MEMORY_SPACE: u16 = 0x6A84;
-pub const SW_REFERENCED_DATA_NOT_FOUND: u16 = 0x6A88;
-pub const SW_FILE_ALREADY_EXISTS: u16 = 0x6A89;
-pub const SW_SWAP_WITHOUT_TRUSTED_INPUTS: u16 = 0x6A8A;
-pub const SW_INCORRECT_P1_P2: u16 = 0x6B00;
-pub const SW_INS_NOT_SUPPORTED: u16 = 0x6D00;
-pub const SW_CLA_NOT_SUPPORTED: u16 = 0x6E00;
-pub const SW_TECHNICAL_PROBLEM: u16 = 0x6F00;
-pub const SW_OK: u16 = 0x9000;
-pub const SW_MEMORY_PROBLEM: u16 = 0x9240;
-pub const SW_NO_EF_SELECTED: u16 = 0x9400;
-pub const SW_INVALID_OFFSET: u16 = 0x9402;
-pub const SW_FILE_NOT_FOUND: u16 = 0x9404;
-pub const SW_INCONSISTENT_FILE: u16 = 0x9408;
-pub const SW_ALGORITHM_NOT_SUPPORTED: u16 = 0x9484;
-pub const SW_INVALID_KCV: u16 = 0x9485;
-pub const SW_CODE_NOT_INITIALIZED: u16 = 0x9802;
-pub const SW_ACCESS_CONDITION_NOT_FULFILLED: u16 = 0x9804;
-pub const SW_CONTRADICTION_SECRET_CODE_STATUS: u16 = 0x9808;
-pub const SW_CONTRADICTION_INVALIDATION: u16 = 0x9810;
-pub const SW_CODE_BLOCKED: u16 = 0x9840;
-pub const SW_MAX_VALUE_REACHED: u16 = 0x9850;
-pub const SW_GP_AUTH_FAILED: u16 = 0x6300;
-pub const SW_LICENSING: u16 = 0x6F42;
-pub const SW_HALTED: u16 = 0x6FAA;
-pub const SW_APP_HALTED: u16 = 0x6985;
 
 pub const TRUSTED_INPUT_SIZE: usize = 2 + 2 + 32 + 4 + 8; // magic + rand + txid + idx + amount
 pub const TRUSTED_INPUT_TOTAL_SIZE: usize = TRUSTED_INPUT_SIZE + 8;
