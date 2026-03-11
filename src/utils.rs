@@ -1,7 +1,5 @@
-use crate::{
-    log::{debug, error},
-    utils::bip32_path::Bip32Path,
-};
+use crate::utils::bip32_path::Bip32Path;
+use ledger_device_sdk::log::{debug, error};
 
 pub mod base58_address;
 pub mod bip32_path;

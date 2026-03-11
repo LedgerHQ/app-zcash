@@ -2,9 +2,8 @@ use core::ptr;
 use core2::io::Write;
 
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256};
+use ledger_device_sdk::log::error;
 use ledger_secure_sdk_sys::{cx_blake2b_init2_no_throw, cx_blake2b_t, cx_hash_t};
-
-use crate::log::error;
 
 pub trait Blake2b256Personalization {
     fn init_with_perso(&mut self, personalization: &[u8]);

@@ -15,7 +15,6 @@
  *  limitations under the License.
  *****************************************************************************/
 
-use crate::log::debug;
 use crate::utils::HexSlice;
 use crate::{
     app_ui::address::ui_display_pk,
@@ -27,6 +26,7 @@ use crate::{
 
 use crate::AppSW;
 use ledger_device_sdk::io::Comm;
+use ledger_device_sdk::log::debug;
 
 /// Handler for GET_PUBLIC_KEY APDU command.
 ///

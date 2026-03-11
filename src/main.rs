@@ -29,7 +29,6 @@ mod handlers {
 }
 
 mod consts;
-mod log;
 mod parser;
 mod settings;
 mod swap;
@@ -40,6 +39,7 @@ use core::mem;
 
 use app_ui::menu::ui_menu_main;
 use handlers::{get_public_key::handler_get_public_key, get_version::handler_get_version};
+use ledger_device_sdk::log::{debug, error};
 use ledger_device_sdk::nbgl::StatusType;
 use ledger_device_sdk::{io::StatusWords, libcall::swap::CreateTxParams};
 use ledger_device_sdk::{
@@ -67,7 +67,6 @@ use crate::{
         sign_msg::handler_sign_msg,
         sign_tx::{handler_hash_input_finalize_full, handler_hash_input_start, handler_hash_sign},
     },
-    log::{debug, error},
     settings::Settings,
 };
 

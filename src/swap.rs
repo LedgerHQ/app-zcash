@@ -54,6 +54,7 @@ use ledger_device_sdk::libcall::{
         SwapErrorCommonCode, SwapResult,
     },
 };
+use ledger_device_sdk::log::{debug, error, info};
 
 pub(crate) mod panic_handler;
 
@@ -70,7 +71,6 @@ use crate::swap::panic_handler::{set_swap_panic_handler, swap_panic_handler};
 use crate::tx::TxOutput;
 use crate::{
     consts::{ZCASH_DECIMALS, ZCASH_TICKER},
-    log::{debug, error, info},
     utils::{
         base58_address::{Base58Address, ToBase58Address},
         bip32_path::Bip32Path,

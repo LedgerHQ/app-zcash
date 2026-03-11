@@ -4,8 +4,7 @@ use core2::io::Error as IoError;
 use core2::io::ErrorKind as IoErrorKind;
 use core2::io::Read;
 use core2::io::Result;
-
-use crate::log::debug;
+use ledger_device_sdk::log::debug;
 
 pub struct ByteReader<'b> {
     buf: &'b [u8],

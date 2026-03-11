@@ -1,8 +1,7 @@
 use core::panic::PanicInfo;
 
 use ledger_device_sdk::io;
-
-use crate::log::error;
+use ledger_device_sdk::log::error;
 
 static mut SWAP_PANIC_HANDLER: Option<fn(&PanicInfo) -> !> = None;
 

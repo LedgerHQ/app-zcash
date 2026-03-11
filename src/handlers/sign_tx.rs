@@ -18,9 +18,9 @@ use ledger_device_sdk::ecc::{Secp256k1, SeedDerive as _};
 use ledger_device_sdk::hash::HashInit;
 use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::io::Comm;
+use ledger_device_sdk::log::{debug, error, info};
 
 use crate::AppSW;
-use crate::log::{debug, error, info};
 use crate::parser::{OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError};
 use crate::tx::TxContext;
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
