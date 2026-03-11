@@ -75,11 +75,10 @@ pub fn handler_get_trusted_input(
 
         // Compute HMAC-SHA256 signature over the trusted input
         let mut signature = [0u8; 8];
-        let mut hmac_sha256_signer = HmacSha256::new(
-            &Settings
-                .trusted_input_key()
-                .ok_or(AppSW::TechnicalProblem)?,
-        );
+        let trusted_input_key = Settings
+            .trusted_input_key()
+            .ok_or(AppSW::TechnicalProblem)?;
+        let mut hmac_sha256_signer = HmacSha256::new(trusted_input_key.as_ref());
         debug!("HMAC input: {}", HexSlice(comm.get(0, TRUSTED_INPUT_SIZE)));
 
         hmac_sha256_signer

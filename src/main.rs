@@ -48,6 +48,7 @@ use ledger_device_sdk::{
     random::rand_bytes,
 };
 use tx::TxContext;
+use zeroize::Zeroizing;
 
 use crate::consts::{
     P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
@@ -228,10 +229,10 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
 
 fn init_trusted_input_key_storage() {
     if Settings.trusted_input_key().is_none() {
-        let mut rng = [0u8; 32];
-        rand_bytes(&mut rng);
+        let mut rng = Zeroizing::new([0u8; 32]);
+        rand_bytes(&mut rng[..]);
 
-        Settings.set_trusted_input_key(rng);
+        Settings.set_trusted_input_key(&rng);
         debug!("Initialized trusted input key storage");
     }
 }

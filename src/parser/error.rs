@@ -11,7 +11,8 @@ use zcash_protocol::value::BalanceError;
 use crate::AppSW;
 use crate::swap::SwapAppErrorCode;
 
-// NOTE: `#[allow(unused)]` is used due to false positive warnings, as it is only used for debug logs.
+// NOTE: `#[allow(unused)]` is used due to false positive unused warnings, as it is only used for debug logs.
+// Derived `Debug` impls don't count towards "using" code in Rust compiler.
 #[allow(unused)]
 #[derive(Debug)]
 pub enum ParserSourceError {
@@ -78,10 +79,10 @@ impl From<SwapError<SwapAppErrorCode>> for ParserSourceError {
 #[derive(Debug)]
 pub struct ParserError {
     pub source: ParserSourceError,
-    // NOTE: `#[allow(unused)]` is used due to false positive warnings, as it is only used for debug logs.
+    // NOTE: `#[allow(unused)]` is used due to false positive unused warnings, as it is only used for debug logs.
     #[allow(unused)]
     pub file: &'static str,
-    // NOTE: `#[allow(unused)]` is used due to false positive warnings, as it is only used for debug logs.
+    // NOTE: `#[allow(unused)]` is used due to false positive unused warnings, as it is only used for debug logs.
     #[allow(unused)]
     pub line: u32,
 }
