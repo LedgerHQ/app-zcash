@@ -44,12 +44,14 @@ impl Parser {
             ok!(reader.read_exact(&mut anchor));
 
             // Init hashers
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_SPENDS_COMPACT_HASH_PERSONALIZATION);
-            ctx.hashers
+                .init_with_perso(ZCASH_SAPLING_SPENDS_COMPACT_HASH_PERSONALIZATION));
+            ok!(ctx
+                .hashers
                 .tx_non_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION));
 
             self.state = ParserState::ProcessSaplingSpends { anchor };
         } else if self.sapling_output_count > 0 {
@@ -58,7 +60,7 @@ impl Parser {
             let sapling_spend = {
                 let mut sapling_spend = [0u8; 32];
                 let mut tmp_spend_hasher = Blake2b_256::new();
-                tmp_spend_hasher.init_with_perso(ZCASH_SAPLING_SPENDS_HASH_PERSONALIZATION);
+                ok!(tmp_spend_hasher.init_with_perso(ZCASH_SAPLING_SPENDS_HASH_PERSONALIZATION));
                 ok!(tmp_spend_hasher.finalize(&mut sapling_spend));
 
                 sapling_spend
@@ -68,9 +70,10 @@ impl Parser {
             ok!(ctx.hashers.sapling_hasher.update(&sapling_spend));
 
             // Init outputs hasher
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION));
 
             self.state = ParserState::ProcessSaplingOutputsCompact;
         } else {
@@ -155,7 +158,7 @@ impl Parser {
 
         // Initialize the sapling spend digest context
         let mut tmp_spend_hasher = Blake2b_256::new();
-        tmp_spend_hasher.init_with_perso(ZCASH_SAPLING_SPENDS_HASH_PERSONALIZATION);
+        ok!(tmp_spend_hasher.init_with_perso(ZCASH_SAPLING_SPENDS_HASH_PERSONALIZATION));
         ok!(tmp_spend_hasher.update(&sapling_spend_compact_digest,));
         ok!(tmp_spend_hasher.update(&sapling_spend_non_compact_digest,));
 
@@ -169,9 +172,10 @@ impl Parser {
 
         if self.sapling_output_count > 0 {
             // Init outputs hasher
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION));
 
             self.state = ParserState::ProcessSaplingOutputsCompact;
         } else {
@@ -203,9 +207,10 @@ impl Parser {
         if self.sapling_output_count == self.sapling_output_parsed_count {
             info!("All sapling compact outputs parsed");
             // Init memo hasher
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_memo_hasher
-                .init_with_perso(ZCASH_SAPLING_OUTPUTS_MEMOS_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_SAPLING_OUTPUTS_MEMOS_HASH_PERSONALIZATION));
 
             // memo_size = 512 each APDU will contain quarter of the memo
             self.state = ParserState::ProcessSaplingOutputsMemo {
@@ -236,9 +241,10 @@ impl Parser {
             info!("All sapling memo data parsed");
 
             // Init outputs non compact hasher
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_non_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION));
 
             self.sapling_output_parsed_count = 0;
             self.state = ParserState::ProcessSaplingOutputsNonCompact;
@@ -304,7 +310,7 @@ impl Parser {
 
         // Initialize the sapling output digest context
         let mut sapling_output_hasher = Blake2b_256::new();
-        sapling_output_hasher.init_with_perso(ZCASH_SAPLING_OUTPUTS_HASH_PERSONALIZATION);
+        ok!(sapling_output_hasher.init_with_perso(ZCASH_SAPLING_OUTPUTS_HASH_PERSONALIZATION));
 
         ok!(sapling_output_hasher.update(&sapling_output_compact_digest));
         ok!(sapling_output_hasher.update(&sapling_output_memo_digest));
@@ -323,9 +329,10 @@ impl Parser {
             .update(&self.sapling_balance.to_le_bytes()));
 
         if self.orchard_action_count > 0 {
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_compact_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
             self.state = ParserState::ProcessOrchardCompact;
         } else {
             self.state = ParserState::ProcessExtra;

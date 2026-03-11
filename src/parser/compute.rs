@@ -42,7 +42,7 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
                 let mut hash = [0u8; 32];
 
                 let mut hasher = Blake2b_256::default();
-                hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION);
+                ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
 
                 ok!(tx_version.write(&mut hasher.as_writer()));
 
@@ -60,7 +60,7 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
                 let mut hash = [0u8; 32];
 
                 let mut hasher = Blake2b_256::default();
-                hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION);
+                ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
 
                 ok!(hasher.update(&prevouts_hash));
                 ok!(hasher.update(&sequence_hash));
@@ -82,7 +82,7 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
             personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
 
             let mut hasher = Blake2b_256::default();
-            hasher.init_with_perso(&personalization);
+            ok!(hasher.init_with_perso(&personalization));
 
             ok!(hasher.update(&header_hash));
             ok!(hasher.update(&transparent_hash));
@@ -151,7 +151,7 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
         let mut hash = [0u8; 32];
 
         let mut hasher = Blake2b_256::default();
-        hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION);
+        ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
 
         ok!(hasher.update(&[ctx.tx_info.sighash_type]));
         ok!(hasher.update(&ctx.tx_info.prevouts_hash));
@@ -169,9 +169,10 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
     // Compute sapling_digest. Assume no Sapling spends or outputs are present
     let sapling_digest = {
         let mut sapling_digest = [0u8; 32];
-        ctx.hashers
+        ok!(ctx
+            .hashers
             .sapling_hasher
-            .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION);
+            .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION));
         ok!(ctx.hashers.sapling_hasher.finalize(&mut sapling_digest));
         sapling_digest
     };
@@ -179,9 +180,10 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
     // Compute orchard_digest. Assume there are no Orchard actions
     let orchard_digest = {
         let mut orchard_digest = [0u8; 32];
-        ctx.hashers
+        ok!(ctx
+            .hashers
             .orchard_hasher
-            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION);
+            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION));
         ok!(ctx.hashers.orchard_hasher.finalize(&mut orchard_digest));
         orchard_digest
     };
@@ -194,7 +196,7 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
     personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
 
     let hasher = &mut ctx.hashers.tx_full_hasher;
-    hasher.init_with_perso(&personalization);
+    ok!(hasher.init_with_perso(&personalization));
 
     ok!(hasher.update(&ctx.tx_info.header_digest));
     ok!(hasher.update(&transparent_digest));

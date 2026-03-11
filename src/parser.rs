@@ -323,27 +323,34 @@ impl Parser {
             (ParserMode::TrustedInput, TxVersion::V5, _)
             | (ParserMode::Signature, TxVersion::V5, false) => {
                 debug!("Init V5 tx hashers");
-                ctx.hashers
+                ok!(ctx
+                    .hashers
                     .prevouts_hasher
-                    .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION);
-                ctx.hashers
+                    .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION));
+                ok!(ctx
+                    .hashers
                     .sequence_hasher
-                    .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION);
-                ctx.hashers
+                    .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION));
+                ok!(ctx
+                    .hashers
                     .outputs_hasher
-                    .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION);
-                ctx.hashers
+                    .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION));
+                ok!(ctx
+                    .hashers
                     .amounts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION);
-                ctx.hashers
+                    .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION));
+                ok!(ctx
+                    .hashers
                     .scripts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION);
-                ctx.hashers
+                    .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION));
+                ok!(ctx
+                    .hashers
                     .sapling_hasher
-                    .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION);
-                ctx.hashers
+                    .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION));
+                ok!(ctx
+                    .hashers
                     .orchard_hasher
-                    .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION);
+                    .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION));
             }
             // In case of Signature mode, continue computing Tx hash from previous state
             (ParserMode::Signature, TxVersion::V5, true) => {
@@ -355,7 +362,7 @@ impl Parser {
                 info!("Compute headers hash");
 
                 let full_hasher = &mut ctx.hashers.tx_full_hasher;
-                full_hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION);
+                ok!(full_hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
 
                 ok!(version.write(&mut full_hasher.as_writer()));
                 ok!(full_hasher.update(&u32::from(consensus_branch_id).to_le_bytes()));
@@ -367,9 +374,10 @@ impl Parser {
 
                 info!("V5 header digest {}", HexSlice(&ctx.tx_info.header_digest));
 
-                ctx.hashers
+                ok!(ctx
+                    .hashers
                     .prevouts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION);
+                    .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
             }
             // Support V4 in trusted input mode (Transaction ID computation)
             (ParserMode::TrustedInput, TxVersion::V4, _) => {

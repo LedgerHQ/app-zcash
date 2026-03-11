@@ -1,16 +1,17 @@
 use core::ptr;
 use core2::io::Write;
 
-use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256};
+use ledger_secure_sdk_sys::CX_OK;
+use ledger_device_sdk::hash::{HashError, HashInit as _, blake2::Blake2b_256};
 use ledger_device_sdk::log::error;
 use ledger_secure_sdk_sys::{cx_blake2b_init2_no_throw, cx_blake2b_t, cx_hash_t};
 
 pub trait Blake2b256Personalization {
-    fn init_with_perso(&mut self, personalization: &[u8]);
+    fn init_with_perso(&mut self, personalization: &[u8]) -> Result<(), HashError>;
 }
 
 impl Blake2b256Personalization for Blake2b_256 {
-    fn init_with_perso(&mut self, perso: &[u8]) {
+    fn init_with_perso(&mut self, perso: &[u8]) -> Result<(), HashError> {
         assert_eq!(
             perso.len(),
             16,
@@ -19,9 +20,7 @@ impl Blake2b256Personalization for Blake2b_256 {
 
         let ctx = self.as_ctx_mut() as *mut _;
 
-        unsafe {
-            init_blake2b256_with_perso(ctx, perso.as_ptr(), perso.len());
-        }
+        unsafe { init_blake2b256_with_perso(ctx, perso.as_ptr(), perso.len()) }
     }
 }
 
@@ -61,16 +60,26 @@ impl Write for Blake2b256IoWriter<'_> {
 //                         uint8_t      *perso,
 //                         size_t        perso_len)
 //  ```
-unsafe fn init_blake2b256_with_perso(ctx: *mut cx_hash_t, perso: *const u8, perso_len: usize) {
-    unsafe {
-        let _err = cx_blake2b_init2_no_throw(
+unsafe fn init_blake2b256_with_perso(
+    ctx: *mut cx_hash_t,
+    perso: *const u8,
+    perso_len: usize,
+) -> Result<(), HashError> {
+    let err = unsafe {
+        cx_blake2b_init2_no_throw(
             ctx as *mut cx_blake2b_t,
             256,
             ptr::null_mut(),
             0,
             perso as _,
             perso_len,
-        );
+        )
+    };
+
+    if err != CX_OK {
+        Err(err.into())
+    } else {
+        Ok(())
     }
 }
 

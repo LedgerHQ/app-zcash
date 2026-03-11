@@ -46,9 +46,10 @@ impl Parser {
         if self.orchard_action_parsed_count == self.orchard_action_count {
             info!("All orchard compact actions parsed");
 
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_memo_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION));
 
             // memo_size = 512 each APDU will contain quarter of the memo
             self.state = ParserState::ProcessOrchardMemo {
@@ -74,9 +75,10 @@ impl Parser {
         if new_remaining_size == 0 {
             info!("All orchard memos parsed");
 
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_non_compact_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION));
 
             self.orchard_action_parsed_count = 0;
             self.state = ParserState::ProcessOrchardNonCompact;

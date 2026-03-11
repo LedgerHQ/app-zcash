@@ -391,9 +391,10 @@ impl Parser {
         self.state = if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {
             ParserState::ProcessSapling
         } else if self.orchard_action_count > 0 {
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_compact_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
             ParserState::ProcessOrchardCompact
         } else {
             ParserState::ProcessExtra
