@@ -1,6 +1,8 @@
 use crate::AppSW;
+use core::mem::size_of;
 
 pub const MAX_ZCASH_BIP32_PATH: usize = 10;
+pub const BIP32_BYTES_PER_SEGMENT: usize = size_of::<u32>();
 
 /// BIP32 derivation path stored as a vector of u32 components.
 ///
@@ -17,13 +19,14 @@ impl Bip32Path {
         &self.path[..self.path_len as usize]
     }
     pub fn from_dpath(dpath_len: usize, dpath: &[u8]) -> Result<Self, AppSW> {
-        if dpath.len() < dpath_len * 4 {
+        if dpath.len() < dpath_len * BIP32_BYTES_PER_SEGMENT || dpath_len > MAX_ZCASH_BIP32_PATH {
             return Err(AppSW::WrongApduLength);
         }
 
         let mut path = [0u32; MAX_ZCASH_BIP32_PATH];
 
-        let (chunks, _) = dpath[..dpath_len * 4].as_chunks::<4>();
+        let (chunks, _) =
+            dpath[..dpath_len * BIP32_BYTES_PER_SEGMENT].as_chunks::<{ BIP32_BYTES_PER_SEGMENT }>();
 
         for (i, chunk) in chunks.iter().enumerate() {
             path[i] = u32::from_be_bytes(*chunk);

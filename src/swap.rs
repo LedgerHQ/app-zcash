@@ -69,6 +69,7 @@ pub use swap::get_check_address_params;
 
 use crate::swap::panic_handler::{set_swap_panic_handler, swap_panic_handler};
 use crate::tx::TxOutput;
+use crate::utils::bip32_path::BIP32_BYTES_PER_SEGMENT;
 use crate::{
     consts::{ZCASH_DECIMALS, ZCASH_TICKER},
     utils::{
@@ -360,8 +361,11 @@ fn check_address(params: &CheckAddressParams) -> Result<bool, SwapAppErrorCode> 
     // not the byte length. Each component is 4 bytes (big-endian u32).
     debug!("ENTERED_CHECK_ADDRESS\n");
 
-    let bip32_path = Bip32Path::from_dpath(params.dpath_len, &params.dpath[..params.dpath_len * 4])
-        .map_err(|_e| SwapAppErrorCode::FailedToDeriveAddress)?;
+    let bip32_path = Bip32Path::from_dpath(
+        params.dpath_len,
+        &params.dpath[..params.dpath_len * BIP32_BYTES_PER_SEGMENT],
+    )
+    .map_err(|_e| SwapAppErrorCode::FailedToDeriveAddress)?;
 
     let extended_public_key = ExtendedPublicKey::try_from(&bip32_path)
         .map_err(|_e| SwapAppErrorCode::FailedToDeriveAddress)?;
