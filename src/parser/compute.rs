@@ -6,7 +6,9 @@ use zcash_primitives::transaction::txid::{
 };
 
 use crate::{
-    parser::{ParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, ok},
+    parser::{
+        ParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, finalize_and_log_hash, ok,
+    },
     tx::SupportedTxVersion,
     utils::{
         HexSlice,
@@ -27,26 +29,14 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
 
     match ctx.tx_info.tx_version() {
         SupportedTxVersion::V5 => {
-            let prevouts_hash = {
-                let mut hash = [0u8; 32];
-                ok!(ctx.hashers.prevouts_hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Prevouts hash: {}", HexSlice(&prevouts_hash));
+            let prevouts_hash =
+                finalize_and_log_hash(&mut ctx.hashers.prevouts_hasher, "Prevouts hash")?;
 
-            let sequence_hash = {
-                let mut hash = [0u8; 32];
-                ok!(ctx.hashers.sequence_hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Sequence hash: {}", HexSlice(&sequence_hash));
+            let sequence_hash =
+                finalize_and_log_hash(&mut ctx.hashers.sequence_hasher, "Sequence hash")?;
 
-            let outputs_hash = {
-                let mut hash = [0u8; 32];
-                ok!(ctx.hashers.outputs_hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Outputs hash: {}", HexSlice(&outputs_hash));
+            let outputs_hash =
+                finalize_and_log_hash(&mut ctx.hashers.outputs_hasher, "Outputs hash")?;
 
             let header_hash = {
                 let mut hash = [0u8; 32];
@@ -81,19 +71,11 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
             };
             debug!("Transparent hash: {}", HexSlice(&transparent_hash));
 
-            let sapling_hash = {
-                let mut hash = [0u8; 32];
-                ok!(ctx.hashers.sapling_hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Sapling hash: {}", HexSlice(&sapling_hash));
+            let sapling_hash =
+                finalize_and_log_hash(&mut ctx.hashers.sapling_hasher, "Sapling hash")?;
 
-            let orchard_hash = {
-                let mut hash = [0u8; 32];
-                ok!(ctx.hashers.orchard_hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Orchard hash: {}", HexSlice(&orchard_hash));
+            let orchard_hash =
+                finalize_and_log_hash(&mut ctx.hashers.orchard_hasher, "Orchard hash")?;
 
             let mut personalization = [0u8; 16];
             personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);

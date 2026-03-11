@@ -54,6 +54,44 @@ mod reader;
 mod sapling;
 mod transparent;
 
+const HASH_SIZE: usize = 32;
+
+pub(super) fn hash_reader_chunk(
+    reader: &mut ByteReader<'_>,
+    hasher: &mut Blake2b_256,
+    remaining_size: usize,
+) -> Result<usize, ParserError> {
+    let to_read = core::cmp::min(remaining_size, reader.remaining_len());
+    ok!(hasher.update(&reader.remaining_slice()[..to_read]));
+    ok!(reader.advance(to_read));
+    Ok(remaining_size - to_read)
+}
+
+pub(super) fn hash_reader_exact(
+    reader: &mut ByteReader<'_>,
+    hasher: &mut Blake2b_256,
+    size: usize,
+    err_msg: &'static str,
+) -> Result<(), ParserError> {
+    if reader.remaining_len() < size {
+        return Err(ParserError::from_str(err_msg));
+    }
+
+    ok!(hasher.update(&reader.remaining_slice()[..size]));
+    ok!(reader.advance(size));
+    Ok(())
+}
+
+pub(super) fn finalize_and_log_hash(
+    hasher: &mut Blake2b_256,
+    label: &str,
+) -> Result<[u8; HASH_SIZE], ParserError> {
+    let mut hash = [0u8; HASH_SIZE];
+    ok!(hasher.finalize(&mut hash));
+    debug!("{}: {}", label, HexSlice(&hash));
+    Ok(hash)
+}
+
 #[derive(Debug, TryFromPrimitive)]
 #[repr(u8)]
 enum TrustedInputMode {

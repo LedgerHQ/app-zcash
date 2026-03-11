@@ -11,6 +11,17 @@ use zcash_protocol::value::ZatBalance;
 
 use super::*;
 
+const SAPLING_CMU_SIZE: usize = HASH_SIZE;
+const SAPLING_EPHEMERAL_KEY_SIZE: usize = HASH_SIZE;
+const SAPLING_COMPACT_ENC_CIPHERTEXT_SIZE: usize = 52;
+const SAPLING_OUT_CIPHERTEXT_SIZE: usize = 16;
+const SAPLING_ZKPROOF_SIZE: usize = 80;
+const SAPLING_OUTPUTS_COMPACT_SIZE: usize =
+    SAPLING_CMU_SIZE + SAPLING_EPHEMERAL_KEY_SIZE + SAPLING_COMPACT_ENC_CIPHERTEXT_SIZE;
+const SAPLING_OUTPUTS_NONCOMPACT_SIZE: usize =
+    SAPLING_CMU_SIZE + SAPLING_OUT_CIPHERTEXT_SIZE + SAPLING_ZKPROOF_SIZE;
+const SAPLING_MEMO_SIZE: usize = 512;
+
 impl Parser {
     pub fn parse_sapling(
         &mut self,
@@ -180,19 +191,12 @@ impl Parser {
             self.sapling_output_count - self.sapling_output_parsed_count
         );
 
-        let compact_size = 32 + 32 + 52; // cmu + ephemeral_key + enc_ciphertext[..52]
-
-        if reader.remaining_len() < compact_size {
-            return Err(ParserError::from_str(
-                "Not enough data for sapling compact output",
-            ));
-        }
-
-        ok!(ctx
-            .hashers
-            .tx_compact_hasher
-            .update(&reader.remaining_slice()[..compact_size]));
-        ok!(reader.advance(compact_size));
+        hash_reader_exact(
+            reader,
+            &mut ctx.hashers.tx_compact_hasher,
+            SAPLING_OUTPUTS_COMPACT_SIZE,
+            "Not enough data for sapling compact output",
+        )?;
 
         self.sapling_output_parsed_count += 1;
 
@@ -205,8 +209,8 @@ impl Parser {
 
             // memo_size = 512 each APDU will contain quarter of the memo
             self.state = ParserState::ProcessSaplingOutputsMemo {
-                size: self.sapling_output_count * 512,
-                remaining_size: self.sapling_output_count * 512,
+                size: self.sapling_output_count * SAPLING_MEMO_SIZE,
+                remaining_size: self.sapling_output_count * SAPLING_MEMO_SIZE,
             };
         }
 
@@ -225,11 +229,8 @@ impl Parser {
             remaining_size
         );
 
-        let to_read = core::cmp::min(remaining_size, reader.remaining_len());
-        let memo_data = &reader.remaining_slice()[..to_read];
-        ok!(ctx.hashers.tx_memo_hasher.update(memo_data));
-        ok!(reader.advance(to_read));
-        let new_remaining_size = remaining_size - to_read;
+        let new_remaining_size =
+            hash_reader_chunk(reader, &mut ctx.hashers.tx_memo_hasher, remaining_size)?;
 
         if new_remaining_size == 0 {
             info!("All sapling memo data parsed");
@@ -261,18 +262,12 @@ impl Parser {
             self.sapling_output_count - self.sapling_output_parsed_count
         );
 
-        let non_compact_size = 32 + 16 + 80;
-
-        if reader.remaining_len() < non_compact_size {
-            return Err(ParserError::from_str(
-                "Not enough data for sapling non compact output",
-            ));
-        }
-        ok!(ctx
-            .hashers
-            .tx_non_compact_hasher
-            .update(&reader.remaining_slice()[..non_compact_size]));
-        ok!(reader.advance(non_compact_size));
+        hash_reader_exact(
+            reader,
+            &mut ctx.hashers.tx_non_compact_hasher,
+            SAPLING_OUTPUTS_NONCOMPACT_SIZE,
+            "Not enough data for sapling non compact output",
+        )?;
 
         self.sapling_output_parsed_count += 1;
 
@@ -292,35 +287,20 @@ impl Parser {
         info!("Finalize sapling outputs hashing");
 
         // Finalize compact, memo and noncompact sapling output hashes
-        let mut sapling_output_compact_digest = [0u8; 32];
-        ok!(ctx
-            .hashers
-            .tx_compact_hasher
-            .finalize(&mut sapling_output_compact_digest));
-        debug!(
-            "Sapling output compact digest: {}",
-            HexSlice(&sapling_output_compact_digest)
-        );
+        let sapling_output_compact_digest = finalize_and_log_hash(
+            &mut ctx.hashers.tx_compact_hasher,
+            "Sapling output compact digest",
+        )?;
 
-        let mut sapling_output_memo_digest = [0u8; 32];
-        ok!(ctx
-            .hashers
-            .tx_memo_hasher
-            .finalize(&mut sapling_output_memo_digest));
-        debug!(
-            "Sapling output memo digest: {}",
-            HexSlice(&sapling_output_memo_digest)
-        );
+        let sapling_output_memo_digest = finalize_and_log_hash(
+            &mut ctx.hashers.tx_memo_hasher,
+            "Sapling output memo digest",
+        )?;
 
-        let mut sapling_output_non_compact_digest = [0u8; 32];
-        ok!(ctx
-            .hashers
-            .tx_non_compact_hasher
-            .finalize(&mut sapling_output_non_compact_digest));
-        debug!(
-            "Sapling output non compact digest: {}",
-            HexSlice(&sapling_output_non_compact_digest)
-        );
+        let sapling_output_non_compact_digest = finalize_and_log_hash(
+            &mut ctx.hashers.tx_non_compact_hasher,
+            "Sapling output non compact digest",
+        )?;
 
         // Initialize the sapling output digest context
         let mut sapling_output_hasher = Blake2b_256::new();
