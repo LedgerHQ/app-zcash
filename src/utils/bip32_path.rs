@@ -69,7 +69,7 @@ impl TryFrom<&[u8]> for Bip32Path {
         let path_len = data[0] as usize;
         let body = &data[1..];
 
-        if body.len() != path_len * 4 {
+        if body.len() != path_len * 4 || path_len > MAX_ZCASH_BIP32_PATH {
             return Err(AppSW::WrongApduLength);
         }
 
