@@ -23,5 +23,5 @@ pub(crate) fn swap_panic_handler(info: &PanicInfo) -> ! {
     let mut comm = io::Comm::new();
     comm.reply(io::StatusWords::Panic);
 
-    unsafe { ledger_secure_sdk_sys::os_lib_end() }
+    unsafe { ledger_device_sdk::sys::os_lib_end() }
 }

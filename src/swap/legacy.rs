@@ -1,6 +1,6 @@
 use ledger_device_sdk::libcall::swap::CheckAddressParams;
 
-use ledger_secure_sdk_sys::{check_address_parameters_t, libargs_s__bindgen_ty_1, libargs_t};
+use ledger_device_sdk::sys::{check_address_parameters_t, libargs_s__bindgen_ty_1, libargs_t};
 
 const DPATH_STAGE_SIZE: usize = 16;
 
