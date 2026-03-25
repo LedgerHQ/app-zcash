@@ -11,6 +11,17 @@ use zcash_protocol::value::ZatBalance;
 
 use super::*;
 
+const SAPLING_CMU_SIZE: usize = HASH_SIZE;
+const SAPLING_EPHEMERAL_KEY_SIZE: usize = HASH_SIZE;
+const SAPLING_COMPACT_ENC_CIPHERTEXT_SIZE: usize = 52;
+const SAPLING_OUT_CIPHERTEXT_SIZE: usize = 16;
+const SAPLING_ZKPROOF_SIZE: usize = 80;
+const SAPLING_OUTPUTS_COMPACT_SIZE: usize =
+    SAPLING_CMU_SIZE + SAPLING_EPHEMERAL_KEY_SIZE + SAPLING_COMPACT_ENC_CIPHERTEXT_SIZE;
+const SAPLING_OUTPUTS_NONCOMPACT_SIZE: usize =
+    SAPLING_CMU_SIZE + SAPLING_OUT_CIPHERTEXT_SIZE + SAPLING_ZKPROOF_SIZE;
+const SAPLING_MEMO_SIZE: usize = 512;
+
 impl Parser {
     pub fn parse_sapling(
         &mut self,
@@ -33,12 +44,14 @@ impl Parser {
             ok!(reader.read_exact(&mut anchor));
 
             // Init hashers
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_SPENDS_COMPACT_HASH_PERSONALIZATION);
-            ctx.hashers
+                .init_with_perso(ZCASH_SAPLING_SPENDS_COMPACT_HASH_PERSONALIZATION));
+            ok!(ctx
+                .hashers
                 .tx_non_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION));
 
             self.state = ParserState::ProcessSaplingSpends { anchor };
         } else if self.sapling_output_count > 0 {
@@ -47,7 +60,7 @@ impl Parser {
             let sapling_spend = {
                 let mut sapling_spend = [0u8; 32];
                 let mut tmp_spend_hasher = Blake2b_256::new();
-                tmp_spend_hasher.init_with_perso(ZCASH_SAPLING_SPENDS_HASH_PERSONALIZATION);
+                ok!(tmp_spend_hasher.init_with_perso(ZCASH_SAPLING_SPENDS_HASH_PERSONALIZATION));
                 ok!(tmp_spend_hasher.finalize(&mut sapling_spend));
 
                 sapling_spend
@@ -57,9 +70,10 @@ impl Parser {
             ok!(ctx.hashers.sapling_hasher.update(&sapling_spend));
 
             // Init outputs hasher
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION));
 
             self.state = ParserState::ProcessSaplingOutputsCompact;
         } else {
@@ -144,7 +158,7 @@ impl Parser {
 
         // Initialize the sapling spend digest context
         let mut tmp_spend_hasher = Blake2b_256::new();
-        tmp_spend_hasher.init_with_perso(ZCASH_SAPLING_SPENDS_HASH_PERSONALIZATION);
+        ok!(tmp_spend_hasher.init_with_perso(ZCASH_SAPLING_SPENDS_HASH_PERSONALIZATION));
         ok!(tmp_spend_hasher.update(&sapling_spend_compact_digest,));
         ok!(tmp_spend_hasher.update(&sapling_spend_non_compact_digest,));
 
@@ -158,9 +172,10 @@ impl Parser {
 
         if self.sapling_output_count > 0 {
             // Init outputs hasher
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION));
 
             self.state = ParserState::ProcessSaplingOutputsCompact;
         } else {
@@ -180,33 +195,27 @@ impl Parser {
             self.sapling_output_count - self.sapling_output_parsed_count
         );
 
-        let compact_size = 32 + 32 + 52; // cmu + ephemeral_key + enc_ciphertext[..52]
-
-        if reader.remaining_len() < compact_size {
-            return Err(ParserError::from_str(
-                "Not enough data for sapling compact output",
-            ));
-        }
-
-        ok!(ctx
-            .hashers
-            .tx_compact_hasher
-            .update(&reader.remaining_slice()[..compact_size]));
-        ok!(reader.advance(compact_size));
+        hash_reader_exact(
+            reader,
+            &mut ctx.hashers.tx_compact_hasher,
+            SAPLING_OUTPUTS_COMPACT_SIZE,
+            "Not enough data for sapling compact output",
+        )?;
 
         self.sapling_output_parsed_count += 1;
 
         if self.sapling_output_count == self.sapling_output_parsed_count {
             info!("All sapling compact outputs parsed");
             // Init memo hasher
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_memo_hasher
-                .init_with_perso(ZCASH_SAPLING_OUTPUTS_MEMOS_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_SAPLING_OUTPUTS_MEMOS_HASH_PERSONALIZATION));
 
             // memo_size = 512 each APDU will contain quarter of the memo
             self.state = ParserState::ProcessSaplingOutputsMemo {
-                size: self.sapling_output_count * 512,
-                remaining_size: self.sapling_output_count * 512,
+                size: self.sapling_output_count * SAPLING_MEMO_SIZE,
+                remaining_size: self.sapling_output_count * SAPLING_MEMO_SIZE,
             };
         }
 
@@ -225,19 +234,17 @@ impl Parser {
             remaining_size
         );
 
-        let to_read = core::cmp::min(remaining_size, reader.remaining_len());
-        let memo_data = &reader.remaining_slice()[..to_read];
-        ok!(ctx.hashers.tx_memo_hasher.update(memo_data));
-        ok!(reader.advance(to_read));
-        let new_remaining_size = remaining_size - to_read;
+        let new_remaining_size =
+            hash_reader_chunk(reader, &mut ctx.hashers.tx_memo_hasher, remaining_size)?;
 
         if new_remaining_size == 0 {
             info!("All sapling memo data parsed");
 
             // Init outputs non compact hasher
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_non_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION));
 
             self.sapling_output_parsed_count = 0;
             self.state = ParserState::ProcessSaplingOutputsNonCompact;
@@ -261,18 +268,12 @@ impl Parser {
             self.sapling_output_count - self.sapling_output_parsed_count
         );
 
-        let non_compact_size = 32 + 16 + 80;
-
-        if reader.remaining_len() < non_compact_size {
-            return Err(ParserError::from_str(
-                "Not enough data for sapling non compact output",
-            ));
-        }
-        ok!(ctx
-            .hashers
-            .tx_non_compact_hasher
-            .update(&reader.remaining_slice()[..non_compact_size]));
-        ok!(reader.advance(non_compact_size));
+        hash_reader_exact(
+            reader,
+            &mut ctx.hashers.tx_non_compact_hasher,
+            SAPLING_OUTPUTS_NONCOMPACT_SIZE,
+            "Not enough data for sapling non compact output",
+        )?;
 
         self.sapling_output_parsed_count += 1;
 
@@ -292,39 +293,24 @@ impl Parser {
         info!("Finalize sapling outputs hashing");
 
         // Finalize compact, memo and noncompact sapling output hashes
-        let mut sapling_output_compact_digest = [0u8; 32];
-        ok!(ctx
-            .hashers
-            .tx_compact_hasher
-            .finalize(&mut sapling_output_compact_digest));
-        debug!(
-            "Sapling output compact digest: {}",
-            HexSlice(&sapling_output_compact_digest)
-        );
+        let sapling_output_compact_digest = finalize_and_log_hash(
+            &mut ctx.hashers.tx_compact_hasher,
+            "Sapling output compact digest",
+        )?;
 
-        let mut sapling_output_memo_digest = [0u8; 32];
-        ok!(ctx
-            .hashers
-            .tx_memo_hasher
-            .finalize(&mut sapling_output_memo_digest));
-        debug!(
-            "Sapling output memo digest: {}",
-            HexSlice(&sapling_output_memo_digest)
-        );
+        let sapling_output_memo_digest = finalize_and_log_hash(
+            &mut ctx.hashers.tx_memo_hasher,
+            "Sapling output memo digest",
+        )?;
 
-        let mut sapling_output_non_compact_digest = [0u8; 32];
-        ok!(ctx
-            .hashers
-            .tx_non_compact_hasher
-            .finalize(&mut sapling_output_non_compact_digest));
-        debug!(
-            "Sapling output non compact digest: {}",
-            HexSlice(&sapling_output_non_compact_digest)
-        );
+        let sapling_output_non_compact_digest = finalize_and_log_hash(
+            &mut ctx.hashers.tx_non_compact_hasher,
+            "Sapling output non compact digest",
+        )?;
 
         // Initialize the sapling output digest context
         let mut sapling_output_hasher = Blake2b_256::new();
-        sapling_output_hasher.init_with_perso(ZCASH_SAPLING_OUTPUTS_HASH_PERSONALIZATION);
+        ok!(sapling_output_hasher.init_with_perso(ZCASH_SAPLING_OUTPUTS_HASH_PERSONALIZATION));
 
         ok!(sapling_output_hasher.update(&sapling_output_compact_digest));
         ok!(sapling_output_hasher.update(&sapling_output_memo_digest));
@@ -343,9 +329,10 @@ impl Parser {
             .update(&self.sapling_balance.to_le_bytes()));
 
         if self.orchard_action_count > 0 {
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_compact_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
             self.state = ParserState::ProcessOrchardCompact;
         } else {
             self.state = ParserState::ProcessExtra;

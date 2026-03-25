@@ -54,9 +54,10 @@ impl OutputParser {
                         return Err(ParserError::from_str("Too many outputs"));
                     }
 
-                    ctx.hashers
+                    ok!(ctx
+                        .hashers
                         .outputs_hasher
-                        .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION);
+                        .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION));
 
                     self.output_count = output_count;
                     self.state = OutputParseState::ParsingOutput;

@@ -1,5 +1,6 @@
 use ledger_device_sdk::NVMData;
 use ledger_device_sdk::nvm::*;
+use zeroize::{Zeroize, Zeroizing};
 
 // This is necessary to store the object in NVM and not in RAM
 const SETTINGS_SIZE: usize = 10;
@@ -23,6 +24,15 @@ impl TrustedKeySettings {
     }
 }
 
+impl Zeroize for TrustedKeySettings {
+    fn zeroize(&mut self) {
+        self.is_initialized = false;
+        self.key.zeroize();
+    }
+}
+
+pub type TrustedInputKey = Zeroizing<[u8; 32]>;
+
 #[unsafe(link_section = ".nvm_data")]
 static mut TRUSTED_INPUT_KEY: NVMData<AtomicStorage<TrustedKeySettings>> =
     NVMData::new(AtomicStorage::new(&TrustedKeySettings::default()));
@@ -38,54 +48,33 @@ impl Default for Settings {
 
 impl Settings {
     #[inline(never)]
-    #[allow(unused)]
     pub fn get_mut(&mut self) -> &mut AtomicStorage<[u8; SETTINGS_SIZE]> {
         let data = &raw mut DATA;
         unsafe { (*data).get_mut() }
     }
 
-    #[inline(never)]
-    #[allow(unused)]
-    pub fn get_ref(&mut self) -> &AtomicStorage<[u8; SETTINGS_SIZE]> {
-        let data = &raw const DATA;
-        unsafe { (*data).get_ref() }
-    }
-
-    #[allow(unused)]
-    pub fn get_element(&self, index: usize) -> u8 {
-        let data = &raw const DATA;
-        let storage = unsafe { (*data).get_ref() };
-        let settings = storage.get_ref();
-        settings[index]
-    }
-
-    #[allow(unused)]
-    // Not used in this boilerplate, but can be used to set a value in the settings
-    pub fn set_element(&self, index: usize, value: u8) {
-        let data = &raw mut DATA;
-        let storage = unsafe { (*data).get_mut() };
-        let mut updated_data = *storage.get_ref();
-        updated_data[index] = value;
-        unsafe {
-            storage.update(&updated_data);
-        }
-    }
-
-    pub fn trusted_input_key(&mut self) -> Option<[u8; 32]> {
+    pub fn trusted_input_key(&mut self) -> Option<TrustedInputKey> {
         let data = &raw const TRUSTED_INPUT_KEY;
         let storage = unsafe { (*data).get_ref() };
-        let s = *storage.get_ref();
+        let s = storage.get_ref();
 
-        if s.is_initialized { Some(s.key) } else { None }
+        if !s.is_initialized {
+            return None;
+        }
+
+        let mut key = Zeroizing::new([0u8; 32]);
+        key.copy_from_slice(&s.key);
+        Some(key)
     }
 
-    pub fn set_trusted_input_key(&mut self, trusted_input_key: [u8; 32]) {
+    pub fn set_trusted_input_key(&mut self, trusted_input_key: &TrustedInputKey) {
         let data = &raw mut TRUSTED_INPUT_KEY;
         let storage = unsafe { (*data).get_mut() };
-
-        storage.update(&TrustedKeySettings {
+        let trusted_key_settings = Zeroizing::new(TrustedKeySettings {
             is_initialized: true,
-            key: trusted_input_key,
+            key: **trusted_input_key,
         });
+
+        storage.update(&trusted_key_settings);
     }
 }

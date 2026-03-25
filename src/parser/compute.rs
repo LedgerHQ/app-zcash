@@ -1,12 +1,14 @@
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
+use ledger_device_sdk::log::{debug, info};
 use zcash_primitives::transaction::txid::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TX_PERSONALIZATION_PREFIX,
 };
 
 use crate::{
-    log::{debug, info},
-    parser::{ParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, ok},
+    parser::{
+        ParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, finalize_and_log_hash, ok,
+    },
     tx::SupportedTxVersion,
     utils::{
         HexSlice,
@@ -27,32 +29,20 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
 
     match ctx.tx_info.tx_version() {
         SupportedTxVersion::V5 => {
-            let prevouts_hash = {
-                let mut hash = [0u8; 32];
-                ok!(ctx.hashers.prevouts_hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Prevouts hash: {}", HexSlice(&prevouts_hash));
+            let prevouts_hash =
+                finalize_and_log_hash(&mut ctx.hashers.prevouts_hasher, "Prevouts hash")?;
 
-            let sequence_hash = {
-                let mut hash = [0u8; 32];
-                ok!(ctx.hashers.sequence_hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Sequence hash: {}", HexSlice(&sequence_hash));
+            let sequence_hash =
+                finalize_and_log_hash(&mut ctx.hashers.sequence_hasher, "Sequence hash")?;
 
-            let outputs_hash = {
-                let mut hash = [0u8; 32];
-                ok!(ctx.hashers.outputs_hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Outputs hash: {}", HexSlice(&outputs_hash));
+            let outputs_hash =
+                finalize_and_log_hash(&mut ctx.hashers.outputs_hasher, "Outputs hash")?;
 
             let header_hash = {
                 let mut hash = [0u8; 32];
 
                 let mut hasher = Blake2b_256::default();
-                hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION);
+                ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
 
                 ok!(tx_version.write(&mut hasher.as_writer()));
 
@@ -70,7 +60,7 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
                 let mut hash = [0u8; 32];
 
                 let mut hasher = Blake2b_256::default();
-                hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION);
+                ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
 
                 ok!(hasher.update(&prevouts_hash));
                 ok!(hasher.update(&sequence_hash));
@@ -81,26 +71,18 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
             };
             debug!("Transparent hash: {}", HexSlice(&transparent_hash));
 
-            let sapling_hash = {
-                let mut hash = [0u8; 32];
-                ok!(ctx.hashers.sapling_hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Sapling hash: {}", HexSlice(&sapling_hash));
+            let sapling_hash =
+                finalize_and_log_hash(&mut ctx.hashers.sapling_hasher, "Sapling hash")?;
 
-            let orchard_hash = {
-                let mut hash = [0u8; 32];
-                ok!(ctx.hashers.orchard_hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Orchard hash: {}", HexSlice(&orchard_hash));
+            let orchard_hash =
+                finalize_and_log_hash(&mut ctx.hashers.orchard_hasher, "Orchard hash")?;
 
             let mut personalization = [0u8; 16];
             personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
             personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
 
             let mut hasher = Blake2b_256::default();
-            hasher.init_with_perso(&personalization);
+            ok!(hasher.init_with_perso(&personalization));
 
             ok!(hasher.update(&header_hash));
             ok!(hasher.update(&transparent_hash));
@@ -169,7 +151,7 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
         let mut hash = [0u8; 32];
 
         let mut hasher = Blake2b_256::default();
-        hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION);
+        ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
 
         ok!(hasher.update(&[ctx.tx_info.sighash_type]));
         ok!(hasher.update(&ctx.tx_info.prevouts_hash));
@@ -187,9 +169,10 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
     // Compute sapling_digest. Assume no Sapling spends or outputs are present
     let sapling_digest = {
         let mut sapling_digest = [0u8; 32];
-        ctx.hashers
+        ok!(ctx
+            .hashers
             .sapling_hasher
-            .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION);
+            .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION));
         ok!(ctx.hashers.sapling_hasher.finalize(&mut sapling_digest));
         sapling_digest
     };
@@ -197,9 +180,10 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
     // Compute orchard_digest. Assume there are no Orchard actions
     let orchard_digest = {
         let mut orchard_digest = [0u8; 32];
-        ctx.hashers
+        ok!(ctx
+            .hashers
             .orchard_hasher
-            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION);
+            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION));
         ok!(ctx.hashers.orchard_hasher.finalize(&mut orchard_digest));
         orchard_digest
     };
@@ -212,7 +196,7 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
     personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
 
     let hasher = &mut ctx.hashers.tx_full_hasher;
-    hasher.init_with_perso(&personalization);
+    ok!(hasher.init_with_perso(&personalization));
 
     ok!(hasher.update(&ctx.tx_info.header_digest));
     ok!(hasher.update(&transparent_digest));

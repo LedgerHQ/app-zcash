@@ -67,13 +67,12 @@ impl Parser {
         let trusted_input = &reader.remaining_slice()[..trusted_input_len];
         let trusted_input_hmac = &trusted_input[trusted_input_len - 8..][..8];
         let mut computed_hmac = [0x00u8; 8];
+        let trusted_input_key = Settings
+            .trusted_input_key()
+            .ok_or_else(|| ParserError::from_str("Trusted input key not set"))?;
 
         // Compute HMAC-SHA256 signature over the trusted input
-        let mut hmac_sha256_signer = HmacSha256::new(
-            &Settings
-                .trusted_input_key()
-                .ok_or_else(|| ParserError::from_str("Trusted input key not set"))?,
-        );
+        let mut hmac_sha256_signer = HmacSha256::new(trusted_input_key.as_ref());
 
         ok!(hmac_sha256_signer.update(&trusted_input[0..trusted_input_len - 8]));
         ok!(hmac_sha256_signer.finalize(&mut computed_hmac));
@@ -391,9 +390,10 @@ impl Parser {
         self.state = if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {
             ParserState::ProcessSapling
         } else if self.orchard_action_count > 0 {
-            ctx.hashers
+            ok!(ctx
+                .hashers
                 .tx_compact_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION);
+                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
             ParserState::ProcessOrchardCompact
         } else {
             ParserState::ProcessExtra

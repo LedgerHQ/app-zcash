@@ -14,10 +14,14 @@ pub const TRANSPARENT_ADDRESS_B58_LEN: usize = 35;
 
 type P2pkhPayload = [u8; 22];
 
-// T-address P2PKH prefix (mainnet)
-const P2PKH_PREFIX: [u8; 2] = [0x1C, 0xB8];
-// T-address P2PKH prefix (testnet)
-const _P2PKH_PREFIX: [u8; 2] = [0x1D, 0x25];
+// T-address P2PKH prefix (testnet): [0x1D, 0x25]
+const TRANSPARENT_ADDRESS_PREFIX_MAINNET: [u8; 2] = [0x1C, 0xB8];
+
+const P2PKH_PREFIX_LEN: usize = 2;
+const P2PKH_HASH_LEN: usize = 20;
+const P2PKH_PAYLOAD_LEN: usize = P2PKH_PREFIX_LEN + P2PKH_HASH_LEN;
+const BASE58_CHECK_BUFFER_LEN: usize = P2PKH_PAYLOAD_LEN + 4;
+const OUTPUT_SCRIPT_ADDRESS_OFFSET: usize = 3;
 
 pub trait ToBase58Address {
     fn from_p2pkh_payload(
@@ -32,9 +36,9 @@ pub trait ToBase58Address {
 
 impl ToBase58Address for ArrayString<TRANSPARENT_ADDRESS_B58_LEN> {
     fn from_public_key_hash(hash160: &Hash160) -> Result<Self, AppSW> {
-        let mut payload = [0u8; 22];
-        payload[..2].copy_from_slice(&P2PKH_PREFIX);
-        payload[2..].copy_from_slice(hash160);
+        let mut payload = [0u8; P2PKH_PAYLOAD_LEN];
+        payload[..P2PKH_PREFIX_LEN].copy_from_slice(&TRANSPARENT_ADDRESS_PREFIX_MAINNET);
+        payload[P2PKH_PREFIX_LEN..].copy_from_slice(hash160);
 
         Self::from_p2pkh_payload(&payload)
     }
@@ -45,14 +49,14 @@ impl ToBase58Address for ArrayString<TRANSPARENT_ADDRESS_B58_LEN> {
     }
 
     fn from_p2pkh_payload(payload: &P2pkhPayload) -> Result<Self, AppSW> {
-        let mut buf = [0u8; 26];
+        let mut buf = [0u8; BASE58_CHECK_BUFFER_LEN];
 
         // payload
-        buf[..22].copy_from_slice(payload);
+        buf[..P2PKH_PAYLOAD_LEN].copy_from_slice(payload);
 
         // checksum
-        let checksum = sha256_checksum(&buf[..22]);
-        buf[22..26].copy_from_slice(&checksum);
+        let checksum = sha256_checksum(&buf[..P2PKH_PAYLOAD_LEN]);
+        buf[P2PKH_PAYLOAD_LEN..].copy_from_slice(&checksum);
 
         // base58 → ArrayString
         let mut out = [0u8; TRANSPARENT_ADDRESS_B58_LEN];
@@ -67,16 +71,15 @@ impl ToBase58Address for ArrayString<TRANSPARENT_ADDRESS_B58_LEN> {
 }
 
 fn output_script_to_p2pkh_payload(script: &[u8]) -> Result<P2pkhPayload, AppSW> {
-    const ADDRESS_OFFSET: usize = 3;
-    const PREFIX: [u8; 2] = [0x1C, 0xB8];
-
     if output_script_is_op_return(script) || !output_script_is_regular(script) {
         return Err(AppSW::IncorrectData);
     }
 
-    let mut payload = [0u8; 22];
-    payload[..2].copy_from_slice(&PREFIX);
-    payload[2..].copy_from_slice(&script[ADDRESS_OFFSET..ADDRESS_OFFSET + 20]);
+    let mut payload = [0u8; P2PKH_PAYLOAD_LEN];
+    payload[..P2PKH_PREFIX_LEN].copy_from_slice(&TRANSPARENT_ADDRESS_PREFIX_MAINNET);
+    payload[P2PKH_PREFIX_LEN..].copy_from_slice(
+        &script[OUTPUT_SCRIPT_ADDRESS_OFFSET..OUTPUT_SCRIPT_ADDRESS_OFFSET + P2PKH_HASH_LEN],
+    );
 
     Ok(payload)
 }

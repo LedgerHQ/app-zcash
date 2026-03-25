@@ -1,6 +1,7 @@
 use ledger_device_sdk::hash::{HashInit, ripemd::Ripemd160, sha2::Sha2_256};
+use ledger_device_sdk::log::debug;
 
-use crate::{AppSW, log::debug, utils::HexSlice};
+use crate::{AppSW, utils::HexSlice};
 
 pub type Hash160 = [u8; 20];
 

@@ -1,7 +1,6 @@
 use crate::{
     AppSW,
     consts::TRUSTED_INPUT_SIZE,
-    log::{debug, error, info},
     parser::{ParserCtx, ParserMode, ParserSourceError},
     settings::Settings,
     tx::TxContext,
@@ -10,6 +9,7 @@ use crate::{
 use ledger_device_sdk::{
     hmac::{HMACInit, sha2::Sha2_256 as HmacSha256},
     io::Comm,
+    log::{debug, error, info},
     random::rand_bytes,
 };
 
@@ -75,11 +75,10 @@ pub fn handler_get_trusted_input(
 
         // Compute HMAC-SHA256 signature over the trusted input
         let mut signature = [0u8; 8];
-        let mut hmac_sha256_signer = HmacSha256::new(
-            &Settings
-                .trusted_input_key()
-                .ok_or(AppSW::TechnicalProblem)?,
-        );
+        let trusted_input_key = Settings
+            .trusted_input_key()
+            .ok_or(AppSW::TechnicalProblem)?;
+        let mut hmac_sha256_signer = HmacSha256::new(trusted_input_key.as_ref());
         debug!("HMAC input: {}", HexSlice(comm.get(0, TRUSTED_INPUT_SIZE)));
 
         hmac_sha256_signer

@@ -29,7 +29,6 @@ mod handlers {
 }
 
 mod consts;
-mod log;
 mod parser;
 mod settings;
 mod swap;
@@ -40,6 +39,7 @@ use core::mem;
 
 use app_ui::menu::ui_menu_main;
 use handlers::{get_public_key::handler_get_public_key, get_version::handler_get_version};
+use ledger_device_sdk::log::{debug, error};
 use ledger_device_sdk::nbgl::StatusType;
 use ledger_device_sdk::{io::StatusWords, libcall::swap::CreateTxParams};
 use ledger_device_sdk::{
@@ -48,6 +48,7 @@ use ledger_device_sdk::{
     random::rand_bytes,
 };
 use tx::TxContext;
+use zeroize::Zeroizing;
 
 use crate::consts::{
     P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
@@ -67,7 +68,6 @@ use crate::{
         sign_msg::handler_sign_msg,
         sign_tx::{handler_hash_input_finalize_full, handler_hash_input_start, handler_hash_sign},
     },
-    log::{debug, error},
     settings::Settings,
 };
 
@@ -229,10 +229,10 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
 
 fn init_trusted_input_key_storage() {
     if Settings.trusted_input_key().is_none() {
-        let mut rng = [0u8; 32];
-        rand_bytes(&mut rng);
+        let mut rng = Zeroizing::new([0u8; 32]);
+        rand_bytes(&mut rng[..]);
 
-        Settings.set_trusted_input_key(rng);
+        Settings.set_trusted_input_key(&rng);
         debug!("Initialized trusted input key storage");
     }
 }
