@@ -9,6 +9,11 @@ use ledger_device_sdk::{
 };
 use pasta_curves::pallas;
 
+use crate::{
+    bytes::reverse_copy,
+    montgomery::{byte_to_fp, montgomery_reduce_u64x8, mul_u64x4, pallas_montgomery_params, repr_to_u64x4},
+};
+
 const ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES: [u8; 32] = [
     99, 201, 117, 184, 132, 114, 26, 141, 12, 161, 112, 123, 227, 12, 127, 12, 95, 68, 95, 62, 124,
     24, 141, 59, 6, 214, 241, 40, 179, 35, 85, 183,
@@ -187,11 +192,11 @@ fn projective_point(x: pallas::Base, y: pallas::Base, z: pallas::Base) -> pallas
 }
 
 fn base_from_canonical_repr_unchecked(repr: [u8; 32]) -> pallas::Base {
-    let repr_u64x4 = crate::repr_to_u64x4(&repr);
-    let (modulus, r2, inv) = crate::pallas_montgomery_params(CurveDomainParam::Field);
-    let wide = crate::mul_u64x4(&repr_u64x4, &r2);
-    let mont = crate::montgomery_reduce_u64x8(wide, modulus, inv);
-    crate::byte_to_fp(&mont)
+    let repr_u64x4 = repr_to_u64x4(&repr);
+    let (modulus, r2, inv) = pallas_montgomery_params(CurveDomainParam::Field);
+    let wide = mul_u64x4(&repr_u64x4, &r2);
+    let mont = montgomery_reduce_u64x8(wide, modulus, inv);
+    byte_to_fp(&mont)
 }
 
 fn decode_pallas_point_encoding(encoded: &[u8; 32]) -> ([u8; 32], u32) {
@@ -209,12 +214,4 @@ fn encode_pallas_point_bytes(x_be: &[u8; 32], sign: u32) -> [u8; 32] {
     reverse_copy(&mut x_le, x_be);
     x_le[31] |= ((sign & 1) as u8) << 7;
     x_le
-}
-
-fn reverse_copy<const N: usize>(dst: &mut [u8; N], src: &[u8; N]) {
-    let mut i = 0;
-    while i < N {
-        dst[i] = src[N - 1 - i];
-        i += 1;
-    }
 }
