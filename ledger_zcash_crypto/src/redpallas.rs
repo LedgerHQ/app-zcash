@@ -1,7 +1,7 @@
 use core::cmp::Ordering;
 
 use ledger_device_sdk::{
-    bn::{Bn, BnLock},
+    bn::Bn,
     ecc::{
         CurvesId, CxError,
         math::{CurveDomainParam, EcPoint, Pallas},
@@ -98,7 +98,6 @@ impl From<&SpendAuthSigningKey> for SpendAuthVerificationKey {
 /// Creates a minimal RedPallas spend-authorizing signing key from canonical
 /// scalar bytes.
 pub fn spendauth_signing_key(scalar_bytes_le: [u8; 32]) -> Result<SpendAuthSigningKey, Error> {
-    let _lock = BnLock::acquire(32)?;
     let scalar_bytes_be = canonical_scalar_bytes_be(&scalar_bytes_le)?;
     let verification_key = spendauth_verification_key_from_scalar_be(&scalar_bytes_be)?;
 
@@ -113,8 +112,8 @@ fn canonical_scalar_bytes_be(scalar_bytes_le: &[u8; 32]) -> Result<[u8; 32], Err
     reverse_copy(&mut scalar_bytes_be, scalar_bytes_le);
 
     let scalar = Bn::alloc_init(&scalar_bytes_be)?;
-    let order = Bn::alloc(32)?;
-    Pallas::domain_parameter_bn(CurveDomainParam::Order, order.raw())?;
+    let mut order = Bn::alloc(32)?;
+    Pallas::domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
     if scalar.cmp_bn(&order)? != Ordering::Less {
         return Err(Error::MalformedSigningKey);

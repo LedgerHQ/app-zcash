@@ -3,7 +3,7 @@
 pub mod redpallas;
 
 use ledger_device_sdk::{
-    bn::{Bn, BnLock},
+    bn::Bn,
     ecc::{
         CxError,
         math::{CurveDomainParam, Pallas},
@@ -209,14 +209,12 @@ fn canonical_pallas_element_bytes_be(
     modulus_param: CurveDomainParam,
     malformed_error: Error,
 ) -> Result<[u8; 32], Error> {
-    let _lock = BnLock::acquire(PALLAS_BASE_BYTES)?;
-
     let mut bytes_be = [0u8; PALLAS_BASE_BYTES];
     reverse_copy(&mut bytes_be, bytes_le);
 
     let element = Bn::alloc_init(&bytes_be)?;
-    let modulus = Bn::alloc(PALLAS_BASE_BYTES)?;
-    Pallas::domain_parameter_bn(modulus_param, modulus.raw())?;
+    let mut modulus = Bn::alloc(PALLAS_BASE_BYTES)?;
+    Pallas::domain_parameter_bn(modulus_param, &mut modulus)?;
 
     if element.cmp_bn(&modulus)? != core::cmp::Ordering::Less {
         return Err(malformed_error);
@@ -233,13 +231,12 @@ fn repr_to_montgomery_u64x4_ledger_sdk(
 ) -> Result<[u64; 4], Error> {
     debug!("repr_to_montgomery_u64x4: input repr (LE) {}", hex::encode(repr));
     let repr_be = canonical_pallas_element_bytes_be(repr, modulus_param, malformed_error)?;
-    let _lock = BnLock::acquire(PALLAS_BASE_BYTES)?;
 
     debug!("repr_to_montgomery_u64x4: canonical BE bytes {}", hex::encode(repr_be));
 
     let value = Bn::alloc_init(&repr_be)?;
-    let modulus = Bn::alloc(PALLAS_BASE_BYTES)?;
-    Pallas::domain_parameter_bn(modulus_param, modulus.raw())?;
+    let mut modulus = Bn::alloc(PALLAS_BASE_BYTES)?;
+    Pallas::domain_parameter_bn(modulus_param, &mut modulus)?;
 
     let mut mont = ledger_device_sdk::bn::MontCtx::alloc(PALLAS_BASE_BYTES)?;
     mont.init(&modulus)?;
@@ -276,14 +273,12 @@ fn reduce_uniform_le_bytes_mod_pallas(
     uniform_le: &[u8; PRF_EXPAND_BYTES],
     modulus_param: CurveDomainParam,
 ) -> Result<[u8; 32], Error> {
-    let _lock = BnLock::acquire(PRF_EXPAND_BYTES)?;
-
     let mut uniform_be = [0u8; PRF_EXPAND_BYTES];
     reverse_copy(&mut uniform_be, uniform_le);
 
     let wide = Bn::alloc_init(&uniform_be)?;
-    let modulus = Bn::alloc(PALLAS_BASE_BYTES)?;
-    Pallas::domain_parameter_bn(modulus_param, modulus.raw())?;
+    let mut modulus = Bn::alloc(PALLAS_BASE_BYTES)?;
+    Pallas::domain_parameter_bn(modulus_param, &mut modulus)?;
 
     let reduced = Bn::alloc(PALLAS_BASE_BYTES)?;
     reduced.reduce(&wide, &modulus)?;
@@ -465,7 +460,7 @@ pub mod tests {
         }
 
         // Res: 0x59ffffff789dbc7d79d705c09533f2a3e9ffffffffffffffffffffffffffff3f
-        assert_eq!(res_actual_scalar, "\\x59\\xff\\xff\\xff\\x78\\x9d\\xbc\\x7d\\x79\\xd7\\x05\\xc0\\x95\\x33\\xf2\\xa3\\xe9\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\x3f".as_bytes());
+        assert_eq!(res_actual_scalar, *b"\x59\xff\xff\xff\x78\x9d\xbc\x7d\x79\xd7\x05\xc0\x95\x33\xf2\xa3\xe9\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x3f");
     }
 
     #[test]
@@ -495,6 +490,6 @@ pub mod tests {
         }
 
         // Res: 0x59ffffff789dbc7d79d705c09533f2a3e9ffffffffffffffffffffffffffff3f
-        assert_eq!(res_actual_scalar, "\\x59\\xff\\xff\\xff\\x78\\x9d\\xbc\\x7d\\x79\\xd7\\x05\\xc0\\x95\\x33\\xf2\\xa3\\xe9\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\x3f".as_bytes());
+        assert_eq!(res_actual_scalar, *b"\x59\xff\xff\xff\x78\x9d\xbc\x7d\x79\xd7\x05\xc0\x95\x33\xf2\xa3\xe9\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x3f");
     }
 }
