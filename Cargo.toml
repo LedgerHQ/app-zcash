@@ -6,7 +6,7 @@ edition = "2024"
 
 [dependencies]
 #ledger_device_sdk = { version = "1.34.0", features = ["sys"] }
-ledger_device_sdk = { git = "https://github.com/LedgerHQ/ledger-device-rust-sdk.git", branch = "y333/zip32_derivation_support", features = ["sys"] }
+ledger_device_sdk = { git = "https://github.com/Fingolfin69/ledger-device-rust-sdk.git", branch = "y333/zip32_derivation_support_build_ci_fix", features = ["sys"] }
 ledger_zcash_crypto = { path = "ledger_zcash_crypto" }
 core2 = { version = "0.3.0", default-features = false }
 arrayvec = { version = "0.7.6", default-features = false }
