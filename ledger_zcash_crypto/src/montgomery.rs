@@ -5,18 +5,26 @@ use crate::{Error, canonical_pallas_element_bytes_be};
 
 pub(crate) const PALLAS_BYTES: usize = 32;
 
+// Pallas base/scalar moduli come from Orchard's vendored circuit/domain data:
+// - vendor/orchard/src/circuit_description
+// - vendor/orchard/book/src/design/commitment-tree.md
 const PALLAS_BASE_MODULUS_U64X4: [u64; 4] = [
     0x992d30ed00000001,
     0x224698fc094cf91b,
     0x0000000000000000,
     0x4000000000000000,
 ];
+
+// Montgomery R^2 mod p for the Pallas base field, stored here as four
+// little-endian u64 limbs.
 const PALLAS_BASE_R2_U64X4: [u64; 4] = [
     0x8c78ecb30000000f,
     0xd7d30dbd8b0de0e7,
     0x7797a99bc3c95d18,
     0x096d41af7b9cb714,
 ];
+
+// Montgomery -p^{-1} mod 2^64 derived from the low limb of the base modulus.
 const PALLAS_BASE_INV: u64 = 0x992d30ecffffffff;
 const PALLAS_SCALAR_MODULUS_U64X4: [u64; 4] = [
     0x8c46eb2100000001,
@@ -24,12 +32,17 @@ const PALLAS_SCALAR_MODULUS_U64X4: [u64; 4] = [
     0x0000000000000000,
     0x4000000000000000,
 ];
+
+// Montgomery R^2 mod n for the Pallas scalar field, stored here as four
+// little-endian u64 limbs.
 const PALLAS_SCALAR_R2_U64X4: [u64; 4] = [
     0xfc9678ff0000000f,
     0x67bb433d891a16e3,
     0x7fae231004ccf590,
     0x096d41af7ccfdaa9,
 ];
+
+// Montgomery -n^{-1} mod 2^64 derived from the low limb of the scalar modulus.
 const PALLAS_SCALAR_INV: u64 = 0x8c46eb20ffffffff;
 
 #[cfg(feature = "montgomery_fallback")]

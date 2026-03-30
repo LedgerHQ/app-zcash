@@ -19,7 +19,12 @@ use ledger_device_sdk::{
 use montgomery::{PALLAS_BYTES, byte_to_fp, byte_to_fq, repr_to_montgomery_u64x4};
 use pasta_curves::pallas;
 
+// Orchard key material is derived via PrfExpand with the fixed
+// "Zcash_ExpandSeed" personalization.
 const PRF_EXPAND_PERSONALIZATION: [u8; 16] = *b"Zcash_ExpandSeed";
+
+// Domain separators selecting Orchard ask/nk/rivk derivations inside
+// PrfExpand(sk || domain_separator).
 const ORCHARD_ASK_DOMAIN_SEPARATOR: u8 = 0x06;
 const ORCHARD_NK_DOMAIN_SEPARATOR: u8 = 0x07;
 const ORCHARD_RIVK_DOMAIN_SEPARATOR: u8 = 0x08;
