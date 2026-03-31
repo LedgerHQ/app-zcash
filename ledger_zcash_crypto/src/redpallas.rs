@@ -14,9 +14,10 @@ use crate::{
     montgomery::{byte_to_fp, montgomery_reduce_u64x8, mul_u64x4, pallas_montgomery_params, repr_to_u64x4},
 };
 
+// Orchard SpendAuthSig basepoint encoding
 const ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES: [u8; 32] = [
-    99, 201, 117, 184, 132, 114, 26, 141, 12, 161, 112, 123, 227, 12, 127, 12, 95, 68, 95, 62, 124,
-    24, 141, 59, 6, 214, 241, 40, 179, 35, 85, 183,
+    0x63, 0xc9, 0x75, 0xb8, 0x84, 0x72, 0x1a, 0x8d, 0x0c, 0xa1, 0x70, 0x7b, 0xe3, 0x0c, 0x7f, 0x0c, 0x5f, 0x44,
+    0x5f, 0x3e, 0x7c, 0x18, 0x8d, 0x3b, 0x06, 0xd6, 0xf1, 0x28, 0xb3, 0x23, 0x55, 0xb7,
 ];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -32,7 +33,7 @@ impl From<CxError> for Error {
     }
 }
 
-/// Minimal RedPallas spend-auth verification key representation.
+/// RedPallas spend-auth verification key representation.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SpendAuthVerificationKey {
     bytes: [u8; 32],
@@ -63,7 +64,7 @@ impl SpendAuthVerificationKey {
     }
 }
 
-/// Minimal RedPallas spend-auth signing key representation.
+/// RedPallas spend-auth signing key representation.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SpendAuthSigningKey {
     bytes: [u8; 32],
@@ -100,7 +101,7 @@ impl From<&SpendAuthSigningKey> for SpendAuthVerificationKey {
     }
 }
 
-/// Creates a minimal RedPallas spend-authorizing signing key from canonical
+/// Creates a RedPallas spend-authorizing signing key from canonical
 /// scalar bytes.
 pub fn spendauth_signing_key(scalar_bytes_le: [u8; 32]) -> Result<SpendAuthSigningKey, Error> {
     let scalar_bytes_be = canonical_scalar_bytes_be(&scalar_bytes_le)?;
