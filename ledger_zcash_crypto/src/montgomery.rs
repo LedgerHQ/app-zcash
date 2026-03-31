@@ -80,7 +80,9 @@ pub(crate) fn repr_to_u64x4(repr: &[u8; 32]) -> [u64; 4] {
     ]
 }
 
-pub(crate) fn pallas_montgomery_params(modulus_param: CurveDomainParam) -> ([u64; 4], [u64; 4], u64) {
+pub(crate) fn pallas_montgomery_params(
+    modulus_param: CurveDomainParam,
+) -> ([u64; 4], [u64; 4], u64) {
     match modulus_param {
         CurveDomainParam::Field => (
             PALLAS_BASE_MODULUS_U64X4,
@@ -245,14 +247,20 @@ mod tests {
         let mut repr = [0u8; 32];
         repr[0] = 42;
 
-        let actual_base =
-            repr_to_montgomery_u64x4_ledger_sdk(&repr, CurveDomainParam::Field, Error::MalformedPallasBase)
-                .unwrap();
+        let actual_base = repr_to_montgomery_u64x4_ledger_sdk(
+            &repr,
+            CurveDomainParam::Field,
+            Error::MalformedPallasBase,
+        )
+        .unwrap();
         assert_ne!(actual_base, [0u64; 4]);
 
-        let actual_scalar =
-            repr_to_montgomery_u64x4_ledger_sdk(&repr, CurveDomainParam::Order, Error::MalformedPallasScalar)
-                .unwrap();
+        let actual_scalar = repr_to_montgomery_u64x4_ledger_sdk(
+            &repr,
+            CurveDomainParam::Order,
+            Error::MalformedPallasScalar,
+        )
+        .unwrap();
         assert_ne!(actual_scalar, [0u64; 4]);
 
         let mut res_actual_scalar = [0u8; 32];
@@ -271,12 +279,20 @@ mod tests {
         let mut repr = [0u8; 32];
         repr[0] = 42;
 
-        let actual_base =
-            repr_to_montgomery_u64x4_pasta(&repr, CurveDomainParam::Field, Error::MalformedPallasBase).unwrap();
+        let actual_base = repr_to_montgomery_u64x4_pasta(
+            &repr,
+            CurveDomainParam::Field,
+            Error::MalformedPallasBase,
+        )
+        .unwrap();
         assert_ne!(actual_base, [0u64; 4]);
 
-        let actual_scalar =
-            repr_to_montgomery_u64x4_pasta(&repr, CurveDomainParam::Order, Error::MalformedPallasScalar).unwrap();
+        let actual_scalar = repr_to_montgomery_u64x4_pasta(
+            &repr,
+            CurveDomainParam::Order,
+            Error::MalformedPallasScalar,
+        )
+        .unwrap();
         assert_ne!(actual_scalar, [0u64; 4]);
 
         let mut res_actual_scalar = [0u8; 32];

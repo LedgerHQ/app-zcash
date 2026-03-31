@@ -11,13 +11,15 @@ use pasta_curves::pallas;
 
 use crate::{
     bytes::reverse_copy,
-    montgomery::{byte_to_fp, montgomery_reduce_u64x8, mul_u64x4, pallas_montgomery_params, repr_to_u64x4},
+    montgomery::{
+        byte_to_fp, montgomery_reduce_u64x8, mul_u64x4, pallas_montgomery_params, repr_to_u64x4,
+    },
 };
 
 // Orchard SpendAuthSig basepoint encoding
 const ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES: [u8; 32] = [
-    0x63, 0xc9, 0x75, 0xb8, 0x84, 0x72, 0x1a, 0x8d, 0x0c, 0xa1, 0x70, 0x7b, 0xe3, 0x0c, 0x7f, 0x0c, 0x5f, 0x44,
-    0x5f, 0x3e, 0x7c, 0x18, 0x8d, 0x3b, 0x06, 0xd6, 0xf1, 0x28, 0xb3, 0x23, 0x55, 0xb7,
+    0x63, 0xc9, 0x75, 0xb8, 0x84, 0x72, 0x1a, 0x8d, 0x0c, 0xa1, 0x70, 0x7b, 0xe3, 0x0c, 0x7f, 0x0c,
+    0x5f, 0x44, 0x5f, 0x3e, 0x7c, 0x18, 0x8d, 0x3b, 0x06, 0xd6, 0xf1, 0x28, 0xb3, 0x23, 0x55, 0xb7,
 ];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -131,7 +133,8 @@ fn canonical_scalar_bytes_be(scalar_bytes_le: &[u8; 32]) -> Result<[u8; 32], Err
 fn spendauth_verification_key_from_scalar_be(
     scalar_bytes_be: &[u8; 32],
 ) -> Result<SpendAuthVerificationKey, Error> {
-    let (basepoint_x_be, basepoint_sign) = decode_pallas_point_encoding(&ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES);
+    let (basepoint_x_be, basepoint_sign) =
+        decode_pallas_point_encoding(&ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES);
 
     let mut point = EcPoint::new(CurvesId::Pallas)?;
     point.decompress(&basepoint_x_be, basepoint_sign)?;
