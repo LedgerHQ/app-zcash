@@ -56,9 +56,9 @@ use zeroize::Zeroizing;
 
 use crate::consts::{
     P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
-    P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_HASH_INPUT_START_FIRST,
-    P1_HASH_INPUT_START_NEXT, P1_NEXT, P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE,
-    P2_HASH_INPUT_START_SAPLING,
+    P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE,
+    P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT, P2_FINALIZE_FULL_DEFAULT,
+    P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
 };
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
@@ -118,6 +118,7 @@ pub enum AppSW {
     TechnicalProblem = 0x6F00,
     VersionParsingFail = 0x6F01,
     TxParsingFail = 0x6F02,
+    BadState = 0xB007,
     Ok = StatusWords::Ok as u16,
 }
 
@@ -150,13 +151,29 @@ impl TryFrom<u8> for GetVkMode {
 #[derive(Debug)]
 pub enum Instruction {
     GetVersion,
-    GetPubkey { display: bool },
-    GetVk { mode: GetVkMode },
-    GetTrustedInput { first: bool, next: bool },
-    HashInputStart { first: bool, continue_hashing: bool },
-    HashFinalizeFull { is_change: bool },
+    GetPubkey {
+        display: bool,
+    },
+    GetVk {
+        mode: GetVkMode,
+        continue_response: bool,
+    },
+    GetTrustedInput {
+        first: bool,
+        next: bool,
+    },
+    HashInputStart {
+        first: bool,
+        continue_hashing: bool,
+    },
+    HashFinalizeFull {
+        is_change: bool,
+    },
     HashSign,
-    SignMessage { first: bool, next: bool },
+    SignMessage {
+        first: bool,
+        next: bool,
+    },
 }
 
 impl TryFrom<ApduHeader> for Instruction {
@@ -183,8 +200,9 @@ impl TryFrom<ApduHeader> for Instruction {
             ) => Ok(Instruction::GetPubkey {
                 display: value.p1 == P1_GET_PUBLIC_KEY_DISPLAY,
             }),
-            (INS_GET_VK, _, p2) => Ok(Instruction::GetVk {
+            (INS_GET_VK, p1, p2) if (p1 & !(P1_GET_VK_CONTINUE)) == 0 => Ok(Instruction::GetVk {
                 mode: GetVkMode::try_from(p2)?,
+                continue_response: (value.p1 & P1_GET_VK_CONTINUE) != 0,
             }),
             (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
                 first: p1 == P1_FIRST,
@@ -357,7 +375,10 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
     match ins {
         Instruction::GetVersion => handler_get_version(comm),
         Instruction::GetPubkey { display } => handler_get_public_key(comm, *display),
-        Instruction::GetVk { mode } => handler_get_vk(comm, *mode),
+        Instruction::GetVk {
+            mode,
+            continue_response,
+        } => handler_get_vk(comm, ctx, *mode, *continue_response),
         Instruction::GetTrustedInput { first, next } => {
             handler_get_trusted_input(comm, ctx, *first, *next)
         }
