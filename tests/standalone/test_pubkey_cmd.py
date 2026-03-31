@@ -1,7 +1,10 @@
 import pytest
 
-from application_client.zcash_command_sender import GetVkMode, ZcashCommandSender, Errors
-from application_client.zcash_response_unpacker import unpack_get_public_key_response
+from application_client.zcash_command_sender import ZcashCommandSender, Errors, GetVkMode
+from application_client.zcash_response_unpacker import (
+    unpack_get_public_key_response,
+    unpack_get_ufvk_response,
+)
 from ragger.bip import calculate_public_key_and_chaincode, CurveChoice
 from ragger.error import ExceptionRAPDU
 from application_client.zcash_utils import t_address_from_pubkey
@@ -71,3 +74,17 @@ def test_get_orchard_fvk(backend):
     client = ZcashCommandSender(backend)
     response = client.get_vk(path="m/32'/133'/1'", mode=GetVkMode.ORCHARD_FVK).data
     assert response == REF_ORCHARD_FVK_ACC_1
+
+def test_get_ufvk(backend):
+    REF_UFVK_ACC_0 = "uview1zkk7f8hp2m5v09kq7h29vkgngwhhvgy2ey32cy5j0kp69g7ju2vqjvnue03u99z382rtkgvj3f8vtqdtxfxvgjytezgt39dqc0lyt2sj084jdq4md69snc3wxdcl8uah8sxw3rrt9pnxnfl3r4xnczapts7gr4l0cuell7dcjv36gkdcsl4axps827xt6fgmfl78zlhddec72tn2p0eqnpkuy7a08puhj97v0ahxuqlyzmyqtldqnc0p3696d9ww8x6mpd56mz6w32twryevru2rx34lf8dtqsp50gar"
+    REF_UFVK_ACC_1 = "uview15lcx60j8zufp6qe5xveppqjjw3ukg5n90ln8uhgdxukp60tejk626763gffftfw4a2mjkxy4s9mpjdd6ckfkecz846jdvth57djchnpq7699v09g7eu9xnyyfeqtvm5jxhvpn6dxkzqq3726xwhxmn458a8hd2agvl30r2kz9cde8d8nd3e7akdkufuzp3hyule9v0w3a6qx5p5fx8qa3wvjcj9qg9ypnr56m672rsv9y8fqn20usqzhxmrnmm2jf7gnh8kdk68dyvej9jlsm522w24jvce0lcqpn3mf"
+
+    client = ZcashCommandSender(backend)
+    response = client.get_vk(path="m/32'/133'/0'", mode=GetVkMode.UFVK).data
+    ufvk = unpack_get_ufvk_response(response)
+    assert ufvk == REF_UFVK_ACC_0
+
+    client = ZcashCommandSender(backend)
+    response = client.get_vk(path="m/32'/133'/1'", mode=GetVkMode.UFVK).data
+    ufvk = unpack_get_ufvk_response(response)
+    assert ufvk == REF_UFVK_ACC_1

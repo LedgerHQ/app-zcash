@@ -196,6 +196,7 @@ pub fn handler_get_vk(
             .map_err(|_| AppSW::TechnicalProblem)?;
 
             let ufvk_str = ufvk.encode(&network);
+            info!("UFVK: {}", ufvk_str);
 
             let ufvk_bytes = ufvk_str.as_bytes();
             let len = ufvk_bytes.len() as u16;
