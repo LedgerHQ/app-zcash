@@ -22,6 +22,7 @@ mod app_ui;
 
 mod handlers {
     pub mod get_public_key;
+    pub mod get_shielded_addr;
     pub mod get_trusted_input;
     pub mod get_version;
     pub mod get_vk;
@@ -35,13 +36,14 @@ mod settings;
 mod swap;
 mod tx;
 mod utils;
+mod zip32;
 
 use core::mem;
 
 use app_ui::menu::ui_menu_main;
 use handlers::{
-    get_public_key::handler_get_public_key, get_version::handler_get_version,
-    get_vk::handler_get_vk,
+    get_public_key::handler_get_public_key, get_shielded_addr::handler_get_shielded_addr,
+    get_version::handler_get_version, get_vk::handler_get_vk,
 };
 use ledger_device_sdk::log::{debug, error};
 use ledger_device_sdk::nbgl::StatusType;
@@ -55,10 +57,10 @@ use tx::TxContext;
 use zeroize::Zeroizing;
 
 use crate::consts::{
-    P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
-    P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE, P1_GET_VK_FIRST,
-    P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT, P2_FINALIZE_FULL_DEFAULT,
-    P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
+    INS_GET_SHIELD_ADDR, P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE,
+    P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE,
+    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT,
+    P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
 };
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
@@ -135,6 +137,13 @@ pub enum GetVkMode {
     OrchardFvk = 0x1,
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum GetShieldedAddrMode {
+    UAddress = 0x0,
+    OrchardAddress = 0x1,
+}
+
 impl TryFrom<u8> for GetVkMode {
     type Error = AppSW;
 
@@ -147,12 +156,28 @@ impl TryFrom<u8> for GetVkMode {
     }
 }
 
+impl TryFrom<u8> for GetShieldedAddrMode {
+    type Error = AppSW;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(GetShieldedAddrMode::UAddress),
+            0x01 => Ok(GetShieldedAddrMode::OrchardAddress),
+            _ => Err(AppSW::WrongP1P2),
+        }
+    }
+}
+
 /// Possible input commands received through APDUs.
 #[derive(Debug)]
 pub enum Instruction {
     GetVersion,
     GetPubkey {
         display: bool,
+    },
+    GetShieldedAddr {
+        display: bool,
+        mode: GetShieldedAddrMode,
     },
     GetVk {
         mode: GetVkMode,
@@ -204,6 +229,14 @@ impl TryFrom<ApduHeader> for Instruction {
                 mode: GetVkMode::try_from(p2)?,
                 continue_response: value.p1 == P1_GET_VK_CONTINUE,
             }),
+            (INS_GET_SHIELD_ADDR, p1, p2)
+                if (p1 & !(P1_GET_VK_CONTINUE | P1_GET_PUBLIC_KEY_DISPLAY)) == 0 =>
+            {
+                Ok(Instruction::GetShieldedAddr {
+                    mode: GetShieldedAddrMode::try_from(p2)?,
+                    display: (value.p1 & P1_GET_PUBLIC_KEY_DISPLAY) != 0,
+                })
+            }
             (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
                 first: p1 == P1_FIRST,
                 next: p1 == P1_NEXT,
@@ -379,6 +412,9 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
             mode,
             continue_response,
         } => handler_get_vk(comm, ctx, *mode, *continue_response),
+        Instruction::GetShieldedAddr { mode, display } => {
+            handler_get_shielded_addr(comm, *mode, *display)
+        }
         Instruction::GetTrustedInput { first, next } => {
             handler_get_trusted_input(comm, ctx, *first, *next)
         }

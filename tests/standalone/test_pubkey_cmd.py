@@ -75,6 +75,22 @@ def test_get_orchard_fvk(backend):
     response = client.get_vk(path="m/32'/133'/1'", mode=GetVkMode.ORCHARD_FVK).data
     assert response == REF_ORCHARD_FVK_ACC_1
 
+
+def test_get_orchard_address(backend):
+    REF_ORCHARD_ADDRESS_ACC_0 = "u1u2h4ce7e2cn3z4nzur95muq2dl4da9x8h8kdp2l80gm9nl9raj8zzpx79ycjnfvar4v5exea5pqr5y9qsnlp0cdunwf9yjjx5c4q7ar9"
+    REF_ORCHARD_ADDRESS_ACC_1 = "u1n4d94z4l9zs0kxhhytwyktg3rsmr9u0eagt3kn78j9m3lmnuzswuwn63az5jzfwqmvrfn0g8s3rvvg0wr0pklnkejm6d69hv8u5g6w9e"
+
+    client = ZcashCommandSender(backend)
+    response = client.get_ufvk(path="m/32'/133'/0'", mode=GetUfvkMode.ORCHARD_ADDRESS).data
+    orchard_address = unpack_get_ufvk_response(response)
+    assert orchard_address == REF_ORCHARD_ADDRESS_ACC_0
+
+    client = ZcashCommandSender(backend)
+    response = client.get_ufvk(path="m/32'/133'/1'", mode=GetUfvkMode.ORCHARD_ADDRESS).data
+    orchard_address = unpack_get_ufvk_response(response)
+    assert orchard_address == REF_ORCHARD_ADDRESS_ACC_1
+
+
 def test_get_ufvk(backend):
     REF_UFVK_ACC_0 = "uview1zkk7f8hp2m5v09kq7h29vkgngwhhvgy2ey32cy5j0kp69g7ju2vqjvnue03u99z382rtkgvj3f8vtqdtxfxvgjytezgt39dqc0lyt2sj084jdq4md69snc3wxdcl8uah8sxw3rrt9pnxnfl3r4xnczapts7gr4l0cuell7dcjv36gkdcsl4axps827xt6fgmfl78zlhddec72tn2p0eqnpkuy7a08puhj97v0ahxuqlyzmyqtldqnc0p3696d9ww8x6mpd56mz6w32twryevru2rx34lf8dtqsp50gar"
     REF_UFVK_ACC_1 = "uview15lcx60j8zufp6qe5xveppqjjw3ukg5n90ln8uhgdxukp60tejk626763gffftfw4a2mjkxy4s9mpjdd6ckfkecz846jdvth57djchnpq7699v09g7eu9xnyyfeqtvm5jxhvpn6dxkzqq3726xwhxmn458a8hd2agvl30r2kz9cde8d8nd3e7akdkufuzp3hyule9v0w3a6qx5p5fx8qa3wvjcj9qg9ypnr56m672rsv9y8fqn20usqzhxmrnmm2jf7gnh8kdk68dyvej9jlsm522w24jvce0lcqpn3mf"
