@@ -4,7 +4,7 @@ use ledger_device_sdk::{
     bn::Bn,
     ecc::{
         CurvesId, CxError,
-        math::{CurveDomainParam, EcPoint, Pallas},
+        math::{CurveDomainParam, EcPoint},
     },
 };
 use pasta_curves::pallas;
@@ -121,7 +121,7 @@ fn canonical_scalar_bytes_be(scalar_bytes_le: &[u8; 32]) -> Result<[u8; 32], Err
 
     let scalar = Bn::alloc_init(&scalar_bytes_be)?;
     let mut order = Bn::alloc(32)?;
-    Pallas::domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
+    CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
     if scalar.cmp_bn(&order)? != Ordering::Less {
         return Err(Error::MalformedSigningKey);

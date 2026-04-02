@@ -6,10 +6,7 @@ pub mod redpallas;
 
 use ledger_device_sdk::{
     bn::Bn,
-    ecc::{
-        CxError,
-        math::{CurveDomainParam, Pallas},
-    },
+    ecc::{CurvesId, CxError, math::CurveDomainParam},
     hash::{
         HashError, HashInit as _,
         blake2::{Blake2b_512, Blake2bWithPerso},
@@ -165,7 +162,7 @@ fn canonical_pallas_element_bytes_be(
 
     let element = Bn::alloc_init(&bytes_be)?;
     let mut modulus = Bn::alloc(PALLAS_BYTES)?;
-    Pallas::domain_parameter_bn(modulus_param, &mut modulus)?;
+    CurvesId::Pallas.domain_parameter_bn(modulus_param, &mut modulus)?;
 
     if element.cmp_bn(&modulus)? != core::cmp::Ordering::Less {
         return Err(malformed_error);
@@ -183,7 +180,7 @@ fn reduce_uniform_le_bytes_mod_pallas(
 
     let wide = Bn::alloc_init(&uniform_be)?;
     let mut modulus = Bn::alloc(PALLAS_BYTES)?;
-    Pallas::domain_parameter_bn(modulus_param, &mut modulus)?;
+    CurvesId::Pallas.domain_parameter_bn(modulus_param, &mut modulus)?;
 
     let reduced = Bn::alloc(PALLAS_BYTES)?;
     reduced.reduce(&wide, &modulus)?;
