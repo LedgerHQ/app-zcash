@@ -236,6 +236,7 @@ fn mac_u64(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
     (ret as u64, (ret >> 64) as u64)
 }
 
+// NOTE: These tests can only be run manually by calling test functions from device code.
 #[cfg(test)]
 mod tests {
     use super::{repr_to_montgomery_u64x4_ledger_sdk, repr_to_montgomery_u64x4_pasta};

@@ -8,7 +8,7 @@ use ledger_device_sdk::io::Comm;
 use ledger_device_sdk::ecc::Pallas;
 
 use crate::utils::HexSlice;
-use crate::{AppSW, GetUfvkMode, utils::bip32_path::Bip32Path};
+use crate::{AppSW, GetVkMode, utils::bip32_path::Bip32Path};
 
 fn map_ledger_crypto_error(err: ledger_zcash_crypto::Error) -> AppSW {
     match err {
@@ -28,7 +28,7 @@ fn derive_orchard_fvk_bytes(sk: Secret<32>) -> Result<[u8; 96], AppSW> {
 
 #[cfg(feature = "test_zip32_stub")]
 /// Stub implementation for testing with Speculos without ZIP32 key derivation.
-fn derive_orchard_child_keys(path: &[u32], cc: &mut ChainCode) -> Result<Secret<32>, AppSW> {
+fn stub_derive_orchard_child_keys(path: &[u32], cc: &mut ChainCode) -> Result<Secret<32>, AppSW> {
     // -----------------------  Default speculos seed ---------------------------------
     // * glory promote mansion idle axis finger extra february uncover one trip
     // * resource lawn turtle enact monster seven myth punch hobby comfort wild raise
@@ -88,16 +88,16 @@ fn derive_orchard_child_keys(path: &[u32], cc: &mut ChainCode) -> Result<Secret<
     Ok(sk)
 }
 
-pub fn handler_get_ufvk(comm: &mut Comm, _display: bool, mode: GetUfvkMode) -> Result<(), AppSW> {
+pub fn handler_get_vk(comm: &mut Comm, mode: GetVkMode) -> Result<(), AppSW> {
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
     let path = Bip32Path::try_from(data)?;
     let path_slice = path.as_slice();
 
-    let mut _cc = ChainCode::default();
+    let mut cc = ChainCode::default();
 
     #[cfg(feature = "test_zip32_stub")]
-    let sk = derive_orchard_child_keys(path_slice, &mut _cc)?;
+    let sk = stub_derive_orchard_child_keys(path_slice, &mut cc)?;
 
     #[cfg(not(feature = "test_zip32_stub"))]
     let sk = Pallas::zip32_orchard_derive(path_slice, (&mut _cc).into(), None);
@@ -106,7 +106,7 @@ pub fn handler_get_ufvk(comm: &mut Comm, _display: bool, mode: GetUfvkMode) -> R
     info!("Orchard FVK: {}", HexSlice(&orchard_fvk));
 
     match mode {
-        GetUfvkMode::OrchardFvk => comm.append(&orchard_fvk),
+        GetVkMode::OrchardFvk => comm.append(&orchard_fvk),
         _ => unimplemented!("Going to be implemented in the next PRs"),
     }
 

@@ -14,7 +14,7 @@ pub const INS_HASH_SIGN: u8 = 0x48;
 pub const INS_HASH_INPUT_FINALIZE_FULL: u8 = 0x4A;
 pub const INS_SIGN_MESSAGE: u8 = 0x4E;
 pub const INS_GET_FIRMWARE_VERSION: u8 = 0xC4;
-pub const INS_GET_UFVK: u8 = 0x50;
+pub const INS_GET_VK: u8 = 0x50;
 
 pub const P1_FIRST: u8 = 0x00;
 pub const P1_NEXT: u8 = 0x80;

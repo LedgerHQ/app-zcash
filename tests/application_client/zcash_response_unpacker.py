@@ -76,11 +76,3 @@ def unpack_trusted_input_response(response: bytes) -> Tuple[bytes, int, int, byt
     assert magic == MAGIC_TRUSTED_INPUT
 
     return (txid, trusted_input_idx, amount, sign, nonce)
-
-def _unpack_get_ufvk_response(response: bytes) -> str:
-    ufvk_len = int.from_bytes(response[:2], byteorder="big")
-    ufvk = response[2:2 + ufvk_len].decode("utf-8")
-
-    assert len(response) == 2 + ufvk_len
-
-    return ufvk
