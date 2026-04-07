@@ -62,21 +62,20 @@ class InsType(IntEnum):
     GET_VERSION = 0xC4
     GET_APP_NAME = 0x04
     GET_WALLET_PUBLIC_KEY = 0x40
-    GET_VK = 0x50
     GET_TRUSTED_INPUT = 0x42
     HASH_INPUT_START = 0x44
     HASH_INPUT_FINALIZE_FULL = 0x4A
     HASH_SIGN = 0x48
+    GET_VK = 0x50
+    GET_SHIELDED_ADDRESS = 0x51
 
 class GetVkMode(IntEnum):
     UFVK = 0x00
     ORCHARD_FVK = 0x01
 
-class GetUfvkMode(IntEnum):
-    UFVK = 0x00
-    ORCHARD_ADDRESS = 0x01
-    ORCHARD_FVK = 0x02
-
+class GetShieldedAddressMode(IntEnum):
+    UADDRESS = 0x00
+    ORCHARD_RAW_ADDRESS = 0x01
 
 class Errors(IntEnum):
     SW_DENY = 0x6985
@@ -157,6 +156,15 @@ class ZcashCommandSender:
             ins=InsType.GET_WALLET_PUBLIC_KEY,
             p1=P1.P1_FIRST,
             p2=P2.P2_NONE,
+            data=pack_derivation_path(path),
+        )
+
+    def get_shielded_address(self, path: str, mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS) -> RAPDU:
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.GET_SHIELDED_ADDRESS,
+            p1=P1.P1_FIRST,
+            p2=mode,
             data=pack_derivation_path(path),
         )
 
