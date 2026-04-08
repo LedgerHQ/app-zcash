@@ -56,7 +56,7 @@ use zeroize::Zeroizing;
 
 use crate::consts::{
     P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
-    P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE,
+    P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE, P1_GET_VK_FIRST,
     P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT, P2_FINALIZE_FULL_DEFAULT,
     P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
 };
@@ -200,9 +200,9 @@ impl TryFrom<ApduHeader> for Instruction {
             ) => Ok(Instruction::GetPubkey {
                 display: value.p1 == P1_GET_PUBLIC_KEY_DISPLAY,
             }),
-            (INS_GET_VK, p1, p2) if (p1 & !(P1_GET_VK_CONTINUE)) == 0 => Ok(Instruction::GetVk {
+            (INS_GET_VK, P1_GET_VK_FIRST | P1_GET_VK_CONTINUE, p2) => Ok(Instruction::GetVk {
                 mode: GetVkMode::try_from(p2)?,
-                continue_response: (value.p1 & P1_GET_VK_CONTINUE) != 0,
+                continue_response: value.p1 == P1_GET_VK_CONTINUE,
             }),
             (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
                 first: p1 == P1_FIRST,
