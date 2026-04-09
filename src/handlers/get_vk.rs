@@ -12,7 +12,7 @@ use crate::zip32::{
     derive_transparent_account_pubkey, orchard_network,
 };
 use crate::{
-    AppSW, GetVkMode,
+    AppSW, P2VkMode,
     tx::{PendingVkResponse, TxContext},
     utils::bip32_path::Bip32Path,
 };
@@ -35,7 +35,7 @@ fn append_pending_vk_chunk(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), A
 pub fn handler_get_vk(
     comm: &mut Comm,
     ctx: &mut TxContext,
-    mode: GetVkMode,
+    mode: P2VkMode,
     continue_response: bool,
 ) -> Result<(), AppSW> {
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
@@ -54,8 +54,8 @@ pub fn handler_get_vk(
     let orchard_fvk = derive_orchard_fvk(&path)?;
 
     let response_bytes = match mode {
-        GetVkMode::OrchardFvk => orchard_fvk.to_bytes().to_vec(),
-        GetVkMode::Ufvk => {
+        P2VkMode::OrchardFvk => orchard_fvk.to_bytes().to_vec(),
+        P2VkMode::Ufvk => {
             let transparent_bytes = derive_transparent_account_pubkey(
                 &convert_orchard_path_to_transparent_path(&path)?,
             )?;

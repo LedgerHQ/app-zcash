@@ -61,6 +61,7 @@ use crate::consts::{
     P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE,
     P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT,
     P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
+    P2ShieldedAddrMode, P2VkMode,
 };
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
@@ -130,44 +131,6 @@ impl From<AppSW> for Reply {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-#[repr(u8)]
-pub enum GetVkMode {
-    Ufvk = 0x0,
-    OrchardFvk = 0x1,
-}
-
-#[derive(Debug, Clone, Copy)]
-#[repr(u8)]
-pub enum GetShieldedAddrMode {
-    UAddress = 0x0,
-    OrchardAddress = 0x1,
-}
-
-impl TryFrom<u8> for GetVkMode {
-    type Error = AppSW;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0x00 => Ok(GetVkMode::Ufvk),
-            0x01 => Ok(GetVkMode::OrchardFvk),
-            _ => Err(AppSW::WrongP1P2),
-        }
-    }
-}
-
-impl TryFrom<u8> for GetShieldedAddrMode {
-    type Error = AppSW;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0x00 => Ok(GetShieldedAddrMode::UAddress),
-            0x01 => Ok(GetShieldedAddrMode::OrchardAddress),
-            _ => Err(AppSW::WrongP1P2),
-        }
-    }
-}
-
 /// Possible input commands received through APDUs.
 #[derive(Debug)]
 pub enum Instruction {
@@ -177,10 +140,10 @@ pub enum Instruction {
     },
     GetShieldedAddr {
         display: bool,
-        mode: GetShieldedAddrMode,
+        mode: P2ShieldedAddrMode,
     },
     GetVk {
-        mode: GetVkMode,
+        mode: P2VkMode,
         continue_response: bool,
     },
     GetTrustedInput {
@@ -226,14 +189,14 @@ impl TryFrom<ApduHeader> for Instruction {
                 display: value.p1 == P1_GET_PUBLIC_KEY_DISPLAY,
             }),
             (INS_GET_VK, P1_GET_VK_FIRST | P1_GET_VK_CONTINUE, p2) => Ok(Instruction::GetVk {
-                mode: GetVkMode::try_from(p2)?,
+                mode: P2VkMode::try_from(p2)?,
                 continue_response: value.p1 == P1_GET_VK_CONTINUE,
             }),
             (INS_GET_SHIELD_ADDR, p1, p2)
                 if (p1 & !(P1_GET_VK_CONTINUE | P1_GET_PUBLIC_KEY_DISPLAY)) == 0 =>
             {
                 Ok(Instruction::GetShieldedAddr {
-                    mode: GetShieldedAddrMode::try_from(p2)?,
+                    mode: P2ShieldedAddrMode::try_from(p2)?,
                     display: (value.p1 & P1_GET_PUBLIC_KEY_DISPLAY) != 0,
                 })
             }

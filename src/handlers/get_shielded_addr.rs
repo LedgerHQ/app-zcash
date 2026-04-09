@@ -7,11 +7,11 @@ use ledger_device_sdk::io::Comm;
 use crate::utils::bip32_path::Bip32Path;
 use crate::utils::{HexSlice, encode_string_response};
 use crate::zip32::{map_ledger_crypto_error, orchard_network};
-use crate::{AppSW, GetShieldedAddrMode, zip32::derive_orchard_fvk};
+use crate::{AppSW, P2ShieldedAddrMode, zip32::derive_orchard_fvk};
 
 pub fn handler_get_shielded_addr(
     comm: &mut Comm,
-    mode: GetShieldedAddrMode,
+    mode: P2ShieldedAddrMode,
     _display: bool,
 ) -> Result<(), AppSW> {
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
@@ -21,7 +21,7 @@ pub fn handler_get_shielded_addr(
     let orchard_fvk = derive_orchard_fvk(&path)?;
 
     let resp = match mode {
-        GetShieldedAddrMode::OrchardAddress => {
+        P2ShieldedAddrMode::OrchardAddress => {
             let ivk = orchard_fvk
                 .to_ivk_ledger(Scope::External)
                 .map_err(map_ledger_crypto_error)?;
@@ -36,7 +36,7 @@ pub fn handler_get_shielded_addr(
 
             orchard_address.to_raw_address_bytes().to_vec()
         }
-        GetShieldedAddrMode::UAddress => {
+        P2ShieldedAddrMode::UAddress => {
             let ivk = orchard_fvk
                 .to_ivk_ledger(Scope::External)
                 .map_err(map_ledger_crypto_error)?;
