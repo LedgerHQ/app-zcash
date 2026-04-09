@@ -10,13 +10,29 @@ use ledger_device_sdk::{
 
 use crate::{Error, bytes::reverse_copy, to_pallas_base_bytes};
 
+// `hash_to_field_pallas` below is a Ledger-port of `pasta_curves::hashtocurve::hash_to_field`.
+// In the original code these are `R_IN_BYTES = 128` and `CHUNKLEN = 64`.
 const BLAKE2B_BLOCK_BYTES: usize = 128;
 const BLAKE2B_HASH_BYTES: usize = 64;
+
+// `pasta_curves` uses `let personal = [0u8; 16]`; we keep the same all-zero
+// BLAKE2b personalization so the XMD expansion matches upstream exactly.
 const BLAKE2B_ZERO_PERSONALIZATION: [u8; 16] = [0; 16];
+
+// Domain separation pieces copied from `pasta_curves` hash-to-curve for Pallas.
 const PALLAS_CURVE_ID: &str = "pallas";
 const HASH_TO_CURVE_SUFFIX: &[u8] = b"_XMD:BLAKE2b_SSWU_RO_";
+
+// Orchard-specific DST prefix, from `orchard::constants::KEY_DIVERSIFICATION_PERSONALIZATION`:
+// "SWU hash-to-curve personalization for the group hash for key diversification".
 const ORCHARD_DIVERSIFY_HASH_PERSONALIZATION: &str = "z.cash:Orchard-gd";
+
+// Tonelli-Shanks parameters for the Pallas base field, copied from
+// `pasta_curves::fields::fp.rs`.
 const PALLAS_S: u32 = 32;
+
+// `(t - 1) // 2` where `t * 2^s + 1 = p` with `t` odd.
+// Used by `sqrt()` to raise into the Tonelli-Shanks exponent.
 const PALLAS_T_MINUS1_OVER2: [u64; 4] = [
     0x04a67c8dcc969876,
     0x0000000011234c7e,
@@ -24,12 +40,17 @@ const PALLAS_T_MINUS1_OVER2: [u64; 4] = [
     0x0000000020000000,
 ];
 
+// Pallas base field modulus `p`, from `pasta_curves::fields::fp.rs`:
+// `p = 0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001`.
 const PALLAS_MODULUS: Fp = Fp::from_raw([
     0x992d30ed00000001,
     0x224698fc094cf91b,
     0x0000000000000000,
     0x4000000000000000,
 ]);
+
+// Coefficients of the auxiliary `iso-pallas` curve, copied from
+// `pasta_curves::curves.rs` (`new_curve_impl!(IsoEp, ..., "iso-pallas", a, b, ...)`).
 const ISO_PALLAS_A: Fp = Fp::from_raw([
     0x92bb4b0b657a014b,
     0xb74134581a27a59f,
@@ -37,24 +58,36 @@ const ISO_PALLAS_A: Fp = Fp::from_raw([
     0x18354a2eb0ea8c9c,
 ]);
 const ISO_PALLAS_B: Fp = Fp::from_raw([1265, 0, 0, 0]);
+
+// SSWU parameter for Pallas, from `pasta_curves::curves::Ep`.
+// Original upstream comment: `Z = -13`.
 const PALLAS_Z: Fp = Fp::from_raw([
     0x992d30ecfffffff4,
     0x224698fc094cf91b,
     0x0000000000000000,
     0x4000000000000000,
 ]);
+
+// Precomputed square root used by the optimized SSWU map.
+// Original upstream comment: `(F::ROOT_OF_UNITY.invert().unwrap() * z).sqrt().unwrap()`.
 const PALLAS_THETA: Fp = Fp::from_raw([
     0xca330bcc09ac318e,
     0x51f64fc4dc888857,
     0x4647aef782d5cdc8,
     0x0f7bdb65814179b4,
 ]);
+
+// `GENERATOR^t where t * 2^s + 1 = p` with `t` odd; in other words, this is a `2^s` root of unity.
+// Used by Tonelli-Shanks in `sqrt()` and by `sqrt_ratio()`.
 const PALLAS_ROOT_OF_UNITY: Fp = Fp::from_raw([
     0xbdad6fabd87ea32f,
     0xea322bf2b7bb7584,
     0x362120830561f81a,
     0x2bce74deac30ebda,
 ]);
+
+// Constants for the degree-3 isogeny from `iso-pallas` to `pallas`, copied from
+// `pasta_curves::curves::Ep::ISOGENY_CONSTANTS`.
 const PALLAS_ISOGENY_CONSTANTS: [Fp; 13] = [
     Fp::from_raw([
         0x775f6034aaaaaaab,
