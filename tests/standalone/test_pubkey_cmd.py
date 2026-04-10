@@ -101,7 +101,7 @@ def test_get_orchard_address_raw(backend):
     orchard_address_raw = client.get_shielded_address(path="m/32'/133'/1'", mode=GetShieldedAddressMode.ORCHARD_RAW_ADDRESS).data
     assert orchard_address_raw == REF_ORCHARD_ADDRESS_RAW_ACC_1
 
-def test_get_orchard_uaddress(backend):
+def test_get_orchard_uaddress_no_confirm(backend):
     REF_ORCHARD_ADDRESS_ACC_0 = "u1u2h4ce7e2cn3z4nzur95muq2dl4da9x8h8kdp2l80gm9nl9raj8zzpx79ycjnfvar4v5exea5pqr5y9qsnlp0cdunwf9yjjx5c4q7ar9"
     REF_ORCHARD_ADDRESS_ACC_1 = "u1n4d94z4l9zs0kxhhytwyktg3rsmr9u0eagt3kn78j9m3lmnuzswuwn63az5jzfwqmvrfn0g8s3rvvg0wr0pklnkejm6d69hv8u5g6w9e"
 
@@ -114,3 +114,27 @@ def test_get_orchard_uaddress(backend):
     response = client.get_shielded_address(path="m/32'/133'/1'", mode=GetShieldedAddressMode.UADDRESS).data
     orchard_address = unpack_get_ufvk_response(response)
     assert orchard_address == REF_ORCHARD_ADDRESS_ACC_1
+
+def test_get_orchard_uaddress_confirm_accepted(backend, scenario_navigator):
+    REF_ORCHARD_ADDRESS_ACC_0 = "u1u2h4ce7e2cn3z4nzur95muq2dl4da9x8h8kdp2l80gm9nl9raj8zzpx79ycjnfvar4v5exea5pqr5y9qsnlp0cdunwf9yjjx5c4q7ar9"
+
+    client = ZcashCommandSender(backend)
+    path = "m/32'/133'/0'"
+
+    with client.get_shielded_address_with_confirmation(path=path, mode=GetShieldedAddressMode.UADDRESS):
+        scenario_navigator.address_review_approve()
+
+    response = client.get_async_response().data
+    orchard_address = unpack_get_ufvk_response(response)
+    assert orchard_address == REF_ORCHARD_ADDRESS_ACC_0
+
+def test_get_orchard_uaddress_confirm_refused(backend, scenario_navigator):
+    client = ZcashCommandSender(backend)
+    path = "m/32'/133'/0'"
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.get_shielded_address_with_confirmation(path=path, mode=GetShieldedAddressMode.UADDRESS):
+            scenario_navigator.address_review_reject()
+
+    assert e.value.status == Errors.SW_DENY
+    assert len(e.value.data) == 0

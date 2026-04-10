@@ -4,6 +4,7 @@ use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
 use ledger_device_sdk::info;
 use ledger_device_sdk::io::Comm;
 
+use crate::app_ui::address::ui_display_unified_address;
 use crate::utils::bip32_path::Bip32Path;
 use crate::utils::{HexSlice, encode_string_response};
 use crate::zip32::{map_ledger_crypto_error, orchard_network};
@@ -12,7 +13,7 @@ use crate::{AppSW, P2ShieldedAddrMode, zip32::derive_orchard_fvk};
 pub fn handler_get_shielded_addr(
     comm: &mut Comm,
     mode: P2ShieldedAddrMode,
-    _display: bool,
+    display: bool,
 ) -> Result<(), AppSW> {
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
@@ -54,6 +55,11 @@ pub fn handler_get_shielded_addr(
 
             let orchard_address_str = orchard_address.encode(&network);
             info!("Orchard UAddress: {}", orchard_address_str);
+
+            // Display address on device if requested
+            if display && !ui_display_unified_address(&orchard_address_str)? {
+                return Err(AppSW::Deny);
+            }
 
             encode_string_response(&orchard_address_str)
         }

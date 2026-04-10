@@ -210,29 +210,6 @@ class ZcashCommandSender:
         return ApduResponse(status=response.status, data=bytes(response_data))
 
     @contextmanager
-    def get_vk_async(
-        self,
-        path: str,
-        mode: GetVkMode = GetVkMode.UFVK,
-    ) -> Generator[None, None, None]:
-        self.last_response = None
-
-        with self.backend.exchange_async(
-            cla=CLA,
-            ins=InsType.GET_VK,
-            p1=P1.P1_FIRST,
-            p2=mode,
-            data=pack_derivation_path(path),
-        ) as response:
-            yield response
-
-        if self.backend.last_async_response is not None:
-            self.last_response = self._collect_ufvk_response(
-                self.backend.last_async_response,
-                mode,
-            )
-
-    @contextmanager
     def get_public_key_with_confirmation(
         self, path: str
     ) -> Generator[None, None, None]:
@@ -241,6 +218,21 @@ class ZcashCommandSender:
             ins=InsType.GET_WALLET_PUBLIC_KEY,
             p1=P1.P1_GET_PUBLIC_KEY_DISPLAY,
             p2=P2.P2_NONE,
+            data=pack_derivation_path(path),
+        ) as response:
+            yield response
+
+    @contextmanager
+    def get_shielded_address_with_confirmation(
+        self,
+        path: str,
+        mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS,
+    ) -> Generator[None, None, None]:
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.GET_SHIELDED_ADDRESS,
+            p1=P1.P1_GET_PUBLIC_KEY_DISPLAY,
+            p2=mode,
             data=pack_derivation_path(path),
         ) as response:
             yield response

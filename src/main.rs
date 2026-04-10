@@ -244,6 +244,13 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
         (Instruction::GetPubkey { display: true }, AppSW::Deny | AppSW::Ok) => {
             (true, StatusType::Address)
         }
+        (
+            Instruction::GetShieldedAddr {
+                display: true,
+                mode: P2ShieldedAddrMode::UAddress,
+            },
+            AppSW::Deny | AppSW::Ok,
+        ) => (true, StatusType::Address),
         (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
         | (Instruction::HashSign, AppSW::Ok)
             if tx_ctx.is_finished() =>
