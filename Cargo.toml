@@ -5,7 +5,7 @@ authors = ["Ledger"]
 edition = "2024"
 
 [dependencies]
-ledger_device_sdk = { version = "1.34.0", features = ["sys"] }
+ledger_device_sdk = {git = "https://github.com/LedgerHQ/ledger-device-rust-sdk", branch = "mbr/test-stack-apdu", features = ["sys", "stack_usage"] }
 core2 = { version = "0.3.0", default-features = false }
 hex = { version = "0.4.3", default-features = false, features = [
     "serde",
@@ -43,6 +43,7 @@ lto = 'fat'
 
 [features]
 default = ["ledger_device_sdk/nano_nbgl", "legacy_path"]
+stack_usage = []
 
 # Enables debug logging
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
