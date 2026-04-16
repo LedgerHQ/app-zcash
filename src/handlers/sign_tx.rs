@@ -15,8 +15,6 @@
  *  limitations under the License.
  *****************************************************************************/
 use ledger_device_sdk::ecc::{Secp256k1, SeedDerive as _};
-use ledger_device_sdk::hash::HashInit;
-use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::io::Comm;
 use ledger_device_sdk::log::{debug, error, info};
 
@@ -166,7 +164,11 @@ fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
     Ok((locktime, sighash_type, expiry_height))
 }
 
-pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
+pub fn handler_hash_sign(
+    comm: &mut Comm,
+    ctx: &mut TxContext,
+    sign_digest: bool,
+) -> Result<(), AppSW> {
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
     if data.is_empty() {
@@ -217,10 +219,15 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
 
-    // Finalize hash
-    compute_signature_and_append(
+    if sign_digest {
+        debug!("Returning signature digest only");
+        comm.append(&ctx.tx_info.signature_digest);
+        return Ok(());
+    }
+
+    append_signature(
         comm,
-        &mut ctx.hashers.tx_full_hasher,
+        &ctx.tx_info.signature_digest,
         &path,
         ctx.tx_info.sighash_type,
         true,
@@ -231,12 +238,14 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         .already_signed_input_count
         .saturating_add(1);
 
+    let expected_signatures = core::cmp::max(ctx.tx_signing_state.total_input_count, 1);
+
     info!(
         "Signed input {}/{}",
-        ctx.tx_signing_state.already_signed_input_count, ctx.tx_signing_state.total_input_count
+        ctx.tx_signing_state.already_signed_input_count, expected_signatures
     );
 
-    if ctx.tx_signing_state.already_signed_input_count == ctx.tx_signing_state.total_input_count {
+    if ctx.tx_signing_state.already_signed_input_count == expected_signatures {
         info!("All inputs have been signed, TX signing is finished");
         ctx.set_finished();
     }
@@ -244,26 +253,21 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
     Ok(())
 }
 
-fn compute_signature_and_append(
+fn append_signature(
     comm: &mut Comm,
-    tx_full_hasher: &mut Blake2b_256,
+    sig_hash: &[u8; 32],
     path: &Bip32Path,
     sighash_type: u8,
     deterministic_sign: bool,
 ) -> Result<(), AppSW> {
-    let mut hash = [0u8; 32];
-    tx_full_hasher
-        .finalize(&mut hash)
-        .map_err(|_| AppSW::TechnicalProblem)?;
-
-    debug!("Final TX hash: {}", HexSlice(&hash));
+    debug!("Final TX hash: {}", HexSlice(sig_hash));
 
     let (p, _chain_code) = Secp256k1::derive_from(path.as_slice());
 
     let (mut sig, sig_len, info) = if deterministic_sign {
-        p.deterministic_sign(&hash)
+        p.deterministic_sign(sig_hash)
     } else {
-        p.sign(&hash)
+        p.sign(sig_hash)
     }
     .map_err(|_| AppSW::TechnicalProblem)?;
 

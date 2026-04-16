@@ -37,6 +37,8 @@ pub const P1_FINALIZE_FULL_LAST: u8 = 0x80;
 pub const P1_FINALIZE_FULL_CHANGEINFO: u8 = 0xFF;
 pub const P2_FINALIZE_FULL_DEFAULT: u8 = 0x00;
 
+pub const P1_HASH_SIGN_DIGEST: u8 = 0x01;
+
 pub const TRUSTED_INPUT_SIZE: usize = 2 + 2 + 32 + 4 + 8; // magic + rand + txid + idx + amount
 pub const TRUSTED_INPUT_TOTAL_SIZE: usize = TRUSTED_INPUT_SIZE + 8;
 
