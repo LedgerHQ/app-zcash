@@ -43,6 +43,8 @@ class P1(IntEnum):
     P1_FINALIZE_FULL_LAST = 0x80
     # Parameter 1 for change information for HASH_INPUT_FINALIZE_FULL.
     P1_FINALIZE_FULL_CHANGEINFO = 0xFF
+    # Debug parameter 1 for HASH_SIGN to return the transaction signature digest.
+    P1_HASH_SIGN_DIGEST = 0x01
 
 class P2(IntEnum):
     # Parameter 2 default value
@@ -323,9 +325,12 @@ class ZcashCommandSender:
         self._send_trusted_inputs_and_header(continue_hashing=False)
 
         # Send outputs chunks
-        outputs: dict = self.tx_chunks["outputs"] # type: ignore
+        outputs: list[dict] = self.tx_chunks["outputs"] # type: ignore
+        shielded_prefix: bytes = self.tx_chunks["shielded_prefix"] # type: ignore
+        shielded_chunks: list[bytes] = self.tx_chunks["shielded_chunks"] # type: ignore
         outputs_num = len(outputs)
         outputs_num_bytes = outputs_num.to_bytes(1, byteorder="big")
+        finalize_chunks: list[bytes] = []
 
         if change_path:
             self.backend.exchange(
@@ -336,36 +341,47 @@ class ZcashCommandSender:
                 data=pack_derivation_path(change_path),
             )
 
-        for out in outputs[:-1]:
+        for idx, out in enumerate(outputs):
             value = out["value"]
             script = out["script"]
             script_len = len(script)
+            prefix = outputs_num_bytes if idx == 0 else b""
+            suffix = shielded_prefix if idx == len(outputs) - 1 else b""
 
+            finalize_chunks.append(
+                prefix + value + script_len.to_bytes(1, byteorder="big") + script + suffix
+            )
+
+        if not outputs:
+            finalize_chunks.append(outputs_num_bytes + shielded_prefix)
+
+        finalize_chunks.extend(shielded_chunks)
+
+        for chunk in finalize_chunks[:-1]:
             self.backend.exchange(
                 cla=CLA,
                 ins=InsType.HASH_INPUT_FINALIZE_FULL,
                 p1=P1.P1_FINALIZE_FULL_MORE,
                 p2=P2.P2_FINALIZE_FULL_DEFAULT,
-                data=outputs_num_bytes + value + script_len.to_bytes(1, byteorder="big") + script,
+                data=chunk,
             )
-
-            outputs_num_bytes = b""
-
-        value = outputs[-1]["value"]
-        script = outputs[-1]["script"]
-        script_len = len(script)
 
         with self.backend.exchange_async(
             cla=CLA,
             ins=InsType.HASH_INPUT_FINALIZE_FULL,
             p1=P1.P1_FINALIZE_FULL_MORE,
             p2=P2.P2_FINALIZE_FULL_DEFAULT,
-            data=outputs_num_bytes + value + script_len.to_bytes(1, byteorder="big") + script,
+            data=finalize_chunks[-1],
         ) as response:
             yield response
 
     def hash_sign(
-        self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01
+        self,
+        path: str,
+        locktime: int,
+        expiry: int,
+        sighash_type: int = 0x01,
+        sign_digest: bool = False,
     ) -> RAPDU:
         # Send extra header data
         self.backend.exchange(
@@ -384,7 +400,7 @@ class ZcashCommandSender:
         return self.backend.exchange(
             cla=CLA,
             ins=InsType.HASH_SIGN,
-            p1=P1.P1_FIRST,
+            p1=P1.P1_HASH_SIGN_DIGEST if sign_digest else P1.P1_FIRST,
             p2=P2.P2_NONE,
             data=pack_derivation_path(path)
             + 0x00.to_bytes(1, byteorder="big")

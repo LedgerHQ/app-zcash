@@ -1,12 +1,9 @@
 import hashlib
 from io import BytesIO
 
-from ecdsa.curves import SECP256k1
-from ecdsa.keys import VerifyingKey
-from ecdsa.util import sigdecode_der
 from application_client.zcash_utils import read_varint
 
-# pylint: disable=R0917, R0914
+# pylint: disable=R0914, R0917
 
 ZCASH_HEADERS_HASH_PERSONALIZATION = b"ZTxIdHeadersHash"
 ZCASH_TRANSPARENT_HASH_PERSONALIZATION = b"ZTxIdTranspaHash"
@@ -19,16 +16,28 @@ ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION = b"Zcash___TxInHash"
 ZCASH_TX_PERSONALIZATION_PREFIX = b"ZcashTxHash_"
 ZCASH_SAPLING_HASH_PERSONALIZATION = b"ZTxIdSaplingHash"
 ZCASH_ORCHARD_HASH_PERSONALIZATION = b"ZTxIdOrchardHash"
+ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION = b"ZTxIdOrcActCHash"
+ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION = b"ZTxIdOrcActMHash"
+ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION = b"ZTxIdOrcActNHash"
+
+ORCHARD_ACTION_COMPACT_SIZE = 32 + 32 + 32 + 52
+ORCHARD_ACTION_NONCOMPACT_SIZE = 32 + 32 + 16 + 80
+ORCHARD_MEMO_SIZE = 512
+ORCHARD_DIGEST_DATA_SIZE = 1 + 8 + 32
+
 
 def check_tx_v5_signature_validity(
     public_key: bytes,
     signature: bytes,
     tx_bytes: bytes,
-    input_index: int,
+    input_index: int | None,
     input_amounts: list[int],
     sighash_type: int = 0x01,
 ) -> bool:
-    # Reset signature first bit (parity info) if set
+    from ecdsa.curves import SECP256k1
+    from ecdsa.keys import VerifyingKey
+    from ecdsa.util import sigdecode_der
+
     signature = bytearray(signature)
     signature[0] &= 0xFE
     signature = bytes(signature)
@@ -44,24 +53,99 @@ def check_tx_v5_signature_validity(
     return pk.verify_digest(signature=signature, digest=sighash, sigdecode=sigdecode_der)
 
 
+def nu5_txid_digests(tx_bytes: bytes) -> dict[str, bytes]:
+    tx = _parse_v5_tx(tx_bytes)
+    return _nu5_txid_digests(tx)
+
+
+def nu5_signature_digests(
+    tx_bytes: bytes,
+    input_amounts: list[int],
+    sighash_type: int = 0x01,
+    input_index: int | None = None,
+) -> dict[str, bytes]:
+    tx = _parse_v5_tx(tx_bytes)
+    return _nu5_signature_digests(
+        tx=tx,
+        input_amounts=input_amounts,
+        sighash_type=sighash_type,
+        input_index=input_index,
+    )
+
+
 def _nu5_signature_hash(
     tx_bytes: bytes,
-    input_index: int,
+    input_index: int | None,
     input_amounts: list[int],
     sighash_type: int,
 ) -> bytes:
-    tx = _parse_v5_tx(tx_bytes)
+    return nu5_signature_digests(
+        tx_bytes=tx_bytes,
+        input_amounts=input_amounts,
+        sighash_type=sighash_type,
+        input_index=input_index,
+    )["final_digest"]
+
+
+def _nu5_txid_digests(tx: dict) -> dict[str, bytes]:
     inputs = tx["inputs"]
     outputs = tx["outputs"]
 
-    if not 0 <= input_index < len(inputs):
-        raise ValueError(f"Input index out of range: {input_index}")
+    prevouts_hash = _blake2b_256(
+        ZCASH_PREVOUTS_HASH_PERSONALIZATION,
+        b"".join(inp["prev_txid"] + inp["prev_vout"] for inp in inputs),
+    )
+    sequence_hash = _blake2b_256(
+        ZCASH_SEQUENCE_HASH_PERSONALIZATION,
+        b"".join(inp["sequence"] for inp in inputs),
+    )
+    outputs_hash = _blake2b_256(
+        ZCASH_OUTPUTS_HASH_PERSONALIZATION,
+        b"".join(
+            out["value"]
+            + _write_compactsize(len(out["script"]))
+            + out["script"]
+            for out in outputs
+        ),
+    )
+
+    header_digest = _header_digest(tx)
+    transparent_digest = _blake2b_256(
+        ZCASH_TRANSPARENT_HASH_PERSONALIZATION,
+        prevouts_hash + sequence_hash + outputs_hash,
+    )
+    sapling_digest = _blake2b_256(ZCASH_SAPLING_HASH_PERSONALIZATION, b"")
+    orchard_digest = _orchard_digest(tx)
+
+    return {
+        "header_digest": header_digest,
+        "transparent_digest": transparent_digest,
+        "sapling_digest": sapling_digest,
+        "orchard_digest": orchard_digest,
+        "final_digest": _final_digest(
+            tx["branch_id"],
+            header_digest,
+            transparent_digest,
+            sapling_digest,
+            orchard_digest,
+        ),
+    }
+
+
+def _nu5_signature_digests(
+    tx: dict,
+    input_amounts: list[int],
+    sighash_type: int,
+    input_index: int | None,
+) -> dict[str, bytes]:
+    inputs = tx["inputs"]
+    outputs = tx["outputs"]
 
     if len(input_amounts) != len(inputs):
         raise ValueError("Input amounts length mismatch")
 
-    locktime = tx["locktime"]
-    expiry_height = tx["expiry"]
+    if input_index is not None and not 0 <= input_index < len(inputs):
+        raise ValueError(f"Input index out of range: {input_index}")
 
     prevouts_hash = _blake2b_256(
         ZCASH_PREVOUTS_HASH_PERSONALIZATION,
@@ -84,25 +168,30 @@ def _nu5_signature_hash(
         ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION,
         b"".join(_int64_le_bytes(amount) for amount in input_amounts),
     )
-
     scripts_hash = _blake2b_256(
         ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
         b"".join(_write_compactsize(len(inp["script"])) + inp["script"] for inp in inputs),
     )
 
-    input_data = inputs[input_index]
-    script_pubkey = input_data["script"]
-    amount = input_amounts[input_index]
+    if input_index is None:
+        txin_sig_digest = _blake2b_256(
+            ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
+            b"",
+        )
+    else:
+        input_data = inputs[input_index]
+        amount = input_amounts[input_index]
+        script_pubkey = input_data["script"]
+        txin_sig_digest = _blake2b_256(
+            ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
+            input_data["prev_txid"]
+            + input_data["prev_vout"]
+            + _int64_le_bytes(amount)
+            + _write_compactsize(len(script_pubkey))
+            + script_pubkey
+            + input_data["sequence"],
+        )
 
-    txin_sig_digest = _blake2b_256(
-        ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
-        input_data["prev_txid"]
-        + input_data["prev_vout"]
-        + _int64_le_bytes(amount)
-        + _write_compactsize(len(script_pubkey))
-        + script_pubkey
-        + input_data["sequence"],
-    )
     transparent_digest = _blake2b_256(
         ZCASH_TRANSPARENT_HASH_PERSONALIZATION,
         bytes([sighash_type & 0xFF])
@@ -114,20 +203,67 @@ def _nu5_signature_hash(
         + txin_sig_digest,
     )
 
-    header_digest = _blake2b_256(
+    header_digest = _header_digest(tx)
+    sapling_digest = _blake2b_256(ZCASH_SAPLING_HASH_PERSONALIZATION, b"")
+    orchard_digest = _orchard_digest(tx)
+
+    return {
+        "header_digest": header_digest,
+        "transparent_digest": transparent_digest,
+        "sapling_digest": sapling_digest,
+        "orchard_digest": orchard_digest,
+        "final_digest": _final_digest(
+            tx["branch_id"],
+            header_digest,
+            transparent_digest,
+            sapling_digest,
+            orchard_digest,
+        ),
+    }
+
+
+def _header_digest(tx: dict) -> bytes:
+    return _blake2b_256(
         ZCASH_HEADERS_HASH_PERSONALIZATION,
         tx["version"]
         + tx["branch_id"].to_bytes(4, byteorder="little")
-        + locktime.to_bytes(4, byteorder="little")
-        + expiry_height.to_bytes(4, byteorder="little"),
-    )
-    sapling_digest = _blake2b_256(ZCASH_SAPLING_HASH_PERSONALIZATION, b"")
-    orchard_digest = _blake2b_256(ZCASH_ORCHARD_HASH_PERSONALIZATION, b"")
-
-    personal = ZCASH_TX_PERSONALIZATION_PREFIX + tx["branch_id"].to_bytes(
-        4, byteorder="little"
+        + tx["locktime"].to_bytes(4, byteorder="little")
+        + tx["expiry"].to_bytes(4, byteorder="little"),
     )
 
+
+def _orchard_digest(tx: dict) -> bytes:
+    orchard = tx["orchard"]
+    if orchard["actions"] == 0:
+        return _blake2b_256(ZCASH_ORCHARD_HASH_PERSONALIZATION, b"")
+
+    compact_digest = _blake2b_256(
+        ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION,
+        b"".join(orchard["compact"]),
+    )
+    memo_digest = _blake2b_256(
+        ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION,
+        b"".join(orchard["memos"]),
+    )
+    noncompact_digest = _blake2b_256(
+        ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION,
+        b"".join(orchard["noncompact"]),
+    )
+
+    return _blake2b_256(
+        ZCASH_ORCHARD_HASH_PERSONALIZATION,
+        compact_digest + memo_digest + noncompact_digest + orchard["digest_data"],
+    )
+
+
+def _final_digest(
+    branch_id: int,
+    header_digest: bytes,
+    transparent_digest: bytes,
+    sapling_digest: bytes,
+    orchard_digest: bytes,
+) -> bytes:
+    personal = ZCASH_TX_PERSONALIZATION_PREFIX + branch_id.to_bytes(4, byteorder="little")
     return _blake2b_256(
         personal,
         header_digest + transparent_digest + sapling_digest + orchard_digest,
@@ -169,8 +305,24 @@ def _parse_v5_tx(tx_bytes: bytes) -> dict:
     sapling_spends = read_varint(buf)
     sapling_outputs = read_varint(buf)
     orchard_actions = read_varint(buf)
-    if sapling_spends or sapling_outputs or orchard_actions:
-        raise ValueError("Sapling/Orchard data not supported in NU5 helper")
+    if sapling_spends or sapling_outputs:
+        raise ValueError("Sapling data not supported in NU5 helper")
+
+    orchard = {
+        "actions": orchard_actions,
+        "compact": [],
+        "memos": [],
+        "noncompact": [],
+        "digest_data": b"",
+    }
+    for _ in range(orchard_actions):
+        orchard["compact"].append(_read_exact(buf, ORCHARD_ACTION_COMPACT_SIZE))
+    for _ in range(orchard_actions):
+        orchard["memos"].append(_read_exact(buf, ORCHARD_MEMO_SIZE))
+    for _ in range(orchard_actions):
+        orchard["noncompact"].append(_read_exact(buf, ORCHARD_ACTION_NONCOMPACT_SIZE))
+    if orchard_actions > 0:
+        orchard["digest_data"] = _read_exact(buf, ORCHARD_DIGEST_DATA_SIZE)
 
     if buf.read(1):
         raise ValueError("Unexpected trailing data in transaction")
@@ -182,6 +334,7 @@ def _parse_v5_tx(tx_bytes: bytes) -> dict:
         "expiry": expiry,
         "inputs": inputs,
         "outputs": outputs,
+        "orchard": orchard,
     }
 
 
