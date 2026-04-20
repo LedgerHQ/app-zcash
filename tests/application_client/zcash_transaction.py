@@ -192,7 +192,7 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
     return chunks
 
 def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
-    # pylint: disable=R0914
+    # pylint: disable=R0914,R0915
 
     i = 0
 

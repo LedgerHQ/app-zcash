@@ -319,6 +319,7 @@ class ZcashCommandSender:
         trusted_inputs: list[bytes],
         change_path: str | None = None,
     ) -> Generator[None, None, None]:
+        # pylint: disable=too-many-locals
         self.tx_chunks = split_tx_v5_for_hash_input(transaction)
         self.trusted_inputs = trusted_inputs
 
@@ -383,6 +384,7 @@ class ZcashCommandSender:
         sighash_type: int = 0x01,
         sign_digest: bool = False,
     ) -> RAPDU:
+        # pylint: disable=too-many-positional-arguments
         # Send extra header data
         self.backend.exchange(
             cla=CLA,

@@ -316,11 +316,11 @@ def _parse_v5_tx(tx_bytes: bytes) -> dict:
         "digest_data": b"",
     }
     for _ in range(orchard_actions):
-        orchard["compact"].append(_read_exact(buf, ORCHARD_ACTION_COMPACT_SIZE))
+        orchard["compact"].append(_read_exact(buf, ORCHARD_ACTION_COMPACT_SIZE))  # type: ignore[attr-defined]
     for _ in range(orchard_actions):
-        orchard["memos"].append(_read_exact(buf, ORCHARD_MEMO_SIZE))
+        orchard["memos"].append(_read_exact(buf, ORCHARD_MEMO_SIZE))  # type: ignore[attr-defined]
     for _ in range(orchard_actions):
-        orchard["noncompact"].append(_read_exact(buf, ORCHARD_ACTION_NONCOMPACT_SIZE))
+        orchard["noncompact"].append(_read_exact(buf, ORCHARD_ACTION_NONCOMPACT_SIZE))  # type: ignore[attr-defined]
     if orchard_actions > 0:
         orchard["digest_data"] = _read_exact(buf, ORCHARD_DIGEST_DATA_SIZE)
 
