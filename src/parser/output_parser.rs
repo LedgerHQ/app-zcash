@@ -10,8 +10,6 @@ use crate::parser::orchard::{
 
 use super::*;
 
-const FEE_PER_ORCHARD_ACTION_ZAT: u64 = 5_000;
-
 pub struct OutputParserCtx<'ctx> {
     pub tx_info: &'ctx mut TxInfo,
     pub hashers: &'ctx mut Hashers,
@@ -66,18 +64,9 @@ impl OutputParser {
         &mut self,
         ctx: &mut OutputParserCtx<'_>,
     ) -> Result<(), ParserError> {
-        let conventional_fees_i128 =
-            i128::from(ctx.tx_info.total_amount) - i128::from(self.total_output_amount);
-        let mut marginal_fees_i128 = 0i128;
-
-        // For each Action add fixed `FEE_PER_ORCHARD_ACTION_ZAT` to the fees
-        for _ in 0..self.orchard_action_count {
-            marginal_fees_i128 =
-                marginal_fees_i128.saturating_add(i128::from(FEE_PER_ORCHARD_ACTION_ZAT));
-        }
-
-        // Fee=max(conventional fee,marginal fee×logical actions)
-        let fees_i128 = conventional_fees_i128.max(marginal_fees_i128);
+        let fees_i128 = i128::from(ctx.tx_info.total_amount)
+            + i128::from(self.orchard_value_balance)
+            - i128::from(self.total_output_amount);
 
         if fees_i128 < 0 {
             error!(
@@ -402,11 +391,14 @@ impl OutputParser {
                     info!("Orchard digest: {}", HexSlice(&ctx.tx_info.orchard_digest));
                     info!("Orchard value balance: {}", self.orchard_value_balance);
 
-                    ctx.tx_info.outputs.push(TxOutput {
-                        amount: self.orchard_value_balance.unsigned_abs(),
-                        address: "unknown_orchard_recipient".to_string(),
-                        is_change: false,
-                    });
+                    // TODO: for now adding dummy Orchard output, later should be replaced with real output
+                    if ctx.tx_info.outputs.is_empty() {
+                        ctx.tx_info.outputs.push(TxOutput {
+                            amount: 0, // for now dummy amount
+                            address: "unknown_orchard_recipient".to_string(),
+                            is_change: false,
+                        });
+                    }
 
                     self.finalize_outputs_review(ctx)?;
                     self.state = OutputParseState::OutputProcessingDone;
