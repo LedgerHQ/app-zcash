@@ -177,7 +177,7 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
         sapling_digest
     };
 
-    // Orchard signature digests match the corresponding txid digest.
+    // Use default Orchard digests in case there are no Orchard actions
     let orchard_digest = if ctx.tx_info.orchard_digest == [0; 32] {
         let mut orchard_digest = [0u8; 32];
         ok!(ctx

@@ -102,24 +102,6 @@ impl OutputParser {
         Ok(())
     }
 
-    fn finalize_empty_orchard_digest(
-        &mut self,
-        ctx: &mut OutputParserCtx<'_>,
-    ) -> Result<(), ParserError> {
-        ok!(ctx
-            .hashers
-            .orchard_hasher
-            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION));
-        ok!(ctx
-            .hashers
-            .orchard_hasher
-            .finalize(&mut ctx.tx_info.orchard_digest));
-
-        info!("Orchard digest: {}", HexSlice(&ctx.tx_info.orchard_digest));
-
-        Ok(())
-    }
-
     pub fn parse(&mut self, ctx: &mut OutputParserCtx<'_>, data: &[u8]) -> Result<(), ParserError> {
         let mut reader = ByteReader::new(data);
 
@@ -144,7 +126,6 @@ impl OutputParser {
                     self.orchard_value_balance = 0;
                     self.state = if output_count == 0 {
                         if reader.remaining_len() == 0 {
-                            self.finalize_empty_orchard_digest(ctx)?;
                             self.finalize_outputs_review(ctx)?;
                             OutputParseState::OutputProcessingDone
                         } else {
@@ -251,7 +232,6 @@ impl OutputParser {
                         info!("All outputs parsed");
 
                         self.state = if reader.remaining_len() == 0 {
-                            self.finalize_empty_orchard_digest(ctx)?;
                             self.finalize_outputs_review(ctx)?;
                             OutputParseState::OutputProcessingDone
                         } else {
@@ -282,7 +262,6 @@ impl OutputParser {
                     self.orchard_action_parsed_count = 0;
 
                     if orchard_actions == 0 {
-                        self.finalize_empty_orchard_digest(ctx)?;
                         self.finalize_outputs_review(ctx)?;
                         self.state = OutputParseState::OutputProcessingDone;
                     } else {
