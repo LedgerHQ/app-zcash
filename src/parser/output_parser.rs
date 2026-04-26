@@ -56,6 +56,10 @@ impl OutputParser {
         }
     }
 
+    pub fn transparent_output_count(&self) -> usize {
+        self.output_count
+    }
+
     pub fn is_finished(&self) -> bool {
         self.state == OutputParseState::OutputProcessingDone
     }
@@ -380,6 +384,7 @@ impl OutputParser {
                     }
 
                     self.finalize_outputs_review(ctx)?;
+
                     self.state = OutputParseState::OutputProcessingDone;
                 }
 

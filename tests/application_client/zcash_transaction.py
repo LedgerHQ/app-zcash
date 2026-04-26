@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from struct import pack
-from .zcash_utils import UINT64_MAX, read_compactsize
+from .zcash_utils import UINT64_MAX, read_compactsize, write_varint
 
 class TransactionError(Exception):
     pass
@@ -186,8 +186,12 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
     else:
         chunks.append(locktime + pack("b", 0x04) + expiry)
 
-    print(f"Not consumed bytes: {buf[i:].hex()}")
-    assert i == len(buf), "Transaction splitting did not consume all bytes!"
+    # Real Orchard transactions include authorization data after the digest section.
+    # It is excluded from ZIP-244 txid/signature hashing, so the host-side chunker
+    # intentionally ignores the trailing bytes here.
+    if i != len(buf) and orch == 0:
+        print(f"Not consumed bytes: {buf[i:].hex()}")
+        assert i == len(buf), "Transaction splitting did not consume all bytes!"
 
     return chunks
 
@@ -260,6 +264,7 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
             compact_start = i
             i += 32 + 32 + 32 + 52
             shielded_chunks.append(buf[compact_start:i])
+            print(f"Orchard compact chunk: {buf[compact_start:i].hex()}")
 
         memo_remaining = orch * 512
         while memo_remaining > 0:
@@ -272,12 +277,16 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
             non_compact_start = i
             i += 32 + 32 + 16 + 80
             shielded_chunks.append(buf[non_compact_start:i])
+            print(f"Orchard non-compact chunk: {buf[non_compact_start:i].hex()}")
 
         digest_start = i
         i += 1 + 8 + 32
         shielded_chunks.append(buf[digest_start:i])
 
-    assert i == len(buf), "Transaction splitting did not consume all bytes!"
+    # Real Orchard transactions include authorization data after the digest section.
+    # It is excluded from ZIP-244 hashing, so only the digest-relevant prefix is chunked.
+    if i != len(buf) and orch == 0:
+        assert i == len(buf), "Transaction splitting did not consume all bytes!"
 
     return {
         "header": header,
@@ -288,3 +297,122 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
         "locktime": locktime,
         "expiry": expiry,
     }
+
+
+def _extract_raw_tx_v5_outputs(buf: bytes) -> list[dict[str, bytes]]:
+    i = 4 * 5
+
+    vin_n, i = read_compactsize(buf, i)
+    for _ in range(vin_n):
+        i += 32 + 4
+        script_len, i = read_compactsize(buf, i)
+        i += script_len + 4
+
+    vout_n, i = read_compactsize(buf, i)
+    outputs = []
+    for _ in range(vout_n):
+        value = buf[i:i + 8]
+        i += 8
+        script_len, i = read_compactsize(buf, i)
+        script = buf[i:i + script_len]
+        i += script_len
+        outputs.append({"value": value, "script": script})
+
+    return outputs
+
+
+def convert_raw_tx_v5_orchard_to_app_format(buf: bytes, prevout_txs: bytes | list[bytes]) -> bytes:
+    """Convert a raw NU5 Orchard transaction into the app parser's digest-oriented layout."""
+    # pylint: disable=too-many-locals
+    prevout_tx_list = [prevout_txs] if isinstance(prevout_txs, bytes) else prevout_txs
+    i = 0
+    header_size = 4 * 5
+    tx = bytearray(buf[:header_size])
+    i += header_size
+
+    vin_n, i = read_compactsize(buf, i)
+    if len(prevout_tx_list) not in (1, vin_n):
+        raise ValueError("Expected either one prevout tx or one prevout tx per input")
+
+    tx.extend(write_varint(vin_n))
+    for input_idx in range(vin_n):
+        prev_txid = buf[i:i + 32]
+        i += 32 + 4
+        prev_vout = int.from_bytes(buf[i - 4:i], byteorder="little")
+        script_len, i = read_compactsize(buf, i)
+        script_end = i + script_len
+        sequence = buf[script_end:script_end + 4]
+        i = script_end + 4
+
+        prevout_tx = prevout_tx_list[min(input_idx, len(prevout_tx_list) - 1)]
+        prevout_outputs = _extract_raw_tx_v5_outputs(prevout_tx)
+        if prev_vout >= len(prevout_outputs):
+            raise ValueError(f"Prevout index out of range: {prev_vout}")
+
+        script_pubkey = prevout_outputs[prev_vout]["script"]
+        tx.extend(prev_txid)
+        tx.extend(prev_vout.to_bytes(4, byteorder="little"))
+        tx.extend(write_varint(len(script_pubkey)))
+        tx.extend(script_pubkey)
+        tx.extend(sequence)
+
+    vout_n, i = read_compactsize(buf, i)
+    tx.extend(write_varint(vout_n))
+    for _ in range(vout_n):
+        output_start = i
+        i += 8
+        script_len, i = read_compactsize(buf, i)
+        i += script_len
+        tx.extend(buf[output_start:i])
+
+    sapling_spends, i = read_compactsize(buf, i)
+    sapling_outputs, i = read_compactsize(buf, i)
+    orchard_actions, i = read_compactsize(buf, i)
+
+    assert sapling_spends == 0, "Raw Sapling spends are not supported in this converter!"
+    assert sapling_outputs == 0, "Raw Sapling outputs are not supported in this converter!"
+
+    tx.extend(write_varint(sapling_spends))
+    tx.extend(write_varint(sapling_outputs))
+    tx.extend(write_varint(orchard_actions))
+
+    compact_chunks = []
+    memo_chunks = []
+    noncompact_chunks = []
+    for _ in range(orchard_actions):
+        cv = buf[i:i + 32]
+        i += 32
+        nullifier = buf[i:i + 32]
+        i += 32
+        rk = buf[i:i + 32]
+        i += 32
+        cmx = buf[i:i + 32]
+        i += 32
+        ephemeral_key = buf[i:i + 32]
+        i += 32
+        enc_ciphertext = buf[i:i + 580]
+        i += 580
+        out_ciphertext = buf[i:i + 80]
+        i += 80
+
+        assert len(enc_ciphertext) == 580, "Invalid Orchard encCiphertext size!"
+        assert len(out_ciphertext) == 80, "Invalid Orchard outCiphertext size!"
+
+        compact_chunks.append(nullifier + cmx + ephemeral_key + enc_ciphertext[:52])
+        memo_chunks.append(enc_ciphertext[52:564])
+        noncompact_chunks.append(cv + rk + enc_ciphertext[564:] + out_ciphertext)
+
+    flags = buf[i:i + 1]
+    value_balance = buf[i + 1:i + 1 + 8]
+    anchor = buf[i + 1 + 8:i + 1 + 8 + 32]
+
+    assert len(flags) == 1, "Missing Orchard flags!"
+    assert len(value_balance) == 8, "Missing Orchard value balance!"
+    assert len(anchor) == 32, "Missing Orchard anchor!"
+
+    tx.extend(b"".join(compact_chunks))
+    tx.extend(b"".join(memo_chunks))
+    tx.extend(b"".join(noncompact_chunks))
+    tx.extend(flags + value_balance + anchor)
+
+    return bytes(tx)

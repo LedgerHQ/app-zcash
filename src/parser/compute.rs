@@ -141,10 +141,21 @@ pub fn finalize_signature_input_hash(ctx: &mut ParserCtx<'_>) -> Result<(), Pars
     Ok(())
 }
 
-pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
+#[derive(Debug, Clone, Copy)]
+pub enum SighHashComputeMode {
+    SomeTransparentInputs,
+    NoneTransparentInputs,
+    NoneTransparentInputsOutputs,
+}
+
+pub fn finalize_signature_hash(
+    ctx: &mut ParserCtx<'_>,
+    mode: SighHashComputeMode,
+) -> Result<(), ParserError> {
     let mut txin_sig_digest = [0u8; 32];
     ok!(ctx.hashers.prevouts_hasher.finalize(&mut txin_sig_digest));
     info!("txin sig digest {}", HexSlice(&txin_sig_digest));
+    info!("sighash compute mode {:X?}", mode);
 
     // Compute transparent_sig_digest
     let transparent_digest = {
@@ -153,13 +164,23 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
         let mut hasher = Blake2b_256::default();
         ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
 
-        ok!(hasher.update(&[ctx.tx_info.sighash_type]));
-        ok!(hasher.update(&ctx.tx_info.prevouts_hash));
-        ok!(hasher.update(&ctx.tx_info.amounts_hash));
-        ok!(hasher.update(&ctx.tx_info.scripts_hash));
-        ok!(hasher.update(&ctx.tx_info.sequence_hash));
-        ok!(hasher.update(&ctx.tx_info.outputs_hash));
-        ok!(hasher.update(&txin_sig_digest));
+        match mode {
+            SighHashComputeMode::NoneTransparentInputs => {
+                ok!(hasher.update(&ctx.tx_info.prevouts_hash));
+                ok!(hasher.update(&ctx.tx_info.sequence_hash));
+                ok!(hasher.update(&ctx.tx_info.outputs_hash));
+            }
+            SighHashComputeMode::SomeTransparentInputs => {
+                ok!(hasher.update(&[ctx.tx_info.sighash_type]));
+                ok!(hasher.update(&ctx.tx_info.prevouts_hash));
+                ok!(hasher.update(&ctx.tx_info.amounts_hash));
+                ok!(hasher.update(&ctx.tx_info.scripts_hash));
+                ok!(hasher.update(&ctx.tx_info.sequence_hash));
+                ok!(hasher.update(&ctx.tx_info.outputs_hash));
+                ok!(hasher.update(&txin_sig_digest));
+            }
+            SighHashComputeMode::NoneTransparentInputsOutputs => (),
+        }
 
         ok!(hasher.finalize(&mut hash));
         hash
@@ -189,6 +210,8 @@ pub fn finalize_signature_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserErro
     } else {
         ctx.tx_info.orchard_digest
     };
+
+    debug!("Orchard hash: {}", HexSlice(&orchard_digest));
 
     let branch_id = ctx.tx_info.branch_id.expect("should be set at this point");
 

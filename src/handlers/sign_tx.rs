@@ -33,6 +33,9 @@ pub fn handler_hash_input_start(
     if continue_hashing {
         info!("Reset parser");
         ctx.parser = Parser::new(ParserMode::Signature);
+        // Extract transparent output count from output parser on final state
+        ctx.parser
+            .set_transparent_output_count(ctx.output_parser.transparent_output_count());
     } else if first {
         info!("Reset TX context");
         ctx.reset(ParserMode::Signature);
