@@ -41,6 +41,45 @@ impl SigningKey<crate::orchard::SpendAuth> {
 
         Ok(SigningKey { sk, pk })
     }
+
+    /// Randomize this Orchard SpendAuth signing key with the given `randomizer`,
+    /// deriving the randomized verification key using Ledger SDK Pallas primitives.
+    pub fn randomize_ledger(
+        &self,
+        randomizer: &Randomizer<crate::orchard::SpendAuth>,
+    ) -> Result<SigningKey<crate::orchard::SpendAuth>, ledger_zcash_crypto::Error> {
+        let sk_bytes = self.sk.to_repr().as_ref().try_into().unwrap();
+        let randomizer_bytes = randomizer.to_repr().as_ref().try_into().unwrap();
+        let ledger_signing_key = ledger_zcash_crypto::redpallas::spendauth_randomized_signing_key(
+            sk_bytes,
+            randomizer_bytes,
+        )
+        .map_err(ledger_zcash_crypto::Error::from)?;
+
+        Self::try_from_ledger_signing_key(ledger_signing_key)
+    }
+
+    /// Create a SpendAuth signature using Ledger SDK RedPallas primitives.
+    pub fn sign_ledger<R: RngCore + CryptoRng>(
+        &self,
+        mut rng: R,
+        msg: &[u8],
+    ) -> Result<Signature<crate::orchard::SpendAuth>, ledger_zcash_crypto::Error> {
+        let random_bytes = {
+            let mut bytes = [0; 80];
+            rng.fill_bytes(&mut bytes);
+            bytes
+        };
+
+        let sk_bytes = self.sk.to_repr().as_ref().try_into().unwrap();
+        let ledger_signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(sk_bytes)
+            .map_err(ledger_zcash_crypto::Error::from)?;
+        let signature =
+            ledger_zcash_crypto::redpallas::spendauth_sign(&ledger_signing_key, &random_bytes, msg)
+                .map_err(ledger_zcash_crypto::Error::from)?;
+
+        Ok(signature.into())
+    }
 }
 
 impl<T: SigType> From<&SigningKey<T>> for VerificationKey<T> {

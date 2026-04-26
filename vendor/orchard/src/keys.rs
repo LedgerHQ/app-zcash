@@ -156,6 +156,17 @@ impl SpendAuthorizingKey {
         self.0.randomize(randomizer)
     }
 
+    /// Randomizes this spend authorizing key with the given `randomizer`, deriving
+    /// the randomized verification key using Ledger SDK Pallas primitives.
+    ///
+    /// The resulting key can be used to actually sign a spend.
+    pub fn randomize_ledger(
+        &self,
+        randomizer: &pallas::Scalar,
+    ) -> Result<redpallas::SigningKey<SpendAuth>, ledger_zcash_crypto::Error> {
+        self.0.randomize_ledger(randomizer)
+    }
+
     /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let ask = Self::ledger_derive_inner(sk)?;
