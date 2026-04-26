@@ -264,7 +264,6 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
             compact_start = i
             i += 32 + 32 + 32 + 52
             shielded_chunks.append(buf[compact_start:i])
-            print(f"Orchard compact chunk: {buf[compact_start:i].hex()}")
 
         memo_remaining = orch * 512
         while memo_remaining > 0:
@@ -277,7 +276,6 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
             non_compact_start = i
             i += 32 + 32 + 16 + 80
             shielded_chunks.append(buf[non_compact_start:i])
-            print(f"Orchard non-compact chunk: {buf[non_compact_start:i].hex()}")
 
         digest_start = i
         i += 1 + 8 + 32

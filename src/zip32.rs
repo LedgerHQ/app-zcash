@@ -1,4 +1,4 @@
-use orchard::keys::SpendingKey as OrchardSk;
+use orchard::keys::{SpendAuthorizingKey as OrchardAsk, SpendingKey as OrchardSk};
 use zcash_protocol::consensus::NetworkType;
 
 use ledger_device_sdk::ecc::{ChainCode, Secret};
@@ -46,6 +46,11 @@ pub fn derive_orchard_fvk_bytes(sk: Secret<32>) -> Result<OrchardFvk, AppSW> {
         .map_err(map_ledger_crypto_error)?;
 
     OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)
+}
+
+pub fn derive_orchard_ask(path: &Bip32Path) -> Result<OrchardAsk, AppSW> {
+    let sk = derive_orchard_sk(path)?;
+    OrchardAsk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)
 }
 
 // Derives the transparent account public key bytes for the BIP44 path
@@ -125,7 +130,7 @@ fn stub_derive_orchard_child_keys(path: &[u32], cc: &mut ChainCode) -> Result<Se
     Ok(sk)
 }
 
-pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
+fn derive_orchard_sk_bytes(path: &Bip32Path) -> Result<Secret<32>, AppSW> {
     let path_slice = path.as_slice();
     let mut cc = ChainCode::default();
 
@@ -135,6 +140,16 @@ pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
     #[cfg(not(feature = "test_zip32_stub"))]
     let sk = Pallas::zip32_orchard_derive(path_slice, (&mut cc).into(), None);
 
+    Ok(sk)
+}
+
+fn derive_orchard_sk(path: &Bip32Path) -> Result<OrchardSk, AppSW> {
+    let sk = derive_orchard_sk_bytes(path)?;
+    OrchardSk::ledger_from_bytes(sk.as_ref().try_into().unwrap()).map_err(map_ledger_crypto_error)
+}
+
+pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
+    let sk = derive_orchard_sk_bytes(path)?;
     let orchard_fvk = derive_orchard_fvk_bytes(sk)?;
     info!("Orchard FVK: {}", HexSlice(&orchard_fvk.to_bytes()));
 

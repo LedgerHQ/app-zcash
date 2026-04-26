@@ -43,8 +43,11 @@ class P1(IntEnum):
     P1_FINALIZE_FULL_LAST = 0x80
     # Parameter 1 for change information for HASH_INPUT_FINALIZE_FULL.
     P1_FINALIZE_FULL_CHANGEINFO = 0xFF
-    # Debug parameter 1 for HASH_SIGN to return the transaction signature digest.
-    P1_HASH_SIGN_DIGEST = 0x01
+
+class HashSignMode(IntEnum):
+    Sign = 0x00
+    Digest = 0x01
+    AuthSig = 0x02
 
 class P2(IntEnum):
     # Parameter 2 default value
@@ -382,27 +385,29 @@ class ZcashCommandSender:
         locktime: int,
         expiry: int,
         sighash_type: int = 0x01,
-        sign_digest: bool = False,
+        mode: HashSignMode = HashSignMode.Sign,
+        prepare: bool = True,
     ) -> RAPDU:
         # pylint: disable=too-many-positional-arguments
-        # Send extra header data
-        self.backend.exchange(
-            cla=CLA,
-            ins=InsType.HASH_SIGN,
-            p1=P1.P1_FIRST,
-            p2=P2.P2_NONE,
-            data=0x00.to_bytes(2, byteorder="big")
-            + locktime.to_bytes(4, byteorder="big")
-            + sighash_type.to_bytes(1, byteorder="big")
-            + expiry.to_bytes(4, byteorder="big"),
-        )
+        if prepare:
+            # Send extra header data
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.HASH_SIGN,
+                p1=P1.P1_FIRST,
+                p2=P2.P2_NONE,
+                data=0x00.to_bytes(2, byteorder="big")
+                + locktime.to_bytes(4, byteorder="big")
+                + sighash_type.to_bytes(1, byteorder="big")
+                + expiry.to_bytes(4, byteorder="big"),
+            )
 
-        self._send_trusted_inputs_and_header(continue_hashing=True)
+            self._send_trusted_inputs_and_header(continue_hashing=True)
 
         return self.backend.exchange(
             cla=CLA,
             ins=InsType.HASH_SIGN,
-            p1=P1.P1_HASH_SIGN_DIGEST if sign_digest else P1.P1_FIRST,
+            p1=mode,
             p2=P2.P2_NONE,
             data=pack_derivation_path(path)
             + 0x00.to_bytes(1, byteorder="big")

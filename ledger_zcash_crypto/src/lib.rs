@@ -73,6 +73,17 @@ impl From<HashError> for Error {
     }
 }
 
+impl From<redpallas::Error> for Error {
+    fn from(value: redpallas::Error) -> Self {
+        match value {
+            redpallas::Error::MalformedSigningKey => Self::MalformedPallasScalar,
+            redpallas::Error::MalformedVerificationKey => Self::MalformedPallasPoint,
+            redpallas::Error::Cx(err) => Self::Cx(err),
+            redpallas::Error::Hash(err) => Self::Hash(err),
+        }
+    }
+}
+
 /// Computes the Orchard `ask` bytes as:
 /// `to_scalar(PrfExpand::ORCHARD_ASK.with(&sk))`.
 ///
