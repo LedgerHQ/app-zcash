@@ -321,7 +321,7 @@ def _extract_raw_tx_v5_outputs(buf: bytes) -> list[dict[str, bytes]]:
 
 def convert_raw_tx_v5_orchard_to_app_format(buf: bytes, prevout_txs: bytes | list[bytes]) -> bytes:
     """Convert a raw NU5 Orchard transaction into the app parser's digest-oriented layout."""
-    # pylint: disable=too-many-locals
+    # pylint: disable=too-many-locals,R0915
     prevout_tx_list = [prevout_txs] if isinstance(prevout_txs, bytes) else prevout_txs
     i = 0
     header_size = 4 * 5
