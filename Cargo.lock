@@ -968,6 +968,7 @@ dependencies = [
 name = "ledger_zcash_crypto"
 version = "0.1.0"
 dependencies = [
+ "ff",
  "ledger_device_sdk",
  "pasta_curves",
 ]

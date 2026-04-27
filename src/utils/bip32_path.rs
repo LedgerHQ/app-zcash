@@ -18,6 +18,7 @@ impl Bip32Path {
     pub fn as_slice(&self) -> &[u32] {
         &self.path[..self.path_len as usize]
     }
+
     pub fn from_dpath(dpath_len: usize, dpath: &[u8]) -> Result<Self, AppSW> {
         if dpath.len() < dpath_len * BIP32_BYTES_PER_SEGMENT || dpath_len > MAX_ZCASH_BIP32_PATH {
             return Err(AppSW::WrongApduLength);
@@ -83,6 +84,24 @@ impl TryFrom<&[u8]> for Bip32Path {
         Ok(Bip32Path {
             path,
             path_len: path_len as u8,
+        })
+    }
+}
+
+impl TryFrom<&[u32]> for Bip32Path {
+    type Error = AppSW;
+
+    fn try_from(data: &[u32]) -> Result<Self, Self::Error> {
+        if data.len() > MAX_ZCASH_BIP32_PATH {
+            return Err(AppSW::WrongApduLength);
+        }
+
+        let mut path = [0u32; MAX_ZCASH_BIP32_PATH];
+        path[..data.len()].copy_from_slice(data);
+
+        Ok(Bip32Path {
+            path,
+            path_len: data.len() as u8,
         })
     }
 }
