@@ -304,7 +304,7 @@ fn prf_expand_with_domain_separator_and_inputs(
     let mut personalization = PRF_EXPAND_PERSONALIZATION;
     let mut output = [0u8; PRF_EXPAND_BYTES];
 
-    let mut blake2b = Blake2b_512::new_with_salt_and_perso(None, Some(&mut personalization));
+    let mut blake2b = Blake2b_512::new_with_salt_and_perso(None, Some(&mut personalization))?;
     blake2b.update(sk)?;
     blake2b.update(&[domain_separator])?;
     for input in inputs {

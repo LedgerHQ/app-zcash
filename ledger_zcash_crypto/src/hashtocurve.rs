@@ -532,7 +532,7 @@ fn hash_to_field_pallas(domain_prefix: &str, message: &[u8]) -> Result<[Fp; 2], 
 fn blake2b_512_hash_chunks(chunks: &[&[u8]]) -> Result<[u8; BLAKE2B_HASH_BYTES], Error> {
     let mut personalization = BLAKE2B_ZERO_PERSONALIZATION;
     let mut output = [0u8; BLAKE2B_HASH_BYTES];
-    let mut hasher = Blake2b_512::new_with_salt_and_perso(None, Some(&mut personalization));
+    let mut hasher = Blake2b_512::new_with_salt_and_perso(None, Some(&mut personalization))?;
 
     for chunk in chunks {
         hasher.update(chunk)?;
