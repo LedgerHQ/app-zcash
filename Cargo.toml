@@ -16,6 +16,7 @@ zcash_primitives = { git = "https://github.com/Fingolfin69/librustzcash.git", br
 zcash_protocol = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 zcash_encoding = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 zcash_transparent = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
+zcash_address = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 
 orchard = { path = "./vendor/orchard", default-features = false }
 num_enum = { version = "0.7.5", default-features = false }

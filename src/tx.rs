@@ -98,6 +98,12 @@ pub struct TxSigningState {
     pub total_input_count: usize,
 }
 
+#[derive(Default)]
+pub struct PendingVkResponse {
+    pub bytes: Vec<u8>,
+    pub offset: usize,
+}
+
 /// Transaction context holding state between APDU chunks.
 pub struct TxContext<'a> {
     is_extra_header_data_set: bool,
@@ -111,6 +117,7 @@ pub struct TxContext<'a> {
     pub home: NbglHomeAndSettings,
     pub parser: Parser,
     pub output_parser: OutputParser,
+    pub vk_response: Option<PendingVkResponse>,
     /// Swap parameters if running in swap mode.
     /// Used to validate the transaction against the Exchange's request.
     pub swap_params: Option<&'a CreateTxParams>,
@@ -130,6 +137,7 @@ impl<'s> TxContext<'s> {
             home: Default::default(),
             parser: Parser::new(mode),
             output_parser: OutputParser::new(),
+            vk_response: None,
             swap_params,
         }
     }
@@ -144,6 +152,7 @@ impl<'s> TxContext<'s> {
         self.hashers = Hashers::default();
         self.parser = Parser::new(mode);
         self.output_parser = OutputParser::new();
+        self.vk_response = None;
     }
 
     pub fn set_transaction_trusted_input_idx(&mut self, idx: u32) {

@@ -21,6 +21,8 @@ pub const P1_NEXT: u8 = 0x80;
 
 pub const P1_GET_PUBLIC_KEY_NO_DISPLAY: u8 = 0x00;
 pub const P1_GET_PUBLIC_KEY_DISPLAY: u8 = 0x01;
+pub const P1_GET_VK_FIRST: u8 = 0x00;
+pub const P1_GET_VK_CONTINUE: u8 = 0x80;
 
 pub const P1_HASH_INPUT_START_FIRST: u8 = 0x00;
 pub const P1_HASH_INPUT_START_NEXT: u8 = 0x80;

@@ -2063,6 +2063,7 @@ dependencies = [
  "ledger_zcash_crypto",
  "num_enum",
  "orchard",
+ "zcash_address",
  "zcash_encoding",
  "zcash_primitives",
  "zcash_protocol",
