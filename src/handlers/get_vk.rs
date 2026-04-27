@@ -3,9 +3,6 @@ use zcash_address::unified::{Encoding, Fvk, Ufvk};
 use ledger_device_sdk::info;
 use ledger_device_sdk::io::Comm;
 
-#[cfg(not(feature = "test_zip32_stub"))]
-use ledger_device_sdk::ecc::Pallas;
-
 use crate::utils::{HexSlice, encode_string_response};
 use crate::zip32::{
     convert_orchard_path_to_transparent_path, derive_orchard_fvk,
