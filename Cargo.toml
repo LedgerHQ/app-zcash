@@ -42,19 +42,15 @@ opt-level = 'z'
 lto = 'fat'
 
 [features]
-default = ["ledger_device_sdk/nano_nbgl", "legacy_path", "test_zip32_stub"]
+default = ["ledger_device_sdk/nano_nbgl", "legacy_path"]
 
 # Enables debug logging
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
 
 legacy_path = []
-# TODO: Remove this once speculos supports ZIP32 derivations
-test_zip32_stub = []
 
 [package.metadata.ledger]
-curve = ["secp256k1"]
-# TODO: change when speculos supports ZIP32 derivations
-#curve = ["secp256k1", "jubjub"]
+curve = ["secp256k1", "jubjub"]
 path = ["44'/133'", "32'/133'"]
 name = "Zcash"
 flags = "0x800"
