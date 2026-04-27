@@ -249,7 +249,7 @@ fn spendauth_basepoint_mul_from_scalar_be(
 fn redpallas_hstar(chunks: &[&[u8]]) -> Result<[u8; 32], Error> {
     let mut personalization = REDPALLAS_HSTAR_PERSONALIZATION;
     let mut output = [0u8; 64];
-    let mut hasher = Blake2b_512::new_with_salt_and_perso(None, Some(&mut personalization));
+    let mut hasher = Blake2b_512::new_with_salt_and_perso(None, Some(&mut personalization))?;
 
     for chunk in chunks {
         hasher.update(chunk)?;
