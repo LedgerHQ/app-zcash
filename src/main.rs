@@ -192,9 +192,7 @@ impl TryFrom<ApduHeader> for Instruction {
                 mode: P2VkMode::try_from(p2)?,
                 continue_response: value.p1 == P1_GET_VK_CONTINUE,
             }),
-            (INS_GET_SHIELD_ADDR, p1, p2)
-                if (p1 & !(P1_GET_VK_CONTINUE | P1_GET_PUBLIC_KEY_DISPLAY)) == 0 =>
-            {
+            (INS_GET_SHIELD_ADDR, P1_GET_PUBLIC_KEY_NO_DISPLAY | P1_GET_PUBLIC_KEY_DISPLAY, p2) => {
                 Ok(Instruction::GetShieldedAddr {
                     mode: P2ShieldedAddrMode::try_from(p2)?,
                     display: (value.p1 & P1_GET_PUBLIC_KEY_DISPLAY) != 0,
