@@ -38,7 +38,8 @@ mod tx;
 mod utils;
 mod zip32;
 
-use core::mem;
+use alloc::boxed::Box;
+use core::mem::{self, MaybeUninit};
 
 use app_ui::menu::ui_menu_main;
 use handlers::{
@@ -312,7 +313,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
     // Create the communication manager, and configure it to accept only APDU from the 0xe0 class.
     // If any APDU with a wrong class value is received, comm will respond automatically with
     // BadCla status word.
-    let mut comm = Comm::new().set_expected_cla(ZCASH_CLA);
+    let mut comm = Box::new(Comm::new().set_expected_cla(ZCASH_CLA));
     init_comm(&mut comm);
 
     init_trusted_input_key_storage();
@@ -323,9 +324,15 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
         debug!("App started");
     }
 
-    let mut tx_ctx = TxContext::new(swap_params, Default::default());
+    static mut TX_CTX: MaybeUninit<TxContext<'static>> = MaybeUninit::uninit();
+    // SAFETY: `TX_CTX` is used higher up in this function’s call stack and is initialized before any use.
+    let tx_ctx = unsafe {
+        let tx_ctx = (&raw mut TX_CTX).cast::<TxContext<'_>>();
+        TxContext::init_in_place(tx_ctx, swap_params, Default::default());
+        &mut *tx_ctx
+    };
 
-    debug!("TxContext size {} bytes", mem::size_of_val(&tx_ctx));
+    debug!("TxContext size {} bytes", mem::size_of::<TxContext>());
 
     if swap_params.is_none() {
         tx_ctx.home = ui_menu_main(&mut comm);
@@ -337,7 +344,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
 
         debug!("Received APDU {:?}", ins);
 
-        let status = match handle_apdu(&mut comm, &ins, &mut tx_ctx) {
+        let status = match handle_apdu(&mut comm, &ins, tx_ctx) {
             Ok(()) => {
                 comm.reply_ok();
                 AppSW::Ok
@@ -347,7 +354,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
                 sw
             }
         };
-        show_status_and_home_if_needed(&ins, &mut tx_ctx, &status);
+        show_status_and_home_if_needed(&ins, tx_ctx, &status);
 
         let is_error = status != AppSW::Ok;
         let is_finished = tx_ctx.is_finished();
