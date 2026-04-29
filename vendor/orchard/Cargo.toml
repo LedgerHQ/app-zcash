@@ -23,6 +23,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs", "--html-in-header", "katex-header.html"]
 
 [dependencies]
+ledger_zcash_crypto = { path = "../../ledger_zcash_crypto" }
 aes = "0.8"
 bitvec = { version = "1", default-features = false }
 blake2b_simd = { version = "1", default-features = false }

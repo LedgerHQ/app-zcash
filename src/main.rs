@@ -22,8 +22,10 @@ mod app_ui;
 
 mod handlers {
     pub mod get_public_key;
+    pub mod get_shielded_addr;
     pub mod get_trusted_input;
     pub mod get_version;
+    pub mod get_vk;
     pub mod sign_msg;
     pub mod sign_tx;
 }
@@ -34,11 +36,16 @@ mod settings;
 mod swap;
 mod tx;
 mod utils;
+mod zip32;
 
-use core::mem;
+use alloc::boxed::Box;
+use core::mem::{self, MaybeUninit};
 
 use app_ui::menu::ui_menu_main;
-use handlers::{get_public_key::handler_get_public_key, get_version::handler_get_version};
+use handlers::{
+    get_public_key::handler_get_public_key, get_shielded_addr::handler_get_shielded_addr,
+    get_version::handler_get_version, get_vk::handler_get_vk,
+};
 use ledger_device_sdk::log::{debug, error};
 use ledger_device_sdk::nbgl::StatusType;
 use ledger_device_sdk::{io::StatusWords, libcall::swap::CreateTxParams};
@@ -51,15 +58,16 @@ use tx::TxContext;
 use zeroize::Zeroizing;
 
 use crate::consts::{
-    P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
-    P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_HASH_INPUT_START_FIRST,
-    P1_HASH_INPUT_START_NEXT, P1_NEXT, P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE,
-    P2_HASH_INPUT_START_SAPLING,
+    INS_GET_SHIELD_ADDR, P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE,
+    P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE,
+    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT,
+    P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
+    P2ShieldedAddrMode, P2VkMode,
 };
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
     consts::{
-        INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_WALLET_PUBLIC_KEY,
+        INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_VK, INS_GET_WALLET_PUBLIC_KEY,
         INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN, INS_SIGN_MESSAGE,
         ZCASH_CLA,
     },
@@ -114,6 +122,7 @@ pub enum AppSW {
     TechnicalProblem = 0x6F00,
     VersionParsingFail = 0x6F01,
     TxParsingFail = 0x6F02,
+    BadState = 0xB007,
     Ok = StatusWords::Ok as u16,
 }
 
@@ -127,12 +136,33 @@ impl From<AppSW> for Reply {
 #[derive(Debug)]
 pub enum Instruction {
     GetVersion,
-    GetPubkey { display: bool },
-    GetTrustedInput { first: bool, next: bool },
-    HashInputStart { first: bool, continue_hashing: bool },
-    HashFinalizeFull { is_change: bool },
+    GetPubkey {
+        display: bool,
+    },
+    GetShieldedAddr {
+        display: bool,
+        mode: P2ShieldedAddrMode,
+    },
+    GetVk {
+        mode: P2VkMode,
+        continue_response: bool,
+    },
+    GetTrustedInput {
+        first: bool,
+        next: bool,
+    },
+    HashInputStart {
+        first: bool,
+        continue_hashing: bool,
+    },
+    HashFinalizeFull {
+        is_change: bool,
+    },
     HashSign,
-    SignMessage { first: bool, next: bool },
+    SignMessage {
+        first: bool,
+        next: bool,
+    },
 }
 
 impl TryFrom<ApduHeader> for Instruction {
@@ -159,6 +189,16 @@ impl TryFrom<ApduHeader> for Instruction {
             ) => Ok(Instruction::GetPubkey {
                 display: value.p1 == P1_GET_PUBLIC_KEY_DISPLAY,
             }),
+            (INS_GET_VK, P1_GET_VK_FIRST | P1_GET_VK_CONTINUE, p2) => Ok(Instruction::GetVk {
+                mode: P2VkMode::try_from(p2)?,
+                continue_response: value.p1 == P1_GET_VK_CONTINUE,
+            }),
+            (INS_GET_SHIELD_ADDR, P1_GET_PUBLIC_KEY_NO_DISPLAY | P1_GET_PUBLIC_KEY_DISPLAY, p2) => {
+                Ok(Instruction::GetShieldedAddr {
+                    mode: P2ShieldedAddrMode::try_from(p2)?,
+                    display: (value.p1 & P1_GET_PUBLIC_KEY_DISPLAY) != 0,
+                })
+            }
             (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
                 first: p1 == P1_FIRST,
                 next: p1 == P1_NEXT,
@@ -203,6 +243,13 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
         (Instruction::GetPubkey { display: true }, AppSW::Deny | AppSW::Ok) => {
             (true, StatusType::Address)
         }
+        (
+            Instruction::GetShieldedAddr {
+                display: true,
+                mode: P2ShieldedAddrMode::UAddress,
+            },
+            AppSW::Deny | AppSW::Ok,
+        ) => (true, StatusType::Address),
         (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
         | (Instruction::HashSign, AppSW::Ok)
             if tx_ctx.is_finished() =>
@@ -266,7 +313,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
     // Create the communication manager, and configure it to accept only APDU from the 0xe0 class.
     // If any APDU with a wrong class value is received, comm will respond automatically with
     // BadCla status word.
-    let mut comm = Comm::new().set_expected_cla(ZCASH_CLA);
+    let mut comm = Box::new(Comm::new().set_expected_cla(ZCASH_CLA));
     init_comm(&mut comm);
 
     init_trusted_input_key_storage();
@@ -277,9 +324,15 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
         debug!("App started");
     }
 
-    let mut tx_ctx = TxContext::new(swap_params, Default::default());
+    static mut TX_CTX: MaybeUninit<TxContext<'static>> = MaybeUninit::uninit();
+    // SAFETY: `TX_CTX` is used higher up in this function’s call stack and is initialized before any use.
+    let tx_ctx = unsafe {
+        let tx_ctx = (&raw mut TX_CTX).cast::<TxContext<'_>>();
+        TxContext::init_in_place(tx_ctx, swap_params, Default::default());
+        &mut *tx_ctx
+    };
 
-    debug!("TxContext size {} bytes", mem::size_of_val(&tx_ctx));
+    debug!("TxContext size {} bytes", mem::size_of::<TxContext>());
 
     if swap_params.is_none() {
         tx_ctx.home = ui_menu_main(&mut comm);
@@ -291,7 +344,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
 
         debug!("Received APDU {:?}", ins);
 
-        let status = match handle_apdu(&mut comm, &ins, &mut tx_ctx) {
+        let status = match handle_apdu(&mut comm, &ins, tx_ctx) {
             Ok(()) => {
                 comm.reply_ok();
                 AppSW::Ok
@@ -301,7 +354,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
                 sw
             }
         };
-        show_status_and_home_if_needed(&ins, &mut tx_ctx, &status);
+        show_status_and_home_if_needed(&ins, tx_ctx, &status);
 
         let is_error = status != AppSW::Ok;
         let is_finished = tx_ctx.is_finished();
@@ -330,6 +383,13 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
     match ins {
         Instruction::GetVersion => handler_get_version(comm),
         Instruction::GetPubkey { display } => handler_get_public_key(comm, *display),
+        Instruction::GetVk {
+            mode,
+            continue_response,
+        } => handler_get_vk(comm, ctx, *mode, *continue_response),
+        Instruction::GetShieldedAddr { mode, display } => {
+            handler_get_shielded_addr(comm, *mode, *display)
+        }
         Instruction::GetTrustedInput { first, next } => {
             handler_get_trusted_input(comm, ctx, *first, *next)
         }

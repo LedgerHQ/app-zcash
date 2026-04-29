@@ -1,16 +1,13 @@
 [package]
 name = "zcash"
-version = "3.0.0"
+version = "3.1.0"
 authors = ["Ledger"]
 edition = "2024"
 
 [dependencies]
-ledger_device_sdk = { version = "1.34.0", features = ["sys"] }
+ledger_device_sdk = { version = "1.*", features = ["sys"] }
+ledger_zcash_crypto = { path = "ledger_zcash_crypto" }
 core2 = { version = "0.3.0", default-features = false }
-hex = { version = "0.4.3", default-features = false, features = [
-    "serde",
-    "alloc",
-] }
 arrayvec = { version = "0.7.6", default-features = false }
 bs58 = { version = "0.5.1", default-features = false }
 
@@ -18,6 +15,8 @@ zcash_primitives = { git = "https://github.com/Fingolfin69/librustzcash.git", br
 zcash_protocol = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 zcash_encoding = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
 zcash_transparent = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
+zcash_address = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
+
 orchard = { path = "./vendor/orchard", default-features = false }
 num_enum = { version = "0.7.5", default-features = false }
 zeroize = { version = "1.6.0", default-features = false }
@@ -33,6 +32,7 @@ sapling-crypto = { path = "./vendor/sapling-crypto" }
 # Used by multiple deps
 spin = { path = "./vendor/spin" }
 portable-atomic = { git = "https://github.com/taiki-e/portable-atomic.git", tag = "v1.12.0" }
+reddsa = { path = "./vendor/reddsa" }
 
 [build-dependencies]
 image = "0.25.7"
@@ -50,8 +50,8 @@ debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
 legacy_path = []
 
 [package.metadata.ledger]
-curve = ["secp256k1"]
-path = ["44'/133'"]
+curve = ["secp256k1", "jubjub"]
+path = ["44'/133'", "32'/133'"]
 name = "Zcash"
 flags = "0x800"
 

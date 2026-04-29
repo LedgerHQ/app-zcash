@@ -76,3 +76,11 @@ def unpack_trusted_input_response(response: bytes) -> Tuple[bytes, int, int, byt
     assert magic == MAGIC_TRUSTED_INPUT
 
     return (txid, trusted_input_idx, amount, sign, nonce)
+
+def unpack_len_prefixed_utf8_response(response: bytes) -> str:
+    str_len = int.from_bytes(response[:2], byteorder="big")
+    utf8_str = response[2:2 + str_len].decode("utf-8")
+
+    assert len(response) == 2 + str_len
+
+    return utf8_str

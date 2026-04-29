@@ -1,0 +1,62 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index a064e52..e09cae8 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -24,6 +24,7 @@ description = "A standalone implementation of the RedDSA signature scheme."
+ features = ["nightly"]
+ 
+ [dependencies]
++ledger_zcash_crypto = { path = "../../ledger_zcash_crypto" }
+ blake2b_simd = { version = "1", default-features = false }
+ byteorder = { version = "1.4", default-features = false }
+ group = { version = "0.13", default-features = false }
+diff --git a/src/signing_key.rs b/src/signing_key.rs
+index 773c4ff..5669622 100644
+--- a/src/signing_key.rs
++++ b/src/signing_key.rs
+@@ -31,6 +31,18 @@ pub struct SigningKey<T: SigType> {
+     pk: VerificationKey<T>,
+ }
+ 
++impl SigningKey<crate::orchard::SpendAuth> {
++    /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
++    pub fn try_from_ledger_signing_key(
++        ask: ledger_zcash_crypto::redpallas::SpendAuthSigningKey,
++    ) -> Result<Self, ledger_zcash_crypto::Error> {
++        let sk = ledger_zcash_crypto::pallas_scalar_from_repr(<[u8; 32]>::from(ask))?;
++        let pk = VerificationKey::from_ledger_verification_key(ask.verification_key());
++
++        Ok(SigningKey { sk, pk })
++    }
++}
++
+ impl<T: SigType> From<&SigningKey<T>> for VerificationKey<T> {
+     fn from(sk: &SigningKey<T>) -> VerificationKey<T> {
+         sk.pk
+diff --git a/src/verification_key.rs b/src/verification_key.rs
+index eac342c..4f6433f 100644
+--- a/src/verification_key.rs
++++ b/src/verification_key.rs
+@@ -78,6 +78,22 @@ pub struct VerificationKey<T: SigType> {
+     pub(crate) bytes: VerificationKeyBytes<T>,
+ }
+ 
++impl VerificationKey<crate::orchard::SpendAuth> {
++    /// Creates a RedPallas spend authorization verification key from the given bytes.
++    pub fn from_ledger_verification_key(
++        verification_key: ledger_zcash_crypto::redpallas::SpendAuthVerificationKey,
++    ) -> Self {
++        let (bytes, point) = verification_key.into_parts();
++        VerificationKey {
++            point,
++            bytes: VerificationKeyBytes {
++                bytes,
++                _marker: PhantomData,
++            },
++        }
++    }
++}
++
+ impl<T: SigType> From<VerificationKey<T>> for VerificationKeyBytes<T> {
+     fn from(pk: VerificationKey<T>) -> VerificationKeyBytes<T> {
+         pk.bytes

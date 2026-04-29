@@ -19,10 +19,20 @@ use ledger_device_sdk::nbgl::NbglAddressReview;
 
 use crate::{AppSW, app_ui::load_glyph};
 
-pub fn ui_display_pk(addr: &str) -> Result<bool, AppSW> {
+fn display_address(review_title: &str, addr: &str) -> Result<bool, AppSW> {
     // Display the address confirmation screen.
     Ok(NbglAddressReview::new()
         .glyph(load_glyph())
-        .review_title("Verify address")
+        .review_title(review_title)
         .show(addr))
+}
+
+pub fn ui_display_pk(addr: &str) -> Result<bool, AppSW> {
+    // Display the address confirmation screen.
+    display_address("Verify address", addr)
+}
+
+pub fn ui_display_unified_address(addr: &str) -> Result<bool, AppSW> {
+    // Display the unified address confirmation screen.
+    display_address("Verify Orchard UAddress", addr)
 }

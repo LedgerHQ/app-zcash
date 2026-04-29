@@ -16,6 +16,7 @@
  *****************************************************************************/
 
 use crate::utils::HexSlice;
+use crate::utils::bip32_path::Bip32Path;
 use crate::{
     app_ui::address::ui_display_pk,
     utils::{
@@ -47,7 +48,7 @@ use ledger_device_sdk::log::debug;
 pub fn handler_get_public_key(comm: &mut Comm, display: bool) -> Result<(), AppSW> {
     debug!("Called get public key handler");
 
-    let bip32_path = comm
+    let bip32_path: Bip32Path = comm
         .get_data()
         .map_err(|_| AppSW::WrongApduLength)?
         .try_into()?;
