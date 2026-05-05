@@ -383,15 +383,21 @@ class ZcashCommandSender:
     def hash_sign(
         self,
         path: str,
-        locktime: int,
-        expiry: int,
+        locktime: Optional[int] = None,
+        expiry: Optional[int] = None,
         sighash_type: int = 0x01,
         mode: HashSignMode = HashSignMode.Sign,
         prepare: bool = True,
         binding_signing_key: Optional[bytes] = None,
     ) -> RAPDU:
         # pylint: disable=too-many-positional-arguments
+        if (locktime is None) != (expiry is None):
+            raise ValueError("locktime and expiry must be provided together")
+
         if prepare:
+            if locktime is None or expiry is None:
+                raise ValueError("locktime and expiry are required when prepare=True")
+
             # Send extra header data
             self.backend.exchange(
                 cla=CLA,
@@ -413,13 +419,14 @@ class ZcashCommandSender:
                 raise ValueError("binding_signing_key must be 32 bytes")
             sign_data = binding_signing_key
         else:
-            sign_data = (
-                pack_derivation_path(path)
-                + 0x00.to_bytes(1, byteorder="big")
-                + locktime.to_bytes(4, byteorder="big")
-                + sighash_type.to_bytes(1, byteorder="big")
-                + expiry.to_bytes(4, byteorder="big")
-            )
+            sign_data = pack_derivation_path(path)
+            if locktime is not None and expiry is not None:
+                sign_data += (
+                    0x00.to_bytes(1, byteorder="big")
+                    + locktime.to_bytes(4, byteorder="big")
+                    + sighash_type.to_bytes(1, byteorder="big")
+                    + expiry.to_bytes(4, byteorder="big")
+                )
 
         return self.backend.exchange(
             cla=CLA,
