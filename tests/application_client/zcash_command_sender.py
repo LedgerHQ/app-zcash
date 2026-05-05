@@ -48,6 +48,7 @@ class HashSignMode(IntEnum):
     Sign = 0x00
     Digest = 0x01
     SpendAuthSig = 0x02
+    BindingSig = 0x03
 
 class P2(IntEnum):
     # Parameter 2 default value
@@ -387,6 +388,7 @@ class ZcashCommandSender:
         sighash_type: int = 0x01,
         mode: HashSignMode = HashSignMode.Sign,
         prepare: bool = True,
+        binding_signing_key: Optional[bytes] = None,
     ) -> RAPDU:
         # pylint: disable=too-many-positional-arguments
         if prepare:
@@ -404,16 +406,27 @@ class ZcashCommandSender:
 
             self._send_trusted_inputs_and_header(continue_hashing=True)
 
+        if mode == HashSignMode.BindingSig:
+            if binding_signing_key is None:
+                raise ValueError("binding_signing_key is required for BindingSig mode")
+            if len(binding_signing_key) != 32:
+                raise ValueError("binding_signing_key must be 32 bytes")
+            sign_data = binding_signing_key
+        else:
+            sign_data = (
+                pack_derivation_path(path)
+                + 0x00.to_bytes(1, byteorder="big")
+                + locktime.to_bytes(4, byteorder="big")
+                + sighash_type.to_bytes(1, byteorder="big")
+                + expiry.to_bytes(4, byteorder="big")
+            )
+
         return self.backend.exchange(
             cla=CLA,
             ins=InsType.HASH_SIGN,
             p1=mode,
             p2=P2.P2_NONE,
-            data=pack_derivation_path(path)
-            + 0x00.to_bytes(1, byteorder="big")
-            + locktime.to_bytes(4, byteorder="big")
-            + sighash_type.to_bytes(1, byteorder="big")
-            + expiry.to_bytes(4, byteorder="big"),
+            data=sign_data,
         )
 
     def forge_and_get_trusted_input(self, trusted_input_idx: int, send_amount: int) -> bytes:

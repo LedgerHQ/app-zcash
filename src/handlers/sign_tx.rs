@@ -27,6 +27,16 @@ use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
 use crate::zip32::{derive_orchard_ask, map_ledger_crypto_error};
 
+const ORCHARD_BINDING_SIGNING_KEY_LEN: usize = 32;
+
+fn map_redpallas_error(err: ledger_zcash_crypto::redpallas::Error) -> AppSW {
+    match err {
+        ledger_zcash_crypto::redpallas::Error::MalformedSigningKey
+        | ledger_zcash_crypto::redpallas::Error::MalformedVerificationKey => AppSW::IncorrectData,
+        _ => map_ledger_crypto_error(ledger_zcash_crypto::Error::from(err)),
+    }
+}
+
 pub fn handler_hash_input_start(
     comm: &mut Comm,
     ctx: &mut TxContext,
@@ -178,7 +188,7 @@ pub fn handler_hash_sign(
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
     if data.is_empty() {
-        error!("Not enough data for derivation path length");
+        error!("Not enough data for hash sign");
         return Err(AppSW::WrongApduLength);
     }
 
@@ -208,6 +218,15 @@ pub fn handler_hash_sign(
     if !ctx.parser.is_ready_to_sign() {
         error!("Bad processing state for signing");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
+    }
+
+    if let P1HashSignMode::BindingSig = mode {
+        debug!("Returning orchard binding signature");
+
+        let binding_sig = orchard_binding_signature(data, &ctx.tx_info.signature_digest)?;
+        comm.append(&binding_sig);
+
+        return Ok(());
     }
 
     let path_len = data[0] as usize * 4 + 1; // Path segment 4 bytes + 1 byte length
@@ -297,6 +316,31 @@ fn append_signature(
     comm.append(&[sighash_type]);
 
     Ok(())
+}
+
+// Returns a 64-byte Orchard binding signature. The APDU data must be the
+// canonical little-endian binding signing key scalar.
+fn orchard_binding_signature(data: &[u8], sig_hash: &[u8; 32]) -> Result<[u8; 64], AppSW> {
+    if data.len() != ORCHARD_BINDING_SIGNING_KEY_LEN {
+        error!("Invalid binding signing key length: {}", data.len());
+        return Err(AppSW::WrongApduLength);
+    }
+
+    let mut bsk_bytes = [0u8; ORCHARD_BINDING_SIGNING_KEY_LEN];
+    bsk_bytes.copy_from_slice(data);
+
+    let bsk = ledger_zcash_crypto::redpallas::binding_signing_key(bsk_bytes)
+        .map_err(map_redpallas_error)?;
+
+    let mut random_bytes = [0u8; 80];
+    rand_bytes(&mut random_bytes);
+
+    let binding_sig = ledger_zcash_crypto::redpallas::binding_sign(&bsk, &random_bytes, sig_hash)
+        .map_err(map_redpallas_error)?;
+
+    debug!("Orchard binding signature: {}", HexSlice(&binding_sig));
+
+    Ok(binding_sig)
 }
 
 // Returns a 64-byte spend auth signature and alpha bytes
