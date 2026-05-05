@@ -430,9 +430,9 @@ impl Parser {
                     finalize_signature_hash(
                         ctx,
                         if zero_output_count {
-                            SighHashComputeMode::NoneTransparentInputsOutputs
+                            SighHashComputeMode::NoTransparentInputsOrOutputs
                         } else {
-                            SighHashComputeMode::NoneTransparentInputs
+                            SighHashComputeMode::NoTransparentInputs
                         },
                     )?;
                     ParserState::TransactionReadyToSign

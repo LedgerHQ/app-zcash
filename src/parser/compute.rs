@@ -143,9 +143,9 @@ pub fn finalize_signature_input_hash(ctx: &mut ParserCtx<'_>) -> Result<(), Pars
 
 #[derive(Debug, Clone, Copy)]
 pub enum SighHashComputeMode {
+    NoTransparentInputsOrOutputs,
+    NoTransparentInputs,
     SomeTransparentInputs,
-    NoneTransparentInputs,
-    NoneTransparentInputsOutputs,
 }
 
 pub fn finalize_signature_hash(
@@ -165,7 +165,8 @@ pub fn finalize_signature_hash(
         ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
 
         match mode {
-            SighHashComputeMode::NoneTransparentInputs => {
+            SighHashComputeMode::NoTransparentInputsOrOutputs => {}
+            SighHashComputeMode::NoTransparentInputs => {
                 ok!(hasher.update(&ctx.tx_info.prevouts_hash));
                 ok!(hasher.update(&ctx.tx_info.sequence_hash));
                 ok!(hasher.update(&ctx.tx_info.outputs_hash));
@@ -179,7 +180,6 @@ pub fn finalize_signature_hash(
                 ok!(hasher.update(&ctx.tx_info.outputs_hash));
                 ok!(hasher.update(&txin_sig_digest));
             }
-            SighHashComputeMode::NoneTransparentInputsOutputs => (),
         }
 
         ok!(hasher.finalize(&mut hash));

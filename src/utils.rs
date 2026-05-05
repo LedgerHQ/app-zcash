@@ -167,8 +167,9 @@ pub enum Bip44CheckMode {
 pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const HARDENED: u32 = 0x8000_0000;
     const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
+    const PURPOSE_OFFSET: usize = 0;
+
     const BIP44_PATH_LEN: usize = 5;
-    const BIP44_PURPOSE_OFFSET: usize = 0;
     const BIP44_COIN_TYPE_OFFSET: usize = 1;
     const BIP44_ACCOUNT_OFFSET: usize = 2;
     const BIP44_CHANGE_OFFSET: usize = 3;
@@ -188,7 +189,7 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
             return false;
         }
 
-        if path[BIP44_PURPOSE_OFFSET] != (ZIP32_PURPOSE | HARDENED) {
+        if path[PURPOSE_OFFSET] != (ZIP32_PURPOSE | HARDENED) {
             error!("Bad ZIP32 purpose");
             return false;
         }
@@ -210,7 +211,7 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
             return false;
         }
 
-        let purpose = path[BIP44_PURPOSE_OFFSET] & UNHARDENED_MASK;
+        let purpose = path[PURPOSE_OFFSET] & UNHARDENED_MASK;
         if !BIP44_ALLOWED_PURPOSES.contains(&purpose) {
             error!("Bad Bip44 purpose");
             return false;
