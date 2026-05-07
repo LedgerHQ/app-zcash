@@ -83,7 +83,7 @@ impl TryFrom<u8> for P2ShieldedAddrMode {
 pub enum P1HashSignMode {
     Sign = 0x00,
     Digest = 0x01,
-    AuthSig = 0x02,
+    SpendAuthSig = 0x02,
 }
 
 impl TryFrom<u8> for P1HashSignMode {
@@ -93,7 +93,7 @@ impl TryFrom<u8> for P1HashSignMode {
         match value {
             0x00 => Ok(P1HashSignMode::Sign),
             0x01 => Ok(P1HashSignMode::Digest),
-            0x02 => Ok(P1HashSignMode::AuthSig),
+            0x02 => Ok(P1HashSignMode::SpendAuthSig),
             _ => Err(AppSW::WrongP1P2),
         }
     }

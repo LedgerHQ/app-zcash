@@ -107,7 +107,7 @@ def _assert_hash_sign_authsign(
         path=ORCHARD_SIGNING_PATH,
         locktime=locktime,
         expiry=expiry,
-        mode=HashSignMode.AuthSig,
+        mode=HashSignMode.SpendAuthSig,
         prepare=False,
     ).data[:64]
 

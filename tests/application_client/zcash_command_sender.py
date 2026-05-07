@@ -47,7 +47,7 @@ class P1(IntEnum):
 class HashSignMode(IntEnum):
     Sign = 0x00
     Digest = 0x01
-    AuthSig = 0x02
+    SpendAuthSig = 0x02
 
 class P2(IntEnum):
     # Parameter 2 default value

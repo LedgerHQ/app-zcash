@@ -230,10 +230,10 @@ pub fn handler_hash_sign(
         comm.append(&ctx.tx_info.signature_digest);
 
         return Ok(());
-    } else if let P1HashSignMode::AuthSig = mode {
-        debug!("Returning auth signature for an orchard action");
+    } else if let P1HashSignMode::SpendAuthSig = mode {
+        debug!("Returning spend auth signature for an orchard action");
 
-        let (auth_sig, alpha) = orchard_auth_signature(&path, &ctx.tx_info.signature_digest)?;
+        let (auth_sig, alpha) = orchard_spend_auth_signature(&path, &ctx.tx_info.signature_digest)?;
         comm.append(&auth_sig);
         comm.append(&alpha);
 
@@ -299,8 +299,8 @@ fn append_signature(
     Ok(())
 }
 
-// Returns a 64-byte auth signature and alpha bytes
-fn orchard_auth_signature(
+// Returns a 64-byte spend auth signature and alpha bytes
+fn orchard_spend_auth_signature(
     bip32_path: &Bip32Path,
     sig_hash: &[u8; 32],
 ) -> Result<([u8; 64], [u8; 32]), AppSW> {
@@ -315,8 +315,6 @@ fn orchard_auth_signature(
             Err(_) => return Err(AppSW::TechnicalProblem),
         }
     };
-
-    debug!("Alpha bytes: {}", HexSlice(&alpha_bytes));
 
     let randomized_ask = ask
         .randomize_ledger(&alpha)
@@ -335,7 +333,7 @@ fn orchard_auth_signature(
         .map_err(map_ledger_crypto_error)?;
     let auth_sig: [u8; 64] = (&auth_sig).into();
 
-    debug!("Orchard auth signature: {}", HexSlice(&auth_sig));
+    debug!("Orchard spend auth signature: {}", HexSlice(&auth_sig));
     debug!("Orchard alpha: {}", HexSlice(&alpha_bytes));
 
     Ok((auth_sig, alpha_bytes))

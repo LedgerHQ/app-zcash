@@ -38,9 +38,9 @@ def check_tx_v5_signature_validity(
     from ecdsa.keys import VerifyingKey
     from ecdsa.util import sigdecode_der
 
-    signature = bytearray(signature)
-    signature[0] &= 0xFE
-    signature = bytes(signature)
+    normalized_signature = bytearray(signature)
+    normalized_signature[0] &= 0xFE
+    signature = bytes(normalized_signature)
 
     sighash = _nu5_signature_hash(
         tx_bytes=tx_bytes,
