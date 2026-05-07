@@ -304,17 +304,33 @@ fn orchard_spend_auth_signature(
     bip32_path: &Bip32Path,
     sig_hash: &[u8; 32],
 ) -> Result<([u8; 64], [u8; 32]), AppSW> {
+    // This number of attempts gives negligible failure probability
+    const ALPHA_GENERATION_ATTEMPTS: usize = 350;
+
     let ask = derive_orchard_ask(bip32_path)?;
-    let (alpha, alpha_bytes) = loop {
+
+    let mut alpha = None;
+    for _ in 0..ALPHA_GENERATION_ATTEMPTS {
         let mut alpha_bytes = [0u8; 32];
         rand_bytes(&mut alpha_bytes);
 
         match ledger_zcash_crypto::pallas_scalar_from_repr(alpha_bytes) {
-            Ok(alpha) => break (alpha, alpha_bytes),
+            Ok(alpha_scalar) => {
+                alpha = Some((alpha_scalar, alpha_bytes));
+                break;
+            }
             Err(ledger_zcash_crypto::Error::MalformedPallasScalar) => {}
             Err(_) => return Err(AppSW::TechnicalProblem),
         }
-    };
+    }
+
+    let (alpha, alpha_bytes) = alpha.ok_or_else(|| {
+        error!(
+            "Failed to generate a valid alpha scalar after {} attempts",
+            ALPHA_GENERATION_ATTEMPTS
+        );
+        AppSW::MaxValueReached
+    })?;
 
     let randomized_ask = ask
         .randomize_ledger(&alpha)
