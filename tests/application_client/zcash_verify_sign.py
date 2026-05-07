@@ -214,3 +214,32 @@ def _blake2b_256(personal: bytes, data: bytes) -> bytes:
     if len(personal) != 16:
         raise ValueError("Blake2b personalization must be 16 bytes")
     return hashlib.blake2b(data, digest_size=32, person=personal).digest()
+
+
+def check_message_signature_validity(
+    public_key: bytes,
+    signature: bytes,
+    message: bytes,
+) -> bool:
+    # Reset signature first bit (parity info) if set
+    signature = bytearray(signature)
+    signature[0] &= 0xFE
+    signature = bytes(signature)
+
+    digest = _zcash_signed_message_hash(message)
+    pk = VerifyingKey.from_string(public_key, curve=SECP256k1)
+    return pk.verify_digest(signature=signature, digest=digest, sigdecode=sigdecode_der)
+
+
+def _encode_message_len(length: int) -> bytes:
+    if length < 0xFD:
+        return bytes([length])
+    if length <= 0xFFFF:
+        return b"\xFD" + length.to_bytes(2, byteorder="little")
+    raise ValueError("Unsupported message length")
+
+
+def _zcash_signed_message_hash(message: bytes) -> bytes:
+    prefix = b"Zcash Signed Message:\n"
+    payload = bytes([len(prefix)]) + prefix + _encode_message_len(len(message)) + message
+    return hashlib.sha256(hashlib.sha256(payload).digest()).digest()

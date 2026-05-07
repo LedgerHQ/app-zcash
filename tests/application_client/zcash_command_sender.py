@@ -66,6 +66,7 @@ class InsType(IntEnum):
     HASH_INPUT_START = 0x44
     HASH_INPUT_FINALIZE_FULL = 0x4A
     HASH_SIGN = 0x48
+    SIGN_MESSAGE = 0x4E
     GET_VK = 0x50
     GET_SHIELDED_ADDRESS = 0x51
 
@@ -391,6 +392,41 @@ class ZcashCommandSender:
             + locktime.to_bytes(4, byteorder="big")
             + sighash_type.to_bytes(1, byteorder="big")
             + expiry.to_bytes(4, byteorder="big"),
+        )
+
+    def sign_message(self, path: str, message: str | bytes) -> RAPDU:
+        message_bytes = message.encode("utf-8") if isinstance(message, str) else message
+        if len(message_bytes) > 0xFFFF:
+            raise ValueError("Message too long for APDU sign-message flow (max 65535 bytes)")
+
+        path_bytes = pack_derivation_path(path)
+        first_data_prefix = path_bytes + len(message_bytes).to_bytes(2, byteorder="big")
+
+        first_chunk_capacity = max(0, MAX_APDU_LEN - len(first_data_prefix))
+        first_chunk = message_bytes[:first_chunk_capacity]
+        self.backend.exchange(
+            cla=CLA,
+            ins=InsType.SIGN_MESSAGE,
+            p1=P1.P1_FIRST,
+            p2=P2.P2_NONE,
+            data=first_data_prefix + first_chunk,
+        )
+
+        for chunk in split_message(message_bytes[first_chunk_capacity:], MAX_APDU_LEN):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.SIGN_MESSAGE,
+                p1=P1.P1_NEXT,
+                p2=P2.P2_NONE,
+                data=chunk,
+            )
+
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.SIGN_MESSAGE,
+            p1=P1.P1_FIRST,
+            p2=P2.P2_NONE,
+            data=b"",
         )
 
     def forge_and_get_trusted_input(self, trusted_input_idx: int, send_amount: int) -> bytes:

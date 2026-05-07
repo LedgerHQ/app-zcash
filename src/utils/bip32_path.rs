@@ -8,7 +8,7 @@ pub const BIP32_BYTES_PER_SEGMENT: usize = size_of::<u32>();
 ///
 /// Each component represents one level in the path (e.g., m/44'/1'/0'/0/0 has 5 components).
 /// Hardened derivation is indicated by setting the high bit (>= 0x80000000).
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct Bip32Path {
     path: [u32; MAX_ZCASH_BIP32_PATH],
     path_len: u8,
