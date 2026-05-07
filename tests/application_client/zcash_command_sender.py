@@ -30,6 +30,7 @@ class P1(IntEnum):
     P1_GET_PUBLIC_KEY_NO_DISPLAY = 0x00
     # Parameter 1 for screen confirmation for GET_PUBLIC_KEY.
     P1_GET_PUBLIC_KEY_DISPLAY = 0x01
+    P1_GET_VK_DISPLAY = 0x01
     P1_GET_VK_CONTINUE = 0x80
 
     # Parameter 1 for first APDU number for HASH_INPUT_START.
@@ -173,11 +174,14 @@ class ZcashCommandSender:
         path: Optional[str] = None,
         mode: GetVkMode = GetVkMode.UFVK,
         continue_response: bool = False,
+        display: bool = False,
     ) -> RAPDU:
         response = self.backend.exchange(
             cla=CLA,
             ins=InsType.GET_VK,
-            p1= P1.P1_GET_VK_CONTINUE if continue_response else P1.P1_FIRST,
+            p1= P1.P1_GET_VK_CONTINUE if continue_response else (
+                P1.P1_GET_VK_DISPLAY if display else P1.P1_FIRST
+            ),
             p2=mode,
             data=b"" if continue_response else pack_derivation_path(path),
         )
@@ -208,6 +212,53 @@ class ZcashCommandSender:
             response = continuation
 
         return ApduResponse(status=response.status, data=bytes(response_data))
+
+    @contextmanager
+    def get_vk_with_confirmation(
+        self,
+        path: str,
+        mode: GetVkMode = GetVkMode.UFVK,
+    ) -> Generator[None, None, None]:
+        self.last_response = None
+        response = self.backend.exchange(
+            cla=CLA,
+            ins=InsType.GET_VK,
+            p1=P1.P1_GET_VK_DISPLAY,
+            p2=mode,
+            data=pack_derivation_path(path),
+        )
+
+        if mode != GetVkMode.UFVK or len(response.data) < 2:
+            self.last_response = response
+            yield response
+            return
+
+        total_response_len = 2 + int.from_bytes(response.data[:2], byteorder="big")
+        response_data = bytearray(response.data)
+
+        while total_response_len - len(response_data) > MAX_APDU_LEN:
+            continuation = self.backend.exchange(
+                cla=CLA,
+                ins=InsType.GET_VK,
+                p1=P1.P1_GET_VK_CONTINUE,
+                p2=mode,
+                data=b"",
+            )
+            response_data.extend(continuation.data)
+
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.GET_VK,
+            p1=P1.P1_GET_VK_CONTINUE,
+            p2=mode,
+            data=b"",
+        ) as response:
+            yield response
+
+        response = self.backend.last_async_response
+        if response is not None:
+            response_data.extend(response.data)
+            self.last_response = ApduResponse(status=response.status, data=bytes(response_data))
 
     @contextmanager
     def get_public_key_with_confirmation(

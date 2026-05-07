@@ -71,6 +71,28 @@ def test_get_ufvk(backend):
     ufvk = unpack_len_prefixed_utf8_response(response)
     assert ufvk == REF_UFVK_ACC_1
 
+def test_get_ufvk_confirm_accepted(backend, scenario_navigator):
+    REF_UFVK_ACC_0 = "uview1zkk7f8hp2m5v09kq7h29vkgngwhhvgy2ey32cy5j0kp69g7ju2vqjvnue03u99z382rtkgvj3f8vtqdtxfxvgjytezgt39dqc0lyt2sj084jdq4md69snc3wxdcl8uah8sxw3rrt9pnxnfl3r4xnczapts7gr4l0cuell7dcjv36gkdcsl4axps827xt6fgmfl78zlhddec72tn2p0eqnpkuy7a08puhj97v0ahxuqlyzmyqtldqnc0p3696d9ww8x6mpd56mz6w32twryevru2rx34lf8dtqsp50gar"
+
+    client = ZcashCommandSender(backend)
+
+    with client.get_vk_with_confirmation(path="m/32'/133'/0'", mode=GetVkMode.UFVK):
+        scenario_navigator.address_review_approve()
+
+    response = client.get_async_response().data
+    ufvk = unpack_len_prefixed_utf8_response(response)
+    assert ufvk == REF_UFVK_ACC_0
+
+def test_get_ufvk_confirm_refused(backend, scenario_navigator):
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.get_vk_with_confirmation(path="m/32'/133'/0'", mode=GetVkMode.UFVK):
+            scenario_navigator.address_review_reject()
+
+    assert e.value.status == Errors.SW_DENY
+    assert len(e.value.data) == 0
+
 
 def test_get_orchard_fvk(backend):
     REF_ORCHARD_FVK_ACC_0 = bytes.fromhex(
