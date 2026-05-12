@@ -8,7 +8,33 @@ from application_client.zcash_response_unpacker import (
 from ragger.bip import calculate_public_key_and_chaincode, CurveChoice
 from ragger.error import ExceptionRAPDU
 from application_client.zcash_utils import t_address_from_pubkey
+from ragger.navigator import NavigateWithScenario, NavInsID
+from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
+
+def extension(cls):
+    def wrapper(func):
+        setattr(cls, func.__name__, func)
+        return func
+    return wrapper
+
+# Special approve navigation that doesn't wait for the last screen,
+# as the UFVK status screen is shown only after all response chunks are fetched.
+@extension(NavigateWithScenario)
+def review_approve_ufvk(self):
+    scenario = NavigationScenarioData(self.device, self.backend, UseCase.ADDRESS_CONFIRMATION, True)
+
+    if self.device.touchable:
+        scenario.validation = scenario.validation[:-1]
+
+    self.navigator.navigate_until_text_and_compare(
+        navigate_instruction=scenario.navigation,
+        validation_instructions=scenario.validation,
+        text=scenario.pattern,
+        path=self.screenshot_path,
+        test_case_name=self.test_name,
+        screen_change_after_last_instruction=False,
+    )
 
 # In this test we check that the GET_PUBLIC_KEY works in non-confirmation mode
 def test_get_public_key_no_confirm(backend):
@@ -26,7 +52,7 @@ def test_get_public_key_no_confirm(backend):
 
 
 # In this test we check that the GET_PUBLIC_KEY works in confirmation mode
-def test_get_public_key_confirm_accepted(backend, scenario_navigator):
+def test_get_public_key_confirm_accepted(backend, scenario_navigator: NavigateWithScenario):
     client = ZcashCommandSender(backend)
     path = "m/44'/133'/0'/0/0"
 
@@ -62,10 +88,13 @@ def test_get_ufvk_confirm_accepted(backend, scenario_navigator):
 
     client = ZcashCommandSender(backend)
 
-    with client.get_vk_with_confirmation(path="m/32'/133'/0'", mode=GetVkMode.UFVK):
-        scenario_navigator.address_review_approve()
+    with client.get_vk_with_confirmation(
+        path="m/32'/133'/0'",
+        mode=GetVkMode.UFVK,
+        navigate=scenario_navigator.review_approve_ufvk,
+    ) as response:
+        response = response.data
 
-    response = client.get_async_response().data
     ufvk = unpack_len_prefixed_utf8_response(response)
     assert ufvk == REF_UFVK_ACC_0
 
@@ -73,10 +102,13 @@ def test_get_ufvk_confirm_accepted_acc1(backend, scenario_navigator):
     REF_UFVK_ACC_1 = "uview15lcx60j8zufp6qe5xveppqjjw3ukg5n90ln8uhgdxukp60tejk626763gffftfw4a2mjkxy4s9mpjdd6ckfkecz846jdvth57djchnpq7699v09g7eu9xnyyfeqtvm5jxhvpn6dxkzqq3726xwhxmn458a8hd2agvl30r2kz9cde8d8nd3e7akdkufuzp3hyule9v0w3a6qx5p5fx8qa3wvjcj9qg9ypnr56m672rsv9y8fqn20usqzhxmrnmm2jf7gnh8kdk68dyvej9jlsm522w24jvce0lcqpn3mf"
 
     client = ZcashCommandSender(backend)
-    with client.get_vk_with_confirmation(path="m/32'/133'/1'", mode=GetVkMode.UFVK):
-        scenario_navigator.address_review_approve()
+    with client.get_vk_with_confirmation(
+        path="m/32'/133'/1'",
+        mode=GetVkMode.UFVK,
+        navigate=scenario_navigator.review_approve_ufvk,
+    ) as response:
+        response = response.data
 
-    response = client.get_async_response().data
     ufvk = unpack_len_prefixed_utf8_response(response)
     assert ufvk == REF_UFVK_ACC_1
 
@@ -84,8 +116,12 @@ def test_get_ufvk_confirm_refused(backend, scenario_navigator):
     client = ZcashCommandSender(backend)
 
     with pytest.raises(ExceptionRAPDU) as e:
-        with client.get_vk_with_confirmation(path="m/32'/133'/0'", mode=GetVkMode.UFVK):
-            scenario_navigator.address_review_reject()
+        with client.get_vk_with_confirmation(
+            path="m/32'/133'/0'",
+            mode=GetVkMode.UFVK,
+            navigate=scenario_navigator.address_review_reject,
+        ):
+            pass
 
     assert e.value.status == Errors.SW_DENY
     assert len(e.value.data) == 0
@@ -98,10 +134,13 @@ def test_get_orchard_fvk_confirm_accepted(backend, scenario_navigator):
 
     client = ZcashCommandSender(backend)
 
-    with client.get_vk_with_confirmation(path="m/32'/133'/0'", mode=GetVkMode.ORCHARD_FVK):
-        scenario_navigator.address_review_approve()
+    with client.get_vk_with_confirmation(
+        path="m/32'/133'/0'",
+        mode=GetVkMode.ORCHARD_FVK,
+        navigate=scenario_navigator.address_review_approve,
+    ) as response:
+        response = response.data
 
-    response = client.get_async_response().data
     assert response == REF_ORCHARD_FVK_ACC_0
 
 def test_get_orchard_fvk_confirm_accepted_acc1(backend, scenario_navigator):
@@ -111,18 +150,25 @@ def test_get_orchard_fvk_confirm_accepted_acc1(backend, scenario_navigator):
 
     client = ZcashCommandSender(backend)
 
-    with client.get_vk_with_confirmation(path="m/32'/133'/1'", mode=GetVkMode.ORCHARD_FVK):
-        scenario_navigator.address_review_approve()
+    with client.get_vk_with_confirmation(
+        path="m/32'/133'/1'",
+        mode=GetVkMode.ORCHARD_FVK,
+        navigate=scenario_navigator.address_review_approve,
+    ) as response:
+        response = response.data
 
-    response = client.get_async_response().data
     assert response == REF_ORCHARD_FVK_ACC_1
 
 def test_get_orchard_fvk_confirm_refused(backend, scenario_navigator):
     client = ZcashCommandSender(backend)
 
     with pytest.raises(ExceptionRAPDU) as e:
-        with client.get_vk_with_confirmation(path="m/32'/133'/0'", mode=GetVkMode.ORCHARD_FVK):
-            scenario_navigator.address_review_reject()
+        with client.get_vk_with_confirmation(
+            path="m/32'/133'/0'",
+            mode=GetVkMode.ORCHARD_FVK,
+            navigate=scenario_navigator.address_review_reject,
+        ):
+            pass
 
     assert e.value.status == Errors.SW_DENY
     assert len(e.value.data) == 0

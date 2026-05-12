@@ -29,9 +29,9 @@ def check_tx_v5_signature_validity(
     sighash_type: int = 0x01,
 ) -> bool:
     # Reset signature first bit (parity info) if set
-    der_signature = bytearray(signature)
-    der_signature[0] &= 0xFE
-    signature = bytes(der_signature)
+    mutable_signature = bytearray(signature)
+    mutable_signature[0] &= 0xFE
+    signature = bytes(mutable_signature)
 
     sighash = _nu5_signature_hash(
         tx_bytes=tx_bytes,

@@ -18,7 +18,7 @@ pytest_plugins = ("ragger.conftest.base_conftest", )
 # Notes :
 # 1. Remove this fixture once the pending review screen is removed from the app
 # 2. This fixture clears the pending review screen before each test
-# 3. The scope should be the same as the one configured by BACKEND_SCOPE in
+# 3. The scope should be the same as the one configured by BACKEND_SCOPE in 
 # ragger/conftest/configuration.py
 # @pytest.fixture(scope="class", autouse=True)
 # def clear_pending_review(firmware, navigator):
