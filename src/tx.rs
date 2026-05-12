@@ -1,3 +1,5 @@
+use core::ptr::addr_of_mut;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use ledger_device_sdk::hash::blake2::Blake2b_256;
@@ -126,24 +128,28 @@ pub struct TxContext<'a> {
 }
 
 impl<'s> TxContext<'s> {
-    pub fn new(swap_params: Option<&'s CreateTxParams>, mode: ParserMode) -> TxContext<'s> {
-        TxContext {
-            is_extra_header_data_set: false,
-            is_finished: false,
-            tx_signing_state: Default::default(),
-
-            tx_info: Default::default(),
-            trusted_input_info: Default::default(),
-            hashers: Default::default(),
-
-            home: Default::default(),
-            parser: Parser::new(mode),
-            output_parser: OutputParser::new(),
-            vk_response: None,
-            swap_params,
+    #[inline(never)]
+    pub unsafe fn init_in_place(
+        ptr: *mut TxContext<'s>,
+        swap_params: Option<&'s CreateTxParams>,
+        mode: ParserMode,
+    ) {
+        unsafe {
+            addr_of_mut!((*ptr).is_extra_header_data_set).write(false);
+            addr_of_mut!((*ptr).is_finished).write(false);
+            addr_of_mut!((*ptr).tx_signing_state).write(TxSigningState::default());
+            addr_of_mut!((*ptr).tx_info).write(TxInfo::default());
+            addr_of_mut!((*ptr).trusted_input_info).write(TrustedInputInfo::default());
+            // NOTE: We don't need to init hashers here because they will initialized before first use in parser.
+            addr_of_mut!((*ptr).home).write(NbglHomeAndSettings::default());
+            addr_of_mut!((*ptr).parser).write(Parser::new(mode));
+            addr_of_mut!((*ptr).output_parser).write(OutputParser::new());
+            addr_of_mut!((*ptr).vk_response).write(None);
+            addr_of_mut!((*ptr).swap_params).write(swap_params);
         }
     }
 
+    #[inline(never)]
     pub fn reset(&mut self, mode: ParserMode) {
         // Don't reset home and swap params, they're not part of TX state
         self.is_extra_header_data_set = false;

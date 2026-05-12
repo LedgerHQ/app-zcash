@@ -3,7 +3,7 @@ import pytest
 from application_client.zcash_command_sender import GetShieldedAddressMode, ZcashCommandSender, Errors, GetVkMode
 from application_client.zcash_response_unpacker import (
     unpack_get_public_key_response,
-    unpack_get_ufvk_response,
+    unpack_len_prefixed_utf8_response,
 )
 from ragger.bip import calculate_public_key_and_chaincode, CurveChoice
 from ragger.error import ExceptionRAPDU
@@ -63,12 +63,12 @@ def test_get_ufvk(backend):
 
     client = ZcashCommandSender(backend)
     response = client.get_vk(path="m/32'/133'/0'", mode=GetVkMode.UFVK).data
-    ufvk = unpack_get_ufvk_response(response)
+    ufvk = unpack_len_prefixed_utf8_response(response)
     assert ufvk == REF_UFVK_ACC_0
 
     client = ZcashCommandSender(backend)
     response = client.get_vk(path="m/32'/133'/1'", mode=GetVkMode.UFVK).data
-    ufvk = unpack_get_ufvk_response(response)
+    ufvk = unpack_len_prefixed_utf8_response(response)
     assert ufvk == REF_UFVK_ACC_1
 
 
@@ -107,12 +107,12 @@ def test_get_orchard_uaddress_no_confirm(backend):
 
     client = ZcashCommandSender(backend)
     response = client.get_shielded_address(path="m/32'/133'/0'", mode=GetShieldedAddressMode.UADDRESS).data
-    orchard_address = unpack_get_ufvk_response(response)
+    orchard_address = unpack_len_prefixed_utf8_response(response)
     assert orchard_address == REF_ORCHARD_ADDRESS_ACC_0
 
     client = ZcashCommandSender(backend)
     response = client.get_shielded_address(path="m/32'/133'/1'", mode=GetShieldedAddressMode.UADDRESS).data
-    orchard_address = unpack_get_ufvk_response(response)
+    orchard_address = unpack_len_prefixed_utf8_response(response)
     assert orchard_address == REF_ORCHARD_ADDRESS_ACC_1
 
 def test_get_orchard_uaddress_confirm_accepted(backend, scenario_navigator):
@@ -125,7 +125,7 @@ def test_get_orchard_uaddress_confirm_accepted(backend, scenario_navigator):
         scenario_navigator.address_review_approve()
 
     response = client.get_async_response().data
-    orchard_address = unpack_get_ufvk_response(response)
+    orchard_address = unpack_len_prefixed_utf8_response(response)
     assert orchard_address == REF_ORCHARD_ADDRESS_ACC_0
 
 def test_get_orchard_uaddress_confirm_refused(backend, scenario_navigator):

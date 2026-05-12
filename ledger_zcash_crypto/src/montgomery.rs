@@ -64,10 +64,24 @@ pub(crate) fn repr_to_montgomery_u64x4(
 }
 
 pub(crate) fn byte_to_fp(bytes: &[u64; 4]) -> Fp {
+    debug_assert_eq!(core::mem::size_of::<[u64; 4]>(), core::mem::size_of::<Fp>());
+    debug_assert_eq!(
+        core::mem::align_of::<[u64; 4]>(),
+        core::mem::align_of::<Fp>()
+    );
+
+    // SAFETY: This reinterprets the given bytes as an `Fp` element. Is safe because FP use `repr(transparent)` with same [u64; 4] layout
     unsafe { core::ptr::read(bytes as *const [u64; 4] as *const Fp) }
 }
 
 pub(crate) fn byte_to_fq(bytes: &[u64; 4]) -> Fq {
+    debug_assert_eq!(core::mem::size_of::<[u64; 4]>(), core::mem::size_of::<Fq>());
+    debug_assert_eq!(
+        core::mem::align_of::<[u64; 4]>(),
+        core::mem::align_of::<Fq>()
+    );
+
+    // SAFETY: This reinterprets the given bytes as an `Fq` element. Is safe because FQ use `repr(transparent)` with same [u64; 4] layout
     unsafe { core::ptr::read(bytes as *const [u64; 4] as *const Fq) }
 }
 
