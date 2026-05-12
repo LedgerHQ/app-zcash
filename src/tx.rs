@@ -104,7 +104,7 @@ pub struct TxSigningState {
 pub struct PendingVkResponse {
     pub bytes: Vec<u8>,
     pub offset: usize,
-    pub display_ufvk: Option<String>,
+    pub display_vk: Option<(String, &'static str)>,
 }
 
 /// Transaction context holding state between APDU chunks.

@@ -146,7 +146,6 @@ pub enum Instruction {
     GetVk {
         mode: P2VkMode,
         continue_response: bool,
-        display: bool,
     },
     GetTrustedInput {
         first: bool,
@@ -190,13 +189,10 @@ impl TryFrom<ApduHeader> for Instruction {
             ) => Ok(Instruction::GetPubkey {
                 display: value.p1 == P1_GET_PUBLIC_KEY_DISPLAY,
             }),
-            (INS_GET_VK, P1_GET_VK_FIRST | P1_GET_PUBLIC_KEY_DISPLAY | P1_GET_VK_CONTINUE, p2) => {
-                Ok(Instruction::GetVk {
-                    mode: P2VkMode::try_from(p2)?,
-                    continue_response: (value.p1 & P1_GET_VK_CONTINUE) != 0,
-                    display: (value.p1 & P1_GET_PUBLIC_KEY_DISPLAY) != 0,
-                })
-            }
+            (INS_GET_VK, P1_GET_VK_FIRST | P1_GET_VK_CONTINUE, p2) => Ok(Instruction::GetVk {
+                mode: P2VkMode::try_from(p2)?,
+                continue_response: value.p1 == P1_GET_VK_CONTINUE,
+            }),
             (INS_GET_SHIELD_ADDR, P1_GET_PUBLIC_KEY_NO_DISPLAY | P1_GET_PUBLIC_KEY_DISPLAY, p2) => {
                 Ok(Instruction::GetShieldedAddr {
                     mode: P2ShieldedAddrMode::try_from(p2)?,
@@ -254,13 +250,7 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             },
             AppSW::Deny | AppSW::Ok,
         ) => (true, StatusType::Address),
-        (
-            Instruction::GetVk {
-                mode: P2VkMode::Ufvk,
-                ..
-            },
-            AppSW::Deny | AppSW::Ok,
-        ) if tx_ctx.vk_display_status => {
+        (Instruction::GetVk { .. }, AppSW::Deny | AppSW::Ok) if tx_ctx.vk_display_status => {
             tx_ctx.vk_display_status = false;
             (true, StatusType::Address)
         }
@@ -400,8 +390,7 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
         Instruction::GetVk {
             mode,
             continue_response,
-            display,
-        } => handler_get_vk(comm, ctx, *mode, *continue_response, *display),
+        } => handler_get_vk(comm, ctx, *mode, *continue_response),
         Instruction::GetShieldedAddr { mode, display } => {
             handler_get_shielded_addr(comm, *mode, *display)
         }

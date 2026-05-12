@@ -1,9 +1,10 @@
 use zcash_address::unified::{Encoding, Fvk, Ufvk};
 
+use alloc::format;
 use ledger_device_sdk::info;
 use ledger_device_sdk::io::Comm;
 
-use crate::app_ui::address::ui_display_ufvk;
+use crate::app_ui::address::{ui_display_orchard_fvk, ui_display_ufvk};
 use crate::utils::{HexSlice, encode_string_response};
 use crate::zip32::{
     convert_orchard_path_to_transparent_path, derive_orchard_fvk,
@@ -30,18 +31,26 @@ fn append_pending_vk_chunk(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), A
     Ok(())
 }
 
-fn display_ufvk_on_last_chunk(ctx: &mut TxContext) -> Result<(), AppSW> {
+const UFVK_REVIEW_TITLE: &str = "Share Zcash Unified Full Viewing Key?";
+const ORCHARD_FVK_REVIEW_TITLE: &str = "Share Zcash Orchard Full Viewing Key?";
+
+fn display_vk_on_last_chunk(ctx: &mut TxContext) -> Result<(), AppSW> {
     let should_display = {
         let pending = ctx.vk_response.as_ref().ok_or(AppSW::BadState)?;
         let end = core::cmp::min(pending.offset + VK_RESPONSE_CHUNK_LEN, pending.bytes.len());
-        pending.display_ufvk.is_some() && end == pending.bytes.len()
+        pending.display_vk.is_some() && end == pending.bytes.len()
     };
 
     if should_display {
         let approved = {
             let pending = ctx.vk_response.as_ref().ok_or(AppSW::BadState)?;
-            let ufvk = pending.display_ufvk.as_deref().ok_or(AppSW::BadState)?;
-            ui_display_ufvk(ufvk)?
+            let (viewing_key, review_title) = pending.display_vk.as_ref().ok_or(AppSW::BadState)?;
+
+            match *review_title {
+                UFVK_REVIEW_TITLE => ui_display_ufvk(viewing_key)?,
+                ORCHARD_FVK_REVIEW_TITLE => ui_display_orchard_fvk(viewing_key)?,
+                _ => return Err(AppSW::BadState),
+            }
         };
 
         ctx.vk_display_status = true;
@@ -60,7 +69,6 @@ pub fn handler_get_vk(
     ctx: &mut TxContext,
     mode: P2VkMode,
     continue_response: bool,
-    display: bool,
 ) -> Result<(), AppSW> {
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
@@ -69,7 +77,7 @@ pub fn handler_get_vk(
             return Err(AppSW::WrongApduLength);
         }
 
-        display_ufvk_on_last_chunk(ctx)?;
+        display_vk_on_last_chunk(ctx)?;
         return append_pending_vk_chunk(comm, ctx);
     }
 
@@ -78,8 +86,16 @@ pub fn handler_get_vk(
     let path = Bip32Path::try_from(data)?;
     let orchard_fvk = derive_orchard_fvk(&path)?;
 
-    let (response_bytes, display_ufvk) = match mode {
-        P2VkMode::OrchardFvk => (orchard_fvk.to_bytes().to_vec(), None),
+    let (response_bytes, display_vk) = match mode {
+        P2VkMode::OrchardFvk => {
+            let orchard_fvk_bytes = orchard_fvk.to_bytes();
+            let orchard_fvk_str = format!("{}", HexSlice(&orchard_fvk_bytes));
+
+            (
+                orchard_fvk_bytes.to_vec(),
+                Some((orchard_fvk_str, ORCHARD_FVK_REVIEW_TITLE)),
+            )
+        }
         P2VkMode::Ufvk => {
             let transparent_bytes = derive_transparent_account_pubkey(
                 &convert_orchard_path_to_transparent_path(&path)?,
@@ -97,19 +113,19 @@ pub fn handler_get_vk(
             let ufvk_str = ufvk.encode(&network);
 
             let response_bytes = encode_string_response(&ufvk_str);
-            let display_ufvk = display.then_some(ufvk_str);
+            let display_vk = Some((ufvk_str, UFVK_REVIEW_TITLE));
 
-            (response_bytes, display_ufvk)
+            (response_bytes, display_vk)
         }
     };
 
     ctx.vk_response = Some(PendingVkResponse {
         bytes: response_bytes,
         offset: 0,
-        display_ufvk,
+        display_vk,
     });
 
-    display_ufvk_on_last_chunk(ctx)?;
+    display_vk_on_last_chunk(ctx)?;
     append_pending_vk_chunk(comm, ctx)?;
 
     Ok(())

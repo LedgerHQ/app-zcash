@@ -30,7 +30,7 @@ class P1(IntEnum):
     P1_GET_PUBLIC_KEY_NO_DISPLAY = 0x00
     # Parameter 1 for screen confirmation for GET_PUBLIC_KEY.
     P1_GET_PUBLIC_KEY_DISPLAY = 0x01
-    P1_GET_VK_DISPLAY = 0x01
+    P1_GET_VK_FIRST = 0x00
     P1_GET_VK_CONTINUE = 0x80
 
     # Parameter 1 for first APDU number for HASH_INPUT_START.
@@ -169,25 +169,6 @@ class ZcashCommandSender:
             data=pack_derivation_path(path),
         )
 
-    def get_vk(
-        self,
-        path: Optional[str] = None,
-        mode: GetVkMode = GetVkMode.UFVK,
-        continue_response: bool = False,
-        display: bool = False,
-    ) -> RAPDU:
-        response = self.backend.exchange(
-            cla=CLA,
-            ins=InsType.GET_VK,
-            p1= P1.P1_GET_VK_CONTINUE if continue_response else (
-                P1.P1_GET_VK_DISPLAY if display else P1.P1_FIRST
-            ),
-            p2=mode,
-            data=b"" if continue_response else pack_derivation_path(path),
-        )
-
-        return self._collect_ufvk_response(response, mode, continue_response)
-
     def _collect_ufvk_response(
         self,
         response: RAPDU,
@@ -220,15 +201,28 @@ class ZcashCommandSender:
         mode: GetVkMode = GetVkMode.UFVK,
     ) -> Generator[None, None, None]:
         self.last_response = None
+        if mode != GetVkMode.UFVK:
+            with self.backend.exchange_async(
+                cla=CLA,
+                ins=InsType.GET_VK,
+                p1=P1.P1_GET_VK_FIRST,
+                p2=mode,
+                data=pack_derivation_path(path),
+            ) as response:
+                yield response
+
+            self.last_response = self.backend.last_async_response
+            return
+
         response = self.backend.exchange(
             cla=CLA,
             ins=InsType.GET_VK,
-            p1=P1.P1_GET_VK_DISPLAY,
+            p1=P1.P1_GET_VK_FIRST,
             p2=mode,
             data=pack_derivation_path(path),
         )
 
-        if mode != GetVkMode.UFVK or len(response.data) < 2:
+        if len(response.data) < 2:
             self.last_response = response
             yield response
             return
