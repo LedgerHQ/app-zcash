@@ -249,7 +249,13 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
 
 pub fn encode_string_response(value: &str) -> Vec<u8> {
     let value_bytes = value.as_bytes();
-    let len = value_bytes.len() as u16;
+
+    if value_bytes.len() > u16::MAX as usize {
+        unreachable!("response length exceeds u16::MAX");
+    }
+
+    let len: u16 = value_bytes.len() as u16;
+
     let mut response = Vec::with_capacity(2 + value_bytes.len());
     response.extend_from_slice(&len.to_be_bytes());
     response.extend_from_slice(value_bytes);
