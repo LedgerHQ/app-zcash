@@ -192,7 +192,7 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
     return chunks
 
 def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
-    # pylint: disable=R0914
+    # pylint: disable=R0914,R0915
 
     i = 0
 
@@ -246,12 +246,36 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
             }
         )
 
+    shielded_prefix_start = i
     sap_sp, i = read_compactsize(buf, i)
     assert sap_sp == 0, "Sapling spends not supported in this chunking function!"
     sap_out, i = read_compactsize(buf, i)
     assert sap_out == 0, "Sapling outputs not supported in this chunking function!"
     orch, i = read_compactsize(buf, i)
-    assert orch == 0, "Orchard actions not supported in this chunking function!"
+    shielded_prefix = buf[shielded_prefix_start:i]
+
+    shielded_chunks = []
+    if orch > 0:
+        for _ in range(orch):
+            compact_start = i
+            i += 32 + 32 + 32 + 52
+            shielded_chunks.append(buf[compact_start:i])
+
+        memo_remaining = orch * 512
+        while memo_remaining > 0:
+            memo_chunk = min(128, memo_remaining)
+            shielded_chunks.append(buf[i:i + memo_chunk])
+            i += memo_chunk
+            memo_remaining -= memo_chunk
+
+        for _ in range(orch):
+            non_compact_start = i
+            i += 32 + 32 + 16 + 80
+            shielded_chunks.append(buf[non_compact_start:i])
+
+        digest_start = i
+        i += 1 + 8 + 32
+        shielded_chunks.append(buf[digest_start:i])
 
     assert i == len(buf), "Transaction splitting did not consume all bytes!"
 
@@ -259,6 +283,8 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
         "header": header,
         "inputs": inputs,
         "outputs": outputs,
+        "shielded_prefix": shielded_prefix,
+        "shielded_chunks": shielded_chunks,
         "locktime": locktime,
         "expiry": expiry,
     }

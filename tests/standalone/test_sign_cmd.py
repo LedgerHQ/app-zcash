@@ -1,5 +1,7 @@
 # pylint: disable=C0301
 
+import struct
+
 import pytest
 
 from ragger.error import ExceptionRAPDU
@@ -8,7 +10,11 @@ from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
 from application_client.zcash_command_sender import ZcashCommandSender, Errors
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
-from application_client.zcash_verify_sign import check_tx_v5_signature_validity
+from application_client.zcash_verify_sign import (
+    check_tx_v5_signature_validity,
+    nu5_signature_digests,
+)
+from application_client.zcash_utils import write_varint
 
 def extension(cls):
     def wrapper(func):
@@ -32,6 +38,56 @@ def review_approve(self):
         path=self.screenshot_path,
         test_case_name=self.test_name,
         screen_change_after_last_instruction=False)
+
+
+def _repeated(byte: int, size: int) -> bytes:
+    return bytes([byte & 0xFF]) * size
+
+
+def _build_orchard_bundle(action_count: int, value_balance: int, seed: int = 0x40) -> bytes:
+    bundle = write_varint(0) + write_varint(0) + write_varint(action_count)
+
+    for idx in range(action_count):
+        bundle += _repeated(seed + idx, 32 + 32 + 32 + 52)
+
+    for idx in range(action_count):
+        bundle += _repeated(seed + 0x20 + idx, 512)
+
+    for idx in range(action_count):
+        bundle += _repeated(seed + 0x40 + idx, 32 + 32 + 16 + 80)
+
+    if action_count > 0:
+        bundle += b"\x03"
+        bundle += value_balance.to_bytes(8, byteorder="little", signed=True)
+        bundle += _repeated(seed + 0x60, 32)
+
+    return bundle
+
+
+def _build_tx_v5(locktime: int, expiry: int, inputs: list[dict], outputs: list[dict], orchard_value_balance: int) -> bytes:
+    tx = b""
+    tx += struct.pack("<I", 0x80000005)
+    tx += struct.pack("<I", 0x26A7270A)
+    tx += struct.pack("<I", 0xC8E71055)
+    tx += struct.pack("<I", locktime)
+    tx += struct.pack("<I", expiry)
+
+    tx += write_varint(len(inputs))
+    for txin in inputs:
+        tx += txin["prev_txid"]
+        tx += struct.pack("<I", txin["prev_vout"])
+        tx += write_varint(len(txin["script"]))
+        tx += txin["script"]
+        tx += struct.pack("<I", txin["sequence"])
+
+    tx += write_varint(len(outputs))
+    for txout in outputs:
+        tx += struct.pack("<Q", txout["value"])
+        tx += write_varint(len(txout["script"]))
+        tx += txout["script"]
+
+    tx += _build_orchard_bundle(action_count=1, value_balance=orchard_value_balance)
+    return tx
 
 
 def test_sign_tx_v5_simple(backend, scenario_navigator: NavigateWithScenario):
@@ -125,6 +181,126 @@ def test_sign_tx_v5_change(backend, scenario_navigator):
         input_index=0,
         input_amounts=[81630485]
     )
+
+def test_sign_tx_v5_transparent_to_orchard(backend, scenario_navigator):
+    locktime = 0
+    expiry = 0
+    sighash_type = 0x01
+    prevout_tx_bytes = bytes.fromhex(
+        "050000800a27a726b4d0d6c200000000f9081a000198cd6cd9559cd98109ad0622f899bc38805f11648e4f985ebe344b8238f87b13010000006b48304502210095104ae9d53a95105be4ba5a31caddff2ae83ced24b21ab4aec6d735d568fad102206e054b158047529bb736c810902ea7fc8d92f3f604c1b2a8bb0b92f0e6c016a8012102010a560c7325827df0212bca20f5cf6556b1345991b6b64b469c616e758230a5ffffffff021595dd04000000001976a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88aca245117c140000001976a914c8b56e00740e62449a053c15bdd4809f720b5cb588ac000000"
+    )
+
+    tx_bytes = _build_tx_v5(
+        locktime=locktime,
+        expiry=expiry,
+        inputs=[{
+            "prev_txid": bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+            "prev_vout": 0,
+            "script": bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+            "sequence": 0,
+        }],
+        outputs=[],
+        orchard_value_balance=-81_620_485,
+    )
+
+    path = "m/44'/133'/0'/0/2"
+    client = ZcashCommandSender(backend)
+
+    trusted_input = client.get_trusted_input(prevout_tx_bytes, 0).data
+
+    with client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input]):
+        scenario_navigator.review_approve()
+
+    digest = client.hash_sign(
+        path=path,
+        locktime=locktime,
+        expiry=expiry,
+        sighash_type=sighash_type,
+        sign_digest=True,
+    ).data
+
+    expected_digest = nu5_signature_digests(
+        tx_bytes=tx_bytes,
+        input_index=0,
+        input_amounts=[81_630_485],
+        sighash_type=sighash_type,
+    )["final_digest"]
+
+    assert digest == expected_digest
+
+def test_sign_tx_v5_orchard_to_transparent(backend, scenario_navigator):
+    locktime = 0
+    expiry = 0
+    sighash_type = 0x01
+    tx_bytes = _build_tx_v5(
+        locktime=locktime,
+        expiry=expiry,
+        inputs=[],
+        outputs=[{
+            "value": 1_085_000,
+            "script": bytes.fromhex("76a914e58749ee655c0e39ae3ce063a33fb9edc86d23dd88ac"),
+        }],
+        orchard_value_balance=1_095_904,
+    )
+
+    path = "m/44'/133'/0'/0/2"
+    client = ZcashCommandSender(backend)
+
+    with client.hash_input(transaction=tx_bytes, trusted_inputs=[]):
+        scenario_navigator.review_approve()
+
+    digest = client.hash_sign(
+        path=path,
+        locktime=locktime,
+        expiry=expiry,
+        sighash_type=sighash_type,
+        sign_digest=True,
+    ).data
+
+    expected_digest = nu5_signature_digests(
+        tx_bytes=tx_bytes,
+        input_index=None,
+        input_amounts=[],
+        sighash_type=sighash_type,
+    )["final_digest"]
+
+    assert digest == expected_digest
+
+
+def test_sign_tx_v5_orchard_to_orchard(backend, scenario_navigator):
+    locktime = 0
+    expiry = 0
+    sighash_type = 0x01
+    tx_bytes = _build_tx_v5(
+        locktime=locktime,
+        expiry=expiry,
+        inputs=[],
+        outputs=[],
+        orchard_value_balance=10_000,
+    )
+
+    path = "m/44'/133'/0'/0/2"
+    client = ZcashCommandSender(backend)
+
+    with client.hash_input(transaction=tx_bytes, trusted_inputs=[]):
+        scenario_navigator.review_approve()
+
+    digest = client.hash_sign(
+        path=path,
+        locktime=locktime,
+        expiry=expiry,
+        sighash_type=sighash_type,
+        sign_digest=True,
+    ).data
+
+    expected_digest = nu5_signature_digests(
+        tx_bytes=tx_bytes,
+        input_index=None,
+        input_amounts=[],
+        sighash_type=sighash_type,
+    )["final_digest"]
+
+    assert digest == expected_digest
 
 def test_sign_tx_refuse(backend, scenario_navigator):
     LOCKTIME = 0x00

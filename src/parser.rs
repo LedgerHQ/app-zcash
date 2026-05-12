@@ -31,10 +31,10 @@ use zcash_transparent::bundle::OutPoint;
 use crate::parser::compute::{finalize_signature_hash, finalize_signature_input_hash};
 use crate::parser::reader::ByteReader;
 use crate::settings::Settings;
+use crate::swap;
 use crate::tx::{Hashers, SupportedTxVersion, TrustedInputInfo, TxInfo, TxOutput, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter, AsWriterB as _, Blake2b256Personalization};
 use crate::utils::{CheckDispOutput, HexSlice, check_output_displayable, secure_memcmp};
-use crate::{AppSW, swap};
 use crate::{app_ui::sign::ui_display_tx, utils::base58_address::Base58Address};
 use crate::{
     consts::{MAX_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, TRUSTED_INPUT_TOTAL_SIZE},
@@ -409,7 +409,17 @@ impl Parser {
         }
 
         self.state = if self.input_count == 0 {
-            ParserState::InputHashingDone
+            match (self.mode, ctx.tx_state.is_tx_parsed_once) {
+                (ParserMode::Signature, false) => {
+                    finalize_signature_input_hash(ctx)?;
+                    ParserState::TransactionPresignReady
+                }
+                (ParserMode::Signature, true) => {
+                    finalize_signature_hash(ctx)?;
+                    ParserState::TransactionReadyToSign
+                }
+                _ => ParserState::InputHashingDone,
+            }
         } else {
             ParserState::WaitInput
         };

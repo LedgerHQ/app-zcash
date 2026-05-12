@@ -5,22 +5,23 @@ use ::orchard::bundle::commitments::{
 
 use super::*;
 
-const ORCHARD_NULLIFIER_SIZE: usize = HASH_SIZE;
-const ORCHARD_CMX_SIZE: usize = HASH_SIZE;
-const ORCHARD_EPHEMERAL_KEY_SIZE: usize = HASH_SIZE;
-const ORCHARD_COMPACT_ENC_CIPHERTEXT_SIZE: usize = 52;
-const ORCHARD_OUT_CIPHERTEXT_SIZE: usize = 16;
-const ORCHARD_ZKPROOF_SIZE: usize = 80;
-const ORCHARD_FLAGS_SIZE: usize = 1;
-const ORCHARD_BALANCE_SIZE: usize = 8;
-const ORCHARD_ACTIONS_COMPACT_SIZE: usize = ORCHARD_NULLIFIER_SIZE
+pub(crate) const ORCHARD_NULLIFIER_SIZE: usize = HASH_SIZE;
+pub(crate) const ORCHARD_CMX_SIZE: usize = HASH_SIZE;
+pub(crate) const ORCHARD_EPHEMERAL_KEY_SIZE: usize = HASH_SIZE;
+pub(crate) const ORCHARD_COMPACT_ENC_CIPHERTEXT_SIZE: usize = 52;
+pub(crate) const ORCHARD_OUT_CIPHERTEXT_SIZE: usize = 16;
+pub(crate) const ORCHARD_ZKPROOF_SIZE: usize = 80;
+pub(crate) const ORCHARD_FLAGS_SIZE: usize = 1;
+pub(crate) const ORCHARD_BALANCE_SIZE: usize = 8;
+pub(crate) const ORCHARD_ACTIONS_COMPACT_SIZE: usize = ORCHARD_NULLIFIER_SIZE
     + ORCHARD_CMX_SIZE
     + ORCHARD_EPHEMERAL_KEY_SIZE
     + ORCHARD_COMPACT_ENC_CIPHERTEXT_SIZE;
-const ORCHARD_ACTIONS_NONCOMPACT_SIZE: usize =
+pub(crate) const ORCHARD_ACTIONS_NONCOMPACT_SIZE: usize =
     ORCHARD_NULLIFIER_SIZE + ORCHARD_CMX_SIZE + ORCHARD_OUT_CIPHERTEXT_SIZE + ORCHARD_ZKPROOF_SIZE;
-const ORCHARD_DIGEST_DATA_SIZE: usize = ORCHARD_FLAGS_SIZE + ORCHARD_BALANCE_SIZE + HASH_SIZE;
-const ORCHARD_MEMO_SIZE: usize = 512;
+pub(crate) const ORCHARD_DIGEST_DATA_SIZE: usize =
+    ORCHARD_FLAGS_SIZE + ORCHARD_BALANCE_SIZE + HASH_SIZE;
+pub(crate) const ORCHARD_MEMO_SIZE: usize = 512;
 
 impl Parser {
     pub fn parse_orchard_compact(

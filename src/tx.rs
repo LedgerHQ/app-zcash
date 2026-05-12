@@ -61,6 +61,8 @@ pub struct TxInfo {
     pub scripts_hash: [u8; 32],
 
     pub header_digest: [u8; 32],
+    pub orchard_digest: [u8; 32],
+    pub signature_digest: [u8; 32],
 }
 
 pub enum SupportedTxVersion {
