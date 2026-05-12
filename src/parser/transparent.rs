@@ -1,4 +1,4 @@
-use crate::tx::SupportedTxVersion;
+use crate::{parser::compute::SighHashComputeMode, tx::SupportedTxVersion};
 
 use super::*;
 
@@ -216,7 +216,7 @@ impl Parser {
 
             if self.mode == ParserMode::Signature {
                 if ctx.tx_state.is_tx_parsed_once {
-                    finalize_signature_hash(ctx)?;
+                    finalize_signature_hash(ctx, SighHashComputeMode::SomeTransparentInputs)?;
 
                     self.state = ParserState::TransactionReadyToSign;
                 } else {

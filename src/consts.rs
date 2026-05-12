@@ -37,8 +37,6 @@ pub const P1_FINALIZE_FULL_LAST: u8 = 0x80;
 pub const P1_FINALIZE_FULL_CHANGEINFO: u8 = 0xFF;
 pub const P2_FINALIZE_FULL_DEFAULT: u8 = 0x00;
 
-pub const P1_HASH_SIGN_DIGEST: u8 = 0x01;
-
 pub const TRUSTED_INPUT_SIZE: usize = 2 + 2 + 32 + 4 + 8; // magic + rand + txid + idx + amount
 pub const TRUSTED_INPUT_TOTAL_SIZE: usize = TRUSTED_INPUT_SIZE + 8;
 
@@ -75,6 +73,27 @@ impl TryFrom<u8> for P2ShieldedAddrMode {
         match value {
             0x00 => Ok(P2ShieldedAddrMode::UAddress),
             0x01 => Ok(P2ShieldedAddrMode::OrchardAddress),
+            _ => Err(AppSW::WrongP1P2),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum P1HashSignMode {
+    Sign = 0x00,
+    Digest = 0x01,
+    SpendAuthSig = 0x02,
+}
+
+impl TryFrom<u8> for P1HashSignMode {
+    type Error = AppSW;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(P1HashSignMode::Sign),
+            0x01 => Ok(P1HashSignMode::Digest),
+            0x02 => Ok(P1HashSignMode::SpendAuthSig),
             _ => Err(AppSW::WrongP1P2),
         }
     }

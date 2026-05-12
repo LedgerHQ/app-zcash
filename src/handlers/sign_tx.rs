@@ -17,12 +17,15 @@
 use ledger_device_sdk::ecc::{Secp256k1, SeedDerive as _};
 use ledger_device_sdk::io::Comm;
 use ledger_device_sdk::log::{debug, error, info};
+use ledger_device_sdk::random::{LedgerRng, rand_bytes};
 
 use crate::AppSW;
+use crate::consts::P1HashSignMode;
 use crate::parser::{OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError};
 use crate::tx::TxContext;
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
+use crate::zip32::{derive_orchard_ask, map_ledger_crypto_error};
 
 pub fn handler_hash_input_start(
     comm: &mut Comm,
@@ -33,6 +36,9 @@ pub fn handler_hash_input_start(
     if continue_hashing {
         info!("Reset parser");
         ctx.parser = Parser::new(ParserMode::Signature);
+        // Extract transparent output count from output parser on final state
+        ctx.parser
+            .set_transparent_output_count(ctx.output_parser.transparent_output_count());
     } else if first {
         info!("Reset TX context");
         ctx.reset(ParserMode::Signature);
@@ -167,7 +173,7 @@ fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
 pub fn handler_hash_sign(
     comm: &mut Comm,
     ctx: &mut TxContext,
-    sign_digest: bool,
+    mode: P1HashSignMode,
 ) -> Result<(), AppSW> {
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
@@ -215,13 +221,22 @@ pub fn handler_hash_sign(
     let path: Bip32Path = path_data.try_into()?;
 
     if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
-        error!("Output address path not Bip44 compliant");
+        error!("Signing path not compliant");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
 
-    if sign_digest {
+    if let P1HashSignMode::Digest = mode {
         debug!("Returning signature digest only");
         comm.append(&ctx.tx_info.signature_digest);
+
+        return Ok(());
+    } else if let P1HashSignMode::SpendAuthSig = mode {
+        debug!("Returning spend auth signature for an orchard action");
+
+        let (auth_sig, alpha) = orchard_spend_auth_signature(&path, &ctx.tx_info.signature_digest)?;
+        comm.append(&auth_sig);
+        comm.append(&alpha);
+
         return Ok(());
     }
 
@@ -282,4 +297,60 @@ fn append_signature(
     comm.append(&[sighash_type]);
 
     Ok(())
+}
+
+// Returns a 64-byte spend auth signature and alpha bytes
+fn orchard_spend_auth_signature(
+    bip32_path: &Bip32Path,
+    sig_hash: &[u8; 32],
+) -> Result<([u8; 64], [u8; 32]), AppSW> {
+    // This number of attempts gives negligible failure probability
+    const ALPHA_GENERATION_ATTEMPTS: usize = 350;
+
+    let ask = derive_orchard_ask(bip32_path)?;
+
+    let mut alpha = None;
+    for _ in 0..ALPHA_GENERATION_ATTEMPTS {
+        let mut alpha_bytes = [0u8; 32];
+        rand_bytes(&mut alpha_bytes);
+
+        match ledger_zcash_crypto::pallas_scalar_from_repr(alpha_bytes) {
+            Ok(alpha_scalar) => {
+                alpha = Some((alpha_scalar, alpha_bytes));
+                break;
+            }
+            Err(ledger_zcash_crypto::Error::MalformedPallasScalar) => {}
+            Err(_) => return Err(AppSW::TechnicalProblem),
+        }
+    }
+
+    let (alpha, alpha_bytes) = alpha.ok_or_else(|| {
+        error!(
+            "Failed to generate a valid alpha scalar after {} attempts",
+            ALPHA_GENERATION_ATTEMPTS
+        );
+        AppSW::MaxValueReached
+    })?;
+
+    let randomized_ask = ask
+        .randomize_ledger(&alpha)
+        .map_err(map_ledger_crypto_error)?;
+
+    debug!(
+        "randomized_ask: {}",
+        HexSlice(&{
+            let randomized_ask_bytes: [u8; 32] = (&randomized_ask).into();
+            randomized_ask_bytes
+        })
+    );
+
+    let auth_sig = randomized_ask
+        .sign_ledger(LedgerRng, sig_hash)
+        .map_err(map_ledger_crypto_error)?;
+    let auth_sig: [u8; 64] = (&auth_sig).into();
+
+    debug!("Orchard spend auth signature: {}", HexSlice(&auth_sig));
+    debug!("Orchard alpha: {}", HexSlice(&alpha_bytes));
+
+    Ok((auth_sig, alpha_bytes))
 }

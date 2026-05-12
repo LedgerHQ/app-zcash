@@ -38,9 +38,9 @@ def check_tx_v5_signature_validity(
     from ecdsa.keys import VerifyingKey
     from ecdsa.util import sigdecode_der
 
-    signature = bytearray(signature)
-    signature[0] &= 0xFE
-    signature = bytes(signature)
+    normalized_signature = bytearray(signature)
+    normalized_signature[0] &= 0xFE
+    signature = bytes(normalized_signature)
 
     sighash = _nu5_signature_hash(
         tx_bytes=tx_bytes,
@@ -140,6 +140,8 @@ def _nu5_signature_digests(
 ) -> dict[str, bytes]:
     inputs = tx["inputs"]
     outputs = tx["outputs"]
+    no_transparent_inputs = len(inputs) == 0
+    no_transparent_outputs = len(outputs) == 0
 
     if len(input_amounts) != len(inputs):
         raise ValueError("Input amounts length mismatch")
@@ -192,16 +194,27 @@ def _nu5_signature_digests(
             + input_data["sequence"],
         )
 
-    transparent_digest = _blake2b_256(
-        ZCASH_TRANSPARENT_HASH_PERSONALIZATION,
-        bytes([sighash_type & 0xFF])
-        + prevouts_hash
-        + amounts_hash
-        + scripts_hash
-        + sequence_hash
-        + outputs_hash
-        + txin_sig_digest,
-    )
+    if no_transparent_inputs and no_transparent_outputs:
+        transparent_digest = _blake2b_256(
+            ZCASH_TRANSPARENT_HASH_PERSONALIZATION,
+            b""
+        )
+    elif no_transparent_inputs:
+        transparent_digest = _blake2b_256(
+            ZCASH_TRANSPARENT_HASH_PERSONALIZATION,
+            prevouts_hash + sequence_hash + outputs_hash,
+        )
+    else:
+        transparent_digest = _blake2b_256(
+            ZCASH_TRANSPARENT_HASH_PERSONALIZATION,
+            bytes([sighash_type & 0xFF])
+            + prevouts_hash
+            + amounts_hash
+            + scripts_hash
+            + sequence_hash
+            + outputs_hash
+            + txin_sig_digest,
+        )
 
     header_digest = _header_digest(tx)
     sapling_digest = _blake2b_256(ZCASH_SAPLING_HASH_PERSONALIZATION, b"")
@@ -324,7 +337,8 @@ def _parse_v5_tx(tx_bytes: bytes) -> dict:
     if orchard_actions > 0:
         orchard["digest_data"] = _read_exact(buf, ORCHARD_DIGEST_DATA_SIZE)
 
-    if buf.read(1):
+    trailing = buf.read()
+    if trailing and orchard_actions == 0:
         raise ValueError("Unexpected trailing data in transaction")
 
     return {

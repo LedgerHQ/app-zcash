@@ -28,7 +28,9 @@ use zcash_protocol::value::Zatoshis;
 use zcash_transparent::address::Script;
 use zcash_transparent::bundle::OutPoint;
 
-use crate::parser::compute::{finalize_signature_hash, finalize_signature_input_hash};
+use crate::parser::compute::{
+    SighHashComputeMode, finalize_signature_hash, finalize_signature_input_hash,
+};
 use crate::parser::reader::ByteReader;
 use crate::settings::Settings;
 use crate::swap;
@@ -189,6 +191,10 @@ pub struct Parser {
 }
 
 impl Parser {
+    pub fn set_transparent_output_count(&mut self, cnt: usize) {
+        self.output_count = cnt;
+    }
+
     pub fn new(mode: ParserMode) -> Self {
         Parser {
             mode,
@@ -378,6 +384,11 @@ impl Parser {
                     .hashers
                     .prevouts_hasher
                     .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
+
+                ok!(ctx
+                    .hashers
+                    .scripts_hasher
+                    .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION));
             }
             // Support V4 in trusted input mode (Transaction ID computation)
             (ParserMode::TrustedInput, TxVersion::V4, _) => {
@@ -415,7 +426,15 @@ impl Parser {
                     ParserState::TransactionPresignReady
                 }
                 (ParserMode::Signature, true) => {
-                    finalize_signature_hash(ctx)?;
+                    let zero_output_count = self.output_count == 0;
+                    finalize_signature_hash(
+                        ctx,
+                        if zero_output_count {
+                            SighHashComputeMode::NoTransparentInputsOrOutputs
+                        } else {
+                            SighHashComputeMode::NoTransparentInputs
+                        },
+                    )?;
                     ParserState::TransactionReadyToSign
                 }
                 _ => ParserState::InputHashingDone,

@@ -1,6 +1,7 @@
 from ragger.conftest import configuration
 from ragger.navigator import NavInsID
 import pytest
+
 ###########################
 ### CONFIGURATION START ###
 ###########################
@@ -14,6 +15,12 @@ import pytest
 
 # Pull all features from the base ragger conftest using the overridden configuration
 pytest_plugins = ("ragger.conftest.base_conftest", )
+
+
+@pytest.fixture(scope=configuration.OPTIONAL.BACKEND_SCOPE)
+def additional_speculos_arguments():
+    return ["--deterministic-rng", "zcash-standalone-tests"]
+
 
 # Notes :
 # 1. Remove this fixture once the pending review screen is removed from the app

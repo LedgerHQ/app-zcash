@@ -60,8 +60,8 @@ use zeroize::Zeroizing;
 use crate::consts::{
     INS_GET_SHIELD_ADDR, P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE,
     P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE,
-    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_HASH_SIGN_DIGEST,
-    P1_NEXT, P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
+    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT, P1HashSignMode,
+    P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
     P2ShieldedAddrMode, P2VkMode,
 };
 use crate::swap::panic_handler::get_swap_panic_handler;
@@ -159,7 +159,7 @@ pub enum Instruction {
         is_change: bool,
     },
     HashSign {
-        sign_digest: bool,
+        mode: P1HashSignMode,
     },
     SignMessage {
         first: bool,
@@ -221,8 +221,8 @@ impl TryFrom<ApduHeader> for Instruction {
             ) => Ok(Instruction::HashFinalizeFull {
                 is_change: value.p1 == P1_FINALIZE_FULL_CHANGEINFO,
             }),
-            (INS_HASH_SIGN, P1_FIRST | P1_HASH_SIGN_DIGEST, 0) => Ok(Instruction::HashSign {
-                sign_digest: value.p1 == P1_HASH_SIGN_DIGEST,
+            (INS_HASH_SIGN, p1, 0) => Ok(Instruction::HashSign {
+                mode: P1HashSignMode::try_from(p1)?,
             }),
             (INS_SIGN_MESSAGE, p1, 0) => Ok(Instruction::SignMessage {
                 first: p1 == P1_FIRST,
@@ -255,11 +255,12 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             AppSW::Deny | AppSW::Ok,
         ) => (true, StatusType::Address),
         (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
-        | (Instruction::HashSign { sign_digest: false }, AppSW::Ok)
-            if tx_ctx.is_finished() =>
-        {
-            (true, StatusType::Transaction)
-        }
+        | (
+            Instruction::HashSign {
+                mode: P1HashSignMode::Sign,
+            },
+            AppSW::Ok,
+        ) if tx_ctx.is_finished() => (true, StatusType::Transaction),
         (_, _) => (false, StatusType::Transaction),
     };
 
@@ -404,7 +405,7 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
         Instruction::HashFinalizeFull { is_change } => {
             handler_hash_input_finalize_full(comm, ctx, *is_change)
         }
-        Instruction::HashSign { sign_digest } => handler_hash_sign(comm, ctx, *sign_digest),
+        Instruction::HashSign { mode } => handler_hash_sign(comm, ctx, *mode),
         Instruction::SignMessage { first, next } => handler_sign_msg(comm, ctx, *first, *next),
     }
 }
