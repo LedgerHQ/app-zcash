@@ -19,11 +19,26 @@ ZCASH_ORCHARD_HASH_PERSONALIZATION = b"ZTxIdOrchardHash"
 ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION = b"ZTxIdOrcActCHash"
 ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION = b"ZTxIdOrcActMHash"
 ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION = b"ZTxIdOrcActNHash"
+ZCASH_REDPALLAS_HSTAR_PERSONALIZATION = b"Zcash_RedPallasH"
 
 ORCHARD_ACTION_COMPACT_SIZE = 32 + 32 + 32 + 52
 ORCHARD_ACTION_NONCOMPACT_SIZE = 32 + 32 + 16 + 80
 ORCHARD_MEMO_SIZE = 512
 ORCHARD_DIGEST_DATA_SIZE = 1 + 8 + 32
+
+PALLAS_BASE_MODULUS = int(
+    "40000000000000000000000000000000224698fc094cf91b992d30ed00000001", 16
+)
+PALLAS_SCALAR_MODULUS = int(
+    "40000000000000000000000000000000224698fc0994a8dd8c46eb2100000001", 16
+)
+PALLAS_B = 5
+ORCHARD_BINDINGSIG_BASEPOINT_BYTES = bytes(
+    [
+        145, 90, 60, 136, 104, 198, 195, 14, 47, 128, 144, 238, 69, 215, 110, 64,
+        72, 32, 141, 234, 91, 35, 102, 79, 187, 9, 164, 15, 85, 68, 244, 7,
+    ]
+)
 
 
 def check_tx_v5_signature_validity(
@@ -51,6 +66,37 @@ def check_tx_v5_signature_validity(
 
     pk = VerifyingKey.from_string(public_key, curve=SECP256k1)
     return pk.verify_digest(signature=signature, digest=sighash, sigdecode=sigdecode_der)
+
+
+def check_orchard_binding_signature_validity(
+    binding_signing_key: bytes,
+    signature: bytes,
+    msg: bytes,
+) -> bool:
+    if len(binding_signing_key) != 32 or len(signature) != 64:
+        return False
+
+    signing_key = int.from_bytes(binding_signing_key, byteorder="little")
+    if signing_key >= PALLAS_SCALAR_MODULUS:
+        return False
+
+    try:
+        basepoint = _pallas_point_from_bytes(ORCHARD_BINDINGSIG_BASEPOINT_BYTES)
+        verification_key = _pallas_scalar_mul(signing_key, basepoint)
+        verification_key_bytes = _pallas_point_to_bytes(verification_key)
+        r = _pallas_point_from_bytes(signature[:32])
+    except ValueError:
+        return False
+
+    s = int.from_bytes(signature[32:], byteorder="little")
+    if s >= PALLAS_SCALAR_MODULUS:
+        return False
+
+    challenge = _redpallas_hstar(signature[:32], verification_key_bytes, msg)
+    left = _pallas_scalar_mul(s, basepoint)
+    right = _pallas_point_add(r, _pallas_scalar_mul(challenge, verification_key))
+
+    return left == right
 
 
 def nu5_txid_digests(tx_bytes: bytes) -> dict[str, bytes]:
@@ -281,6 +327,128 @@ def _final_digest(
         personal,
         header_digest + transparent_digest + sapling_digest + orchard_digest,
     )
+
+
+def _redpallas_hstar(*chunks: bytes) -> int:
+    hasher = hashlib.blake2b(
+        digest_size=64,
+        person=ZCASH_REDPALLAS_HSTAR_PERSONALIZATION,
+    )
+    for chunk in chunks:
+        hasher.update(chunk)
+    return int.from_bytes(hasher.digest(), byteorder="little") % PALLAS_SCALAR_MODULUS
+
+
+def _pallas_point_from_bytes(encoded: bytes) -> tuple[int, int] | None:
+    if len(encoded) != 32:
+        raise ValueError("Invalid Pallas point encoding length")
+
+    if encoded == bytes(32):
+        return None
+
+    x_bytes = bytearray(encoded)
+    ysign = x_bytes[31] >> 7
+    x_bytes[31] &= 0x7F
+    x = int.from_bytes(x_bytes, byteorder="little")
+    if x >= PALLAS_BASE_MODULUS:
+        raise ValueError("Non-canonical Pallas x-coordinate")
+
+    y = _mod_sqrt((pow(x, 3, PALLAS_BASE_MODULUS) + PALLAS_B) % PALLAS_BASE_MODULUS)
+    if (y & 1) != ysign:
+        y = (-y) % PALLAS_BASE_MODULUS
+
+    return (x, y)
+
+
+def _pallas_point_to_bytes(point: tuple[int, int] | None) -> bytes:
+    if point is None:
+        return bytes(32)
+
+    x, y = point
+    encoded = bytearray(x.to_bytes(32, byteorder="little"))
+    encoded[31] |= (y & 1) << 7
+    return bytes(encoded)
+
+
+def _pallas_point_add(
+    lhs: tuple[int, int] | None,
+    rhs: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    if lhs is None:
+        return rhs
+    if rhs is None:
+        return lhs
+
+    x1, y1 = lhs
+    x2, y2 = rhs
+
+    if x1 == x2:
+        if (y1 + y2) % PALLAS_BASE_MODULUS == 0:
+            return None
+        slope = (3 * x1 * x1) * pow(2 * y1, -1, PALLAS_BASE_MODULUS)
+    else:
+        slope = (y2 - y1) * pow(x2 - x1, -1, PALLAS_BASE_MODULUS)
+
+    slope %= PALLAS_BASE_MODULUS
+    x3 = (slope * slope - x1 - x2) % PALLAS_BASE_MODULUS
+    y3 = (slope * (x1 - x3) - y1) % PALLAS_BASE_MODULUS
+    return (x3, y3)
+
+
+def _pallas_scalar_mul(
+    scalar: int,
+    point: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    result = None
+    addend = point
+
+    while scalar:
+        if scalar & 1:
+            result = _pallas_point_add(result, addend)
+        addend = _pallas_point_add(addend, addend)
+        scalar >>= 1
+
+    return result
+
+
+def _mod_sqrt(value: int) -> int:
+    if value == 0:
+        return 0
+
+    if pow(value, (PALLAS_BASE_MODULUS - 1) // 2, PALLAS_BASE_MODULUS) != 1:
+        raise ValueError("Value is not a quadratic residue")
+
+    q = PALLAS_BASE_MODULUS - 1
+    s = 0
+    while q % 2 == 0:
+        s += 1
+        q //= 2
+
+    z = 2
+    while pow(z, (PALLAS_BASE_MODULUS - 1) // 2, PALLAS_BASE_MODULUS) != PALLAS_BASE_MODULUS - 1:
+        z += 1
+
+    m = s
+    c = pow(z, q, PALLAS_BASE_MODULUS)
+    t = pow(value, q, PALLAS_BASE_MODULUS)
+    r = pow(value, (q + 1) // 2, PALLAS_BASE_MODULUS)
+
+    while t != 1:
+        i = 1
+        t2i = pow(t, 2, PALLAS_BASE_MODULUS)
+        while t2i != 1:
+            t2i = pow(t2i, 2, PALLAS_BASE_MODULUS)
+            i += 1
+            if i == m:
+                raise ValueError("Unable to compute square root")
+
+        b = pow(c, 1 << (m - i - 1), PALLAS_BASE_MODULUS)
+        m = i
+        c = pow(b, 2, PALLAS_BASE_MODULUS)
+        t = (t * c) % PALLAS_BASE_MODULUS
+        r = (r * b) % PALLAS_BASE_MODULUS
+
+    return r
 
 
 def _parse_v5_tx(tx_bytes: bytes) -> dict:
