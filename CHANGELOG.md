@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.2.0
+
+- Always prompt the user on the `GET_VK` command.
+
 ## 3.1.0
 
 ### Added
