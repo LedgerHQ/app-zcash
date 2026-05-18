@@ -1,8 +1,10 @@
 use zcash_address::unified::{Encoding, Fvk, Ufvk};
 
+use alloc::format;
 use ledger_device_sdk::info;
 use ledger_device_sdk::io::Comm;
 
+use crate::app_ui::address::{ui_display_orchard_fvk, ui_display_ufvk};
 use crate::utils::{HexSlice, encode_string_response};
 use crate::zip32::{
     convert_orchard_path_to_transparent_path, derive_orchard_fvk,
@@ -23,6 +25,7 @@ fn append_pending_vk_chunk(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), A
     pending.offset = end;
 
     if pending.offset == pending.bytes.len() {
+        ctx.is_vk_display_finished = true;
         ctx.vk_response = None;
     }
 
@@ -51,7 +54,17 @@ pub fn handler_get_vk(
     let orchard_fvk = derive_orchard_fvk(&path)?;
 
     let response_bytes = match mode {
-        P2VkMode::OrchardFvk => orchard_fvk.to_bytes().to_vec(),
+        P2VkMode::OrchardFvk => {
+            let orchard_fvk_bytes = orchard_fvk.to_bytes();
+            let orchard_fvk_str = format!("{}", HexSlice(&orchard_fvk_bytes));
+
+            if !ui_display_orchard_fvk(&orchard_fvk_str)? {
+                ctx.is_vk_display_finished = true;
+                return Err(AppSW::Deny);
+            }
+
+            orchard_fvk_bytes.to_vec()
+        }
         P2VkMode::Ufvk => {
             let transparent_bytes = derive_transparent_account_pubkey(
                 &convert_orchard_path_to_transparent_path(&path)?,
@@ -67,6 +80,11 @@ pub fn handler_get_vk(
             .map_err(|_| AppSW::TechnicalProblem)?;
 
             let ufvk_str = ufvk.encode(&network);
+
+            if !ui_display_ufvk(&ufvk_str)? {
+                ctx.is_vk_display_finished = true;
+                return Err(AppSW::Deny);
+            }
 
             encode_string_response(&ufvk_str)
         }

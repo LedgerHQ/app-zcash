@@ -15,6 +15,9 @@
  *  limitations under the License.
  *****************************************************************************/
 
+use alloc::borrow::Cow;
+use alloc::string::String;
+
 use ledger_device_sdk::nbgl::NbglAddressReview;
 
 use crate::{AppSW, app_ui::load_glyph};
@@ -35,4 +38,63 @@ pub fn ui_display_pk(addr: &str) -> Result<bool, AppSW> {
 pub fn ui_display_unified_address(addr: &str) -> Result<bool, AppSW> {
     // Display the unified address confirmation screen.
     display_address("Verify Orchard UAddress", addr)
+}
+
+// Viewing keys can be long, shorten them for better display.
+fn shorten_fvk_to_display<'s>(
+    viewing_key: &'s str,
+    shortened_len: usize,
+    prefix_len: usize,
+    ellipsis: &str,
+) -> Cow<'s, str> {
+    if viewing_key.len() <= shortened_len {
+        return Cow::Borrowed(viewing_key);
+    }
+
+    let suffix_len = shortened_len - prefix_len;
+
+    let mut shortened = String::with_capacity(shortened_len);
+    shortened.push_str(&viewing_key[..prefix_len]);
+    shortened.push_str(ellipsis);
+    shortened.push_str(&viewing_key[viewing_key.len() - suffix_len..]);
+
+    Cow::Owned(shortened)
+}
+
+fn ui_display_fvk(review_title: &str, fvk: &str) -> Result<bool, AppSW> {
+    let viewing_key = if cfg!(any(target_os = "nanosplus", target_os = "nanox")) {
+        const ELLIPSIS: &str = "\n ... \n";
+        const ROW_LEN: usize = 18;
+        const SHORTENED_DISPLAY_LEN: usize = ROW_LEN * 3 * 3 - ROW_LEN;
+        const PREFIX_LEN: usize = ROW_LEN * 4;
+
+        shorten_fvk_to_display(fvk, SHORTENED_DISPLAY_LEN, PREFIX_LEN, ELLIPSIS)
+    } else {
+        const ELLIPSIS: &str = " ... ";
+        const SHORTENED_DISPLAY_LEN: usize = if cfg!(target_os = "apex_p") { 125 } else { 132 };
+        const PREFIX_LEN: usize = (SHORTENED_DISPLAY_LEN - ELLIPSIS.len()) / 2;
+
+        shorten_fvk_to_display(fvk, SHORTENED_DISPLAY_LEN, PREFIX_LEN, ELLIPSIS)
+    };
+
+    // Display the viewing key export confirmation screen.
+    #[allow(unused_mut)]
+    let mut review = NbglAddressReview::new()
+        .glyph(load_glyph())
+        .review_title(review_title);
+
+    #[cfg(not(any(target_os = "nanosplus", target_os = "nanox")))]
+    {
+        review = review.review_subtitle("This lets the connected wallet access your accounts info");
+    }
+
+    Ok(review.show(viewing_key.as_ref()))
+}
+
+pub fn ui_display_ufvk(ufvk: &str) -> Result<bool, AppSW> {
+    ui_display_fvk("Share Zcash Unified Full Viewing Key?", ufvk)
+}
+
+pub fn ui_display_orchard_fvk(orchard_fvk: &str) -> Result<bool, AppSW> {
+    ui_display_fvk("Share Zcash Orchard Full Viewing Key?", orchard_fvk)
 }

@@ -250,6 +250,10 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             },
             AppSW::Deny | AppSW::Ok,
         ) => (true, StatusType::Address),
+        (Instruction::GetVk { .. }, AppSW::Deny | AppSW::Ok) if tx_ctx.is_vk_display_finished => {
+            tx_ctx.is_vk_display_finished = false;
+            (true, StatusType::Address)
+        }
         (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
         | (Instruction::HashSign, AppSW::Ok)
             if tx_ctx.is_finished() =>

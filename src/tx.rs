@@ -120,6 +120,7 @@ pub struct TxContext<'a> {
     pub parser: Parser,
     pub output_parser: OutputParser,
     pub vk_response: Option<PendingVkResponse>,
+    pub is_vk_display_finished: bool,
     /// Swap parameters if running in swap mode.
     /// Used to validate the transaction against the Exchange's request.
     pub swap_params: Option<&'a CreateTxParams>,
@@ -143,6 +144,7 @@ impl<'s> TxContext<'s> {
             addr_of_mut!((*ptr).parser).write(Parser::new(mode));
             addr_of_mut!((*ptr).output_parser).write(OutputParser::new());
             addr_of_mut!((*ptr).vk_response).write(None);
+            addr_of_mut!((*ptr).is_vk_display_finished).write(false);
             addr_of_mut!((*ptr).swap_params).write(swap_params);
         }
     }
@@ -159,6 +161,7 @@ impl<'s> TxContext<'s> {
         self.parser = Parser::new(mode);
         self.output_parser = OutputParser::new();
         self.vk_response = None;
+        self.is_vk_display_finished = false;
     }
 
     pub fn set_transaction_trusted_input_idx(&mut self, idx: u32) {
