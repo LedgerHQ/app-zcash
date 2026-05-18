@@ -60,7 +60,7 @@ use zeroize::Zeroizing;
 use crate::consts::{
     INS_GET_SHIELD_ADDR, P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE,
     P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE,
-    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT,
+    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT, P1HashSignMode,
     P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
     P2ShieldedAddrMode, P2VkMode,
 };
@@ -158,7 +158,9 @@ pub enum Instruction {
     HashFinalizeFull {
         is_change: bool,
     },
-    HashSign,
+    HashSign {
+        mode: P1HashSignMode,
+    },
     SignMessage {
         first: bool,
         next: bool,
@@ -219,7 +221,9 @@ impl TryFrom<ApduHeader> for Instruction {
             ) => Ok(Instruction::HashFinalizeFull {
                 is_change: value.p1 == P1_FINALIZE_FULL_CHANGEINFO,
             }),
-            (INS_HASH_SIGN, 0, 0) => Ok(Instruction::HashSign),
+            (INS_HASH_SIGN, p1, 0) => Ok(Instruction::HashSign {
+                mode: P1HashSignMode::try_from(p1)?,
+            }),
             (INS_SIGN_MESSAGE, p1, 0) => Ok(Instruction::SignMessage {
                 first: p1 == P1_FIRST,
                 next: p1 == P1_NEXT,
@@ -255,11 +259,12 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             (true, StatusType::Address)
         }
         (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
-        | (Instruction::HashSign, AppSW::Ok)
-            if tx_ctx.is_finished() =>
-        {
-            (true, StatusType::Transaction)
-        }
+        | (
+            Instruction::HashSign {
+                mode: P1HashSignMode::Sign,
+            },
+            AppSW::Ok,
+        ) if tx_ctx.is_finished() => (true, StatusType::Transaction),
         (_, _) => (false, StatusType::Transaction),
     };
 
@@ -368,7 +373,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
             Instruction::GetTrustedInput { .. }
             | Instruction::HashInputStart { .. }
             | Instruction::HashFinalizeFull { .. }
-            | Instruction::HashSign,
+            | Instruction::HashSign { .. },
             true,
         ) = (ins, is_error)
         {
@@ -404,7 +409,7 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
         Instruction::HashFinalizeFull { is_change } => {
             handler_hash_input_finalize_full(comm, ctx, *is_change)
         }
-        Instruction::HashSign => handler_hash_sign(comm, ctx),
+        Instruction::HashSign { mode } => handler_hash_sign(comm, ctx, *mode),
         Instruction::SignMessage { first, next } => handler_sign_msg(comm, ctx, *first, *next),
     }
 }

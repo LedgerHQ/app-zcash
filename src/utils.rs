@@ -19,7 +19,7 @@ const P2SH_OUTPUT_PREFIX: [u8; 3] = [0xA9, 0x14, 0x00];
 const P2SH_OUTPUT_POSTFIX: [u8; 2] = [0x87, 0x00];
 const TRANSPARENT_ADDRESS_OFFSET: usize = 3;
 const TRANSPARENT_ADDRESS_HASH_LEN: usize = 20;
-const BIP44_ALLOWED_PURPOSES: [u32; 3] = [44, 49, 84];
+const BIP44_ALLOWED_PURPOSES: [u32; 2] = [44, 32];
 
 pub enum Endianness {
     Big,
@@ -165,8 +165,11 @@ pub enum Bip44CheckMode {
 }
 
 pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
+    const HARDENED: u32 = 0x8000_0000;
+    const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
+    const PURPOSE_OFFSET: usize = 0;
+
     const BIP44_PATH_LEN: usize = 5;
-    const BIP44_PURPOSE_OFFSET: usize = 0;
     const BIP44_COIN_TYPE_OFFSET: usize = 1;
     const BIP44_ACCOUNT_OFFSET: usize = 2;
     const BIP44_CHANGE_OFFSET: usize = 3;
@@ -174,28 +177,55 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const BIP44_COIN_TYPE: u32 = 133;
     const MAX_BIP44_ACCOUNT_RECOMMENDED: u32 = 100;
     const MAX_BIP44_ADDRESS_INDEX_RECOMMENDED: u32 = 50000;
+    const ZIP32_PATH_LEN: usize = 3;
+    const ZIP32_PURPOSE: u32 = 32;
 
     let path = path.as_slice();
+    let is_zip32 = path.len() == ZIP32_PATH_LEN && (path[0] & UNHARDENED_MASK) == ZIP32_PURPOSE;
 
-    if path.len() != BIP44_PATH_LEN {
-        error!("Bad Bip44 path len");
-        return false;
-    }
+    if is_zip32 {
+        if path.len() != ZIP32_PATH_LEN {
+            error!("Bad ZIP32 path len");
+            return false;
+        }
 
-    let purpose = path[BIP44_PURPOSE_OFFSET] & 0x7FFF_FFFF;
-    if !BIP44_ALLOWED_PURPOSES.contains(&purpose) {
-        error!("Bad Bip44 purpose");
-        return false;
-    }
+        if path[PURPOSE_OFFSET] != (ZIP32_PURPOSE | HARDENED) {
+            error!("Bad ZIP32 purpose");
+            return false;
+        }
 
-    let coin_type = path[BIP44_COIN_TYPE_OFFSET] & 0x7FFF_FFFF;
-    if coin_type != BIP44_COIN_TYPE {
-        error!("Bad Bip44 coin type");
-        return false;
+        if path[BIP44_COIN_TYPE_OFFSET] != (BIP44_COIN_TYPE | HARDENED) {
+            error!("Bad ZIP32 coin type");
+            return false;
+        }
+
+        if path[BIP44_ACCOUNT_OFFSET] & HARDENED == 0 {
+            error!("Bad ZIP32 account");
+            return false;
+        }
+
+        return true;
+    } else {
+        if path.len() != BIP44_PATH_LEN {
+            error!("Bad Bip44 path len");
+            return false;
+        }
+
+        let purpose = path[PURPOSE_OFFSET] & UNHARDENED_MASK;
+        if !BIP44_ALLOWED_PURPOSES.contains(&purpose) {
+            error!("Bad Bip44 purpose");
+            return false;
+        }
+
+        let coin_type = path[BIP44_COIN_TYPE_OFFSET] & UNHARDENED_MASK;
+        if coin_type != BIP44_COIN_TYPE {
+            error!("Bad Bip44 coin type");
+            return false;
+        }
     }
 
     if let Bip44CheckMode::Full { is_change_path } = mode {
-        let account = path[BIP44_ACCOUNT_OFFSET] & 0x7FFF_FFFF;
+        let account = path[BIP44_ACCOUNT_OFFSET] & UNHARDENED_MASK;
         if account > MAX_BIP44_ACCOUNT_RECOMMENDED {
             error!("Bad Bip44 account");
             return false;
@@ -207,7 +237,7 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
             return false;
         }
 
-        let address_index = path[BIP44_ADDRESS_INDEX_OFFSET] & 0x7FFF_FFFF;
+        let address_index = path[BIP44_ADDRESS_INDEX_OFFSET] & UNHARDENED_MASK;
         if address_index > MAX_BIP44_ADDRESS_INDEX_RECOMMENDED {
             error!("Bad Bip44 address index");
             return false;
