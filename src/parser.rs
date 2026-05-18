@@ -51,6 +51,7 @@ pub use output_parser::{OutputParser, OutputParserCtx};
 mod compute;
 mod error;
 mod orchard;
+pub(crate) mod orchard_decipher;
 mod output_parser;
 mod reader;
 mod sapling;

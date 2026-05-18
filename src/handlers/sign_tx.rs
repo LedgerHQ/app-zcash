@@ -21,13 +21,25 @@ use ledger_device_sdk::random::{LedgerRng, rand_bytes};
 
 use crate::AppSW;
 use crate::consts::P1HashSignMode;
+use crate::parser::orchard_decipher::OrchardDecipherKeys;
 use crate::parser::{OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError};
 use crate::tx::TxContext;
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
-use crate::zip32::{derive_orchard_ask, map_ledger_crypto_error};
+use crate::zip32::{
+    derive_orchard_ask, derive_orchard_fvk, map_ledger_crypto_error, orchard_network,
+};
 
 const ORCHARD_BINDING_SIGNING_KEY_LEN: usize = 32;
+
+fn is_zip32_orchard_path(path: &Bip32Path) -> bool {
+    const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
+    const ZIP32_PATH_LEN: usize = 3;
+    const ZIP32_PURPOSE: u32 = 32;
+
+    path.as_slice().len() == ZIP32_PATH_LEN
+        && (path.as_slice()[0] & UNHARDENED_MASK) == ZIP32_PURPOSE
+}
 
 fn map_redpallas_error(err: ledger_zcash_crypto::redpallas::Error) -> AppSW {
     match err {
@@ -97,6 +109,21 @@ pub fn handler_hash_input_finalize_full(
 
     if is_change_info {
         let path: Bip32Path = data.try_into()?;
+
+        if is_zip32_orchard_path(&path) {
+            if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
+                error!("Orchard decipher path not ZIP32 compliant");
+                return Err(AppSW::ConditionsOfUseNotSatisfied);
+            }
+
+            let orchard_fvk = derive_orchard_fvk(&path)?;
+            let network = orchard_network(&path);
+            ctx.tx_info.orchard_decipher_keys =
+                Some(OrchardDecipherKeys::from_fvk(&orchard_fvk, network)?);
+            info!("Orchard decipher keys prepared");
+
+            return Ok(());
+        }
 
         let public_key_with_cc = ExtendedPublicKey::try_from(&path)?;
 
