@@ -4,21 +4,18 @@ use chacha20::{
 };
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::AeadInPlace};
 use ff::{Field, PrimeField};
-use ledger_device_sdk::{
-    hash::{
-        blake2::{Blake2b_256, Blake2bWithPerso},
-        HashInit as _,
-    },
+use ledger_device_sdk::hash::{
+    HashInit as _,
+    blake2::{Blake2b_256, Blake2bWithPerso},
 };
 use pasta_curves::pallas;
 
 use crate::{
-    bytes::reverse_copy,
-    pallas_base_from_repr, pallas_point_from_bytes, pallas_point_to_bytes,
-    pallas_scalar_from_repr, prf_expand_with_domain_separator_and_inputs,
-    sinsemilla::sinsemilla_short_commit, to_pallas_base_bytes, to_pallas_scalar_bytes, Error,
-    ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR, ORCHARD_RCM_DOMAIN_SEPARATOR,
-    PRF_EXPAND_BYTES,
+    Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
+    ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES, bytes::reverse_copy, pallas_base_from_repr,
+    pallas_point_from_bytes, pallas_point_to_bytes, pallas_scalar_from_repr,
+    prf_expand_with_domain_separator_and_inputs, sinsemilla::sinsemilla_short_commit,
+    to_pallas_base_bytes, to_pallas_scalar_bytes,
 };
 
 pub const ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE: usize = 52;
@@ -26,11 +23,9 @@ pub const ORCHARD_MEMO_SIZE: usize = 512;
 pub const ORCHARD_NOTE_PLAINTEXT_SIZE: usize =
     ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE + ORCHARD_MEMO_SIZE;
 pub const ORCHARD_AEAD_TAG_SIZE: usize = 16;
-pub const ORCHARD_ENC_CIPHERTEXT_SIZE: usize =
-    ORCHARD_NOTE_PLAINTEXT_SIZE + ORCHARD_AEAD_TAG_SIZE;
+pub const ORCHARD_ENC_CIPHERTEXT_SIZE: usize = ORCHARD_NOTE_PLAINTEXT_SIZE + ORCHARD_AEAD_TAG_SIZE;
 pub const ORCHARD_OUT_PLAINTEXT_SIZE: usize = 64;
-pub const ORCHARD_OUT_CIPHERTEXT_SIZE: usize =
-    ORCHARD_OUT_PLAINTEXT_SIZE + ORCHARD_AEAD_TAG_SIZE;
+pub const ORCHARD_OUT_CIPHERTEXT_SIZE: usize = ORCHARD_OUT_PLAINTEXT_SIZE + ORCHARD_AEAD_TAG_SIZE;
 pub const ORCHARD_RAW_ADDRESS_SIZE: usize = 43;
 
 const HASH_SIZE: usize = 32;
@@ -39,8 +34,7 @@ const VALUE_SIZE: usize = 8;
 const NOTE_VALUE_OFFSET: usize = 1 + DIVERSIFIER_SIZE;
 const RSEED_OFFSET: usize = NOTE_VALUE_OFFSET + VALUE_SIZE;
 const L_ORCHARD_BASE: usize = 255;
-const NOTE_COMMITMENT_MESSAGE_BITS: usize =
-    32 * 8 + 32 * 8 + 64 + L_ORCHARD_BASE + L_ORCHARD_BASE;
+const NOTE_COMMITMENT_MESSAGE_BITS: usize = 32 * 8 + 32 * 8 + 64 + L_ORCHARD_BASE + L_ORCHARD_BASE;
 const PRF_OCK_ORCHARD_PERSONALIZATION: [u8; 16] = *b"Zcash_Orchardock";
 const KDF_ORCHARD_PERSONALIZATION: [u8; 16] = *b"Zcash_OrchardKDF";
 const NOTE_COMMITMENT_PERSONALIZATION: &str = "z.cash:Orchard-NoteCommit";
