@@ -77,3 +77,26 @@ impl TryFrom<u8> for P2ShieldedAddrMode {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum P1HashSignMode {
+    Sign = 0x00,
+    Digest = 0x01,
+    SpendAuthSig = 0x02,
+    BindingSig = 0x03,
+}
+
+impl TryFrom<u8> for P1HashSignMode {
+    type Error = AppSW;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(P1HashSignMode::Sign),
+            0x01 => Ok(P1HashSignMode::Digest),
+            0x02 => Ok(P1HashSignMode::SpendAuthSig),
+            0x03 => Ok(P1HashSignMode::BindingSig),
+            _ => Err(AppSW::WrongP1P2),
+        }
+    }
+}

@@ -39,7 +39,7 @@ for submodule_dir in */ ; do
     patch_path=$(next_patch_path "../patches/${submodule_name}_dep.patch")
 
     echo "Generating patch for submodule $submodule_name and saving it to $patch_path"
-    git diff > "$patch_path"
+    git diff --relative > "$patch_path"
 
     popd > /dev/null
 done

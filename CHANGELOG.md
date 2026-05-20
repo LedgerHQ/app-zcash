@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.3.0
+
+- Add support for Orchard shielded transactions
+
 ## 3.2.0
 
 - Always prompt the user on the `GET_VK` command.
