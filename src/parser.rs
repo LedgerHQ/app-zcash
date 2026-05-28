@@ -6,8 +6,7 @@ use core::{iter, mem};
 use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 use zcash_primitives::transaction::sighash_v5::{
-    ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
-    ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
+    ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
 };
 
 use core2::io::Read;
@@ -18,11 +17,7 @@ use num_enum::TryFromPrimitive;
 use zcash_encoding::CompactSize;
 use zcash_primitives::encoding::ReadBytesExt;
 use zcash_primitives::transaction::TxVersion;
-use zcash_primitives::transaction::txid::{
-    ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_OUTPUTS_HASH_PERSONALIZATION,
-    ZCASH_PREVOUTS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
-    ZCASH_SEQUENCE_HASH_PERSONALIZATION,
-};
+use zcash_primitives::transaction::txid::ZCASH_HEADERS_HASH_PERSONALIZATION;
 use zcash_protocol::consensus::BranchId;
 use zcash_protocol::value::Zatoshis;
 use zcash_transparent::address::Script;
@@ -47,12 +42,14 @@ use ledger_device_sdk::log::{debug, error, info};
 
 pub use error::{ParserError, ParserSourceError};
 pub use output_parser::{OutputParser, OutputParserCtx};
+pub use pczt::{PcztParser, PcztParserCtx};
 
 mod compute;
 mod error;
 mod orchard;
 pub(crate) mod orchard_decipher;
 mod output_parser;
+mod pczt;
 mod reader;
 mod sapling;
 mod transparent;
@@ -95,7 +92,7 @@ pub(super) fn finalize_and_log_hash(
     Ok(hash)
 }
 
-#[derive(Debug, TryFromPrimitive)]
+#[derive(Debug, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
 enum TrustedInputMode {
     Trusted = 0x01,
@@ -330,34 +327,7 @@ impl Parser {
             (ParserMode::TrustedInput, TxVersion::V5, _)
             | (ParserMode::Signature, TxVersion::V5, false) => {
                 debug!("Init V5 tx hashers");
-                ok!(ctx
-                    .hashers
-                    .prevouts_hasher
-                    .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .sequence_hasher
-                    .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .outputs_hasher
-                    .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .amounts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .scripts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .sapling_hasher
-                    .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .orchard_hasher
-                    .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION));
+                ok!(ctx.hashers.init_v5_tx_hashers());
             }
             // In case of Signature mode, continue computing Tx hash from previous state
             (ParserMode::Signature, TxVersion::V5, true) => {

@@ -102,7 +102,9 @@ pub fn handler_hash_input_finalize_full(
     }
 
     // Check processing states
-    if !ctx.parser.is_presign_ready() || ctx.output_parser.is_finished() {
+    // TODO: remove pczt parser check after PCZT support fully implemented
+    let transparent_inputs_ready = ctx.parser.is_presign_ready() || ctx.pczt_parser.is_finished();
+    if !transparent_inputs_ready || ctx.output_parser.is_finished() {
         error!("Bad processing state");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }

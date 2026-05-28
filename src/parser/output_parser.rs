@@ -4,6 +4,7 @@ use ::orchard::bundle::commitments::{
 };
 use alloc::format;
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
+use zcash_primitives::transaction::txid::ZCASH_OUTPUTS_HASH_PERSONALIZATION;
 use zcash_protocol::consensus::NetworkType;
 
 use crate::parser::orchard::{
