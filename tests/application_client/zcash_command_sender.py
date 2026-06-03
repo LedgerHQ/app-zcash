@@ -78,6 +78,8 @@ class InsType(IntEnum):
     GET_VK = 0x50
     GET_SHIELDED_ADDRESS = 0x51
     PCZT_TRANSPARENT_INPUT = 0x52
+    PCZT_TRANSPARENT_OUTPUT = 0x53
+    PCZT_SIGN_TRANSPARENT = 0x54
 
 class GetVkMode(IntEnum):
     UFVK = 0x00
@@ -125,6 +127,13 @@ class PcztTransparentInput:
     value: int
     script_pubkey: bytes
     sequence: bytes
+    sighash_type: int = 0x01
+
+
+@dataclass
+class PcztTransparentOutput:
+    value: int
+    script_pubkey: bytes
 
 
 @dataclass
@@ -138,6 +147,7 @@ class ZcashCommandSender:
         self.tx_chunks: dict = {}
         self.trusted_inputs: list[bytes] = []
         self.pczt_transparent_inputs: list[PcztTransparentInput] = []
+        self.pczt_transparent_outputs: list[PcztTransparentOutput] = []
         self.last_response: Optional[ApduResponse | RAPDU] = None
 
     def exchange_raw(self, data: str) -> Tuple[int, bytes]:
@@ -338,41 +348,6 @@ class ZcashCommandSender:
                 data=script + sequence,
             )
 
-    def _send_pczt_inputs_and_header_for_signing(self):
-        header = self.tx_chunks["header"]
-        inputs_num = len(self.pczt_transparent_inputs)
-
-        self.backend.exchange(
-            cla=CLA,
-            ins=InsType.HASH_INPUT_START,
-            p1=P1.P1_FIRST,
-            p2=P2.P2_HASH_INPUT_START_CONTINUE,
-            data=header + inputs_num.to_bytes(1, byteorder="big"),
-        )
-
-        for inp in self.pczt_transparent_inputs:
-            prevout = inp.prevout_txid + inp.prevout_index.to_bytes(4, byteorder="little")
-            script_len = len(inp.script_pubkey)
-
-            self.backend.exchange(
-                cla=CLA,
-                ins=InsType.HASH_INPUT_START,
-                p1=P1.P1_HASH_INPUT_START_NEXT,
-                p2=P2.P2_HASH_INPUT_START_SAPLING,
-                data=(0x02).to_bytes(1, byteorder="big")
-                + prevout
-                + inp.value.to_bytes(8, byteorder="little")
-                + write_varint(script_len),
-            )
-
-            self.backend.exchange(
-                cla=CLA,
-                ins=InsType.HASH_INPUT_START,
-                p1=P1.P1_HASH_INPUT_START_NEXT,
-                p2=P2.P2_HASH_INPUT_START_SAPLING,
-                data=inp.script_pubkey + inp.sequence,
-            )
-
     @contextmanager
     def _hash_input_finalize_outputs(
         self,
@@ -440,6 +415,7 @@ class ZcashCommandSender:
         self.tx_chunks = split_tx_v5_for_hash_input(transaction)
         self.trusted_inputs = trusted_inputs
         self.pczt_transparent_inputs = []
+        self.pczt_transparent_outputs = []
 
         self._send_trusted_inputs_and_header(continue_hashing=False)
 
@@ -451,16 +427,10 @@ class ZcashCommandSender:
             return b"\x00"
         return b"\x01" + value.to_bytes(4, byteorder="little")
 
-    def _build_pczt_transparent_input_payload(
+    def _build_pczt_header_and_global_payload(
         self,
         transaction: bytes,
-        transparent_inputs: list[PcztTransparentInput],
     ) -> bytes:
-        tx_inputs: list[dict] = self.tx_chunks["inputs"] # type: ignore
-
-        if len(transparent_inputs) != len(tx_inputs):
-            raise ValueError("transparent_inputs length must match transaction inputs length")
-
         tx_header = int.from_bytes(transaction[0:4], byteorder="little")
         tx_version = tx_header & 0x7FFFFFFF
         version_group_id = int.from_bytes(transaction[4:8], byteorder="little")
@@ -478,6 +448,19 @@ class ZcashCommandSender:
         payload.extend((133).to_bytes(4, byteorder="little"))  # Zcash SLIP-44 coin type
         payload.extend(b"\x00")  # tx_modifiable
 
+        return bytes(payload)
+
+    def _build_pczt_transparent_input_payload(
+        self,
+        transaction: bytes,
+        transparent_inputs: list[PcztTransparentInput],
+    ) -> bytes:
+        tx_inputs: list[dict] = self.tx_chunks["inputs"] # type: ignore
+
+        if len(transparent_inputs) != len(tx_inputs):
+            raise ValueError("transparent_inputs length must match transaction inputs length")
+
+        payload = bytearray(self._build_pczt_header_and_global_payload(transaction))
         payload.extend(write_varint(len(transparent_inputs)))
 
         for inp in transparent_inputs:
@@ -487,8 +470,35 @@ class ZcashCommandSender:
             payload.extend(self._pczt_optional_u32(sequence))
             payload.extend(inp.value.to_bytes(8, byteorder="little"))
             payload.extend(write_varint(len(inp.script_pubkey)) + inp.script_pubkey)
+            payload.extend(inp.sighash_type.to_bytes(1, byteorder="little"))
 
         return bytes(payload)
+
+    def _build_pczt_transparent_output_payload(
+        self,
+        transaction: bytes,
+        transparent_outputs: list[PcztTransparentOutput],
+    ) -> bytes:
+        tx_outputs: list[dict] = self.tx_chunks["outputs"] # type: ignore
+
+        if len(transparent_outputs) != len(tx_outputs):
+            raise ValueError("transparent_outputs length must match transaction outputs length")
+
+        payload = bytearray(self._build_pczt_header_and_global_payload(transaction))
+        payload.extend(write_varint(len(transparent_outputs)))
+
+        for out in transparent_outputs:
+            payload.extend(out.value.to_bytes(8, byteorder="little"))
+            payload.extend(write_varint(len(out.script_pubkey)) + out.script_pubkey)
+
+        return bytes(payload)
+
+    def _pczt_chunk_p1(self, idx: int, total_chunks: int) -> P1:
+        if idx == 0:
+            return P1.P1_FIRST
+        if idx == total_chunks - 1:
+            return P1.P1_LAST
+        return P1.P1_NEXT
 
     def _send_pczt_transparent_inputs(
         self,
@@ -504,35 +514,103 @@ class ZcashCommandSender:
         )
 
         for idx, chunk in enumerate(chunks):
-            if idx == 0:
-                p1 = P1.P1_FIRST
-            elif idx == len(chunks) - 1:
-                p1 = P1.P1_LAST
-            else:
-                p1 = P1.P1_NEXT
-
             self.backend.exchange(
                 cla=CLA,
                 ins=InsType.PCZT_TRANSPARENT_INPUT,
-                p1=p1,
+                p1=self._pczt_chunk_p1(idx, len(chunks)),
                 p2=P2.P2_NONE,
                 data=chunk,
             )
+
+    def _pczt_transparent_outputs_from_tx(self) -> list[PcztTransparentOutput]:
+        outputs: list[dict] = self.tx_chunks["outputs"] # type: ignore
+        return [
+            PcztTransparentOutput(
+                value=int.from_bytes(out["value"], byteorder="little"),
+                script_pubkey=out["script"],
+            )
+            for out in outputs
+        ]
+
+    @contextmanager
+    def _send_pczt_transparent_outputs(
+        self,
+        transaction: bytes,
+        transparent_outputs: list[PcztTransparentOutput],
+        change_or_shielded_path: str | None = None,
+    ) -> Generator[None, None, None]:
+        if change_or_shielded_path:
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.HASH_INPUT_FINALIZE_FULL,
+                p1=P1.P1_FINALIZE_FULL_CHANGEINFO,
+                p2=P2.P2_FINALIZE_FULL_DEFAULT,
+                data=pack_derivation_path(change_or_shielded_path),
+            )
+
+        chunks = split_message(
+            self._build_pczt_transparent_output_payload(
+                transaction,
+                transparent_outputs,
+            ),
+            MAX_APDU_LEN,
+        )
+
+        for idx, chunk in enumerate(chunks[:-1]):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_TRANSPARENT_OUTPUT,
+                p1=self._pczt_chunk_p1(idx, len(chunks)),
+                p2=P2.P2_NONE,
+                data=chunk,
+            )
+
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.PCZT_TRANSPARENT_OUTPUT,
+            p1=self._pczt_chunk_p1(len(chunks) - 1, len(chunks)),
+            p2=P2.P2_NONE,
+            data=chunks[-1],
+        ) as response:
+            yield response
+
+    def pczt_sign_transparent(
+        self,
+        path: str,
+        input_index: int = 0,
+    ) -> RAPDU:
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_SIGN_TRANSPARENT,
+            p1=P1.P1_FIRST,
+            p2=input_index,
+            data=pack_derivation_path(path),
+        )
 
     @contextmanager
     def send_pczt(
         self,
         transaction: bytes,
         transparent_inputs: list[PcztTransparentInput],
+        transparent_outputs: list[PcztTransparentOutput] | None = None,
         change_or_shielded_path: str | None = None,
     ) -> Generator[None, None, None]:
         self.tx_chunks = split_tx_v5_for_hash_input(transaction)
         self.trusted_inputs = []
         self.pczt_transparent_inputs = transparent_inputs
+        self.pczt_transparent_outputs = (
+            transparent_outputs
+            if transparent_outputs is not None
+            else self._pczt_transparent_outputs_from_tx()
+        )
 
         self._send_pczt_transparent_inputs(transaction, transparent_inputs)
 
-        with self._hash_input_finalize_outputs(change_or_shielded_path) as response:
+        with self._send_pczt_transparent_outputs(
+            transaction,
+            self.pczt_transparent_outputs,
+            change_or_shielded_path,
+        ) as response:
             yield response
 
     def hash_sign(
@@ -550,6 +628,9 @@ class ZcashCommandSender:
             raise ValueError("locktime and expiry must be provided together")
 
         if prepare:
+            if self.pczt_transparent_inputs:
+                raise ValueError("Use pczt_sign_transparent for PCZT transparent signing")
+
             if locktime is None or expiry is None:
                 raise ValueError("locktime and expiry are required when prepare=True")
 
@@ -565,10 +646,7 @@ class ZcashCommandSender:
                 + expiry.to_bytes(4, byteorder="big"),
             )
 
-            if self.pczt_transparent_inputs:
-                self._send_pczt_inputs_and_header_for_signing()
-            else:
-                self._send_trusted_inputs_and_header(continue_hashing=True)
+            self._send_trusted_inputs_and_header(continue_hashing=True)
 
         if mode == HashSignMode.BindingSig:
             if binding_signing_key is None:

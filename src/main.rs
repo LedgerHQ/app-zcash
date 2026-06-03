@@ -70,11 +70,15 @@ use crate::{
     consts::{
         INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_VK, INS_GET_WALLET_PUBLIC_KEY,
         INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN,
-        INS_PCZT_TRANSPARENT_INPUT, INS_SIGN_MESSAGE, ZCASH_CLA,
+        INS_PCZT_SIGN_TRANSPARENT, INS_PCZT_TRANSPARENT_INPUT, INS_PCZT_TRANSPARENT_OUTPUT,
+        INS_SIGN_MESSAGE, ZCASH_CLA,
     },
     handlers::{
         get_trusted_input::handler_get_trusted_input,
-        pczt::handler_pczt_transparent_input,
+        pczt::{
+            handler_pczt_sign_transparent, handler_pczt_transparent_input,
+            handler_pczt_transparent_output,
+        },
         sign_msg::handler_sign_msg,
         sign_tx::{handler_hash_input_finalize_full, handler_hash_input_start, handler_hash_sign},
     },
@@ -167,6 +171,13 @@ pub enum Instruction {
         first: bool,
         last: bool,
     },
+    PcztTransparentOutput {
+        first: bool,
+        last: bool,
+    },
+    PcztSignTransparent {
+        input_index: usize,
+    },
     SignMessage {
         first: bool,
         next: bool,
@@ -238,6 +249,17 @@ impl TryFrom<ApduHeader> for Instruction {
                     last: value.p1 == P1_LAST,
                 })
             }
+            (INS_PCZT_TRANSPARENT_OUTPUT, p1, 0)
+                if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
+            {
+                Ok(Instruction::PcztTransparentOutput {
+                    first: value.p1 == P1_FIRST,
+                    last: value.p1 == P1_LAST,
+                })
+            }
+            (INS_PCZT_SIGN_TRANSPARENT, 0, p2) => Ok(Instruction::PcztSignTransparent {
+                input_index: p2 as usize,
+            }),
             (INS_SIGN_MESSAGE, p1, 0) => Ok(Instruction::SignMessage {
                 first: p1 == P1_FIRST,
                 next: p1 == P1_NEXT,
@@ -388,7 +410,9 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
             | Instruction::HashInputStart { .. }
             | Instruction::HashFinalizeFull { .. }
             | Instruction::HashSign { .. }
-            | Instruction::PcztTransparentInput { .. },
+            | Instruction::PcztTransparentInput { .. }
+            | Instruction::PcztTransparentOutput { .. }
+            | Instruction::PcztSignTransparent { .. },
             true,
         ) = (ins, is_error)
         {
@@ -427,6 +451,12 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
         Instruction::HashSign { mode } => handler_hash_sign(comm, ctx, *mode),
         Instruction::PcztTransparentInput { first, last } => {
             handler_pczt_transparent_input(comm, ctx, *first, *last)
+        }
+        Instruction::PcztTransparentOutput { first, last } => {
+            handler_pczt_transparent_output(comm, ctx, *first, *last)
+        }
+        Instruction::PcztSignTransparent { input_index } => {
+            handler_pczt_sign_transparent(comm, ctx, *input_index)
         }
         Instruction::SignMessage { first, next } => handler_sign_msg(comm, ctx, *first, *next),
     }

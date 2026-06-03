@@ -102,8 +102,8 @@ pub fn handler_hash_input_finalize_full(
     }
 
     // Check processing states
-    // TODO: remove pczt parser check after PCZT support fully implemented
-    let transparent_inputs_ready = ctx.parser.is_presign_ready() || ctx.pczt_parser.is_finished();
+    let transparent_inputs_ready =
+        ctx.parser.is_presign_ready() || ctx.pczt_parser.is_transparent_inputs_finished();
     if !transparent_inputs_ready || ctx.output_parser.is_finished() {
         error!("Bad processing state");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
@@ -316,7 +316,7 @@ pub fn handler_hash_sign(
     Ok(())
 }
 
-fn append_signature(
+pub(crate) fn append_signature(
     comm: &mut Comm,
     sig_hash: &[u8; 32],
     path: &Bip32Path,

@@ -9,6 +9,7 @@ from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 from application_client.zcash_command_sender import (
     Errors,
     PcztTransparentInput,
+    PcztTransparentOutput,
     ZcashCommandSender,
 )
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
@@ -28,6 +29,18 @@ PCZT_TRANSPARENT_INPUT = PcztTransparentInput(
     value=INPUT_VALUE,
     script_pubkey=INPUT_SCRIPT_PUBKEY,
     sequence=INPUT_SEQUENCE,
+)
+SIMPLE_OUTPUT = PcztTransparentOutput(
+    value=int.from_bytes(bytes.fromhex("958ddd0400000000"), byteorder="little"),
+    script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+)
+CHANGE_RECIPIENT_OUTPUT = PcztTransparentOutput(
+    value=int.from_bytes(bytes.fromhex("005a620200000000"), byteorder="little"),
+    script_pubkey=bytes.fromhex("76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"),
+)
+CHANGE_OUTPUT = PcztTransparentOutput(
+    value=int.from_bytes(bytes.fromhex("c11b7b0200000000"), byteorder="little"),
+    script_pubkey=bytes.fromhex("76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"),
 )
 
 
@@ -61,7 +74,6 @@ def test_pczt_sign_tx_v5_simple(
 ):
     locktime = 0x00
     expiry = 0x00
-    sighash_type = 0x01
     tx_bytes = bytes.fromhex(
         "050000800a27a726b4d0d6c2" + locktime.to_bytes(4, byteorder="big").hex() + expiry.to_bytes(4, byteorder="big").hex() +
         "01" + "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a" + "00000000" +
@@ -80,15 +92,11 @@ def test_pczt_sign_tx_v5_simple(
     with client.send_pczt(
         transaction=tx_bytes,
         transparent_inputs=[PCZT_TRANSPARENT_INPUT],
+        transparent_outputs=[SIMPLE_OUTPUT],
     ):
         _review_approve(scenario_navigator, "test_sign_tx_v5_simple")
 
-    resp = client.hash_sign(
-        path=path,
-        locktime=locktime,
-        expiry=expiry,
-        sighash_type=sighash_type,
-    ).data
+    resp = client.pczt_sign_transparent(path=path, input_index=0).data
     signature = resp[:-1]
 
     assert check_tx_v5_signature_validity(
@@ -106,7 +114,6 @@ def test_pczt_sign_tx_v5_change(
 ):
     locktime = 0x00
     expiry = 0x00
-    sighash_type = 0x01
     tx_bytes = bytes.fromhex(
         "050000800a27a726b4d0d6c2" + locktime.to_bytes(4, byteorder="big").hex() + expiry.to_bytes(4, byteorder="big").hex() +
         "01" + "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a" + "00000000" +
@@ -128,16 +135,12 @@ def test_pczt_sign_tx_v5_change(
     with client.send_pczt(
         transaction=tx_bytes,
         transparent_inputs=[PCZT_TRANSPARENT_INPUT],
+        transparent_outputs=[CHANGE_RECIPIENT_OUTPUT, CHANGE_OUTPUT],
         change_or_shielded_path=change_path,
     ):
         _review_approve(scenario_navigator, "test_sign_tx_v5_change")
 
-    resp = client.hash_sign(
-        path=path,
-        locktime=locktime,
-        expiry=expiry,
-        sighash_type=sighash_type,
-    ).data
+    resp = client.pczt_sign_transparent(path=path, input_index=0).data
     signature = resp[:-1]
 
     assert check_tx_v5_signature_validity(
@@ -170,6 +173,7 @@ def test_pczt_sign_tx_refuse(
         with client.send_pczt(
             transaction=tx_bytes,
             transparent_inputs=[PCZT_TRANSPARENT_INPUT],
+            transparent_outputs=[SIMPLE_OUTPUT],
         ):
             scenario_navigator.review_reject(test_name="test_sign_tx_refuse")
 
