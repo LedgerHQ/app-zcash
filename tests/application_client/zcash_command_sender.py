@@ -25,6 +25,8 @@ class P1(IntEnum):
     P1_FIRST = 0x00
     # Parameter 1 for next APDU numbers.
     P1_NEXT = 0x80
+    # Parameter 1 for last APDU number.
+    P1_LAST = 0x01
 
     # Parameter 1 for no screen confirmation for GET_PUBLIC_KEY.
     P1_GET_PUBLIC_KEY_NO_DISPLAY = 0x00
@@ -64,10 +66,6 @@ class P2(IntEnum):
 
     # Parameter 2 for HASH_INPUT_FINALIZE_FULL
     P2_FINALIZE_FULL_DEFAULT = 0x00
-
-    # Parameter 2 for PCZT_TRANSPARENT_INPUT
-    P2_PCZT_MORE = 0x00
-    P2_PCZT_LAST = 0x80
 
 class InsType(IntEnum):
     GET_VERSION = 0xC4
@@ -506,11 +504,18 @@ class ZcashCommandSender:
         )
 
         for idx, chunk in enumerate(chunks):
+            if idx == 0:
+                p1 = P1.P1_FIRST
+            elif idx == len(chunks) - 1:
+                p1 = P1.P1_LAST
+            else:
+                p1 = P1.P1_NEXT
+
             self.backend.exchange(
                 cla=CLA,
                 ins=InsType.PCZT_TRANSPARENT_INPUT,
-                p1=P1.P1_FIRST if idx == 0 else P1.P1_NEXT,
-                p2=P2.P2_PCZT_LAST if idx == len(chunks) - 1 else P2.P2_PCZT_MORE,
+                p1=p1,
+                p2=P2.P2_NONE,
                 data=chunk,
             )
 

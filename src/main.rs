@@ -61,9 +61,9 @@ use zeroize::Zeroizing;
 use crate::consts::{
     INS_GET_SHIELD_ADDR, P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE,
     P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE,
-    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT, P1HashSignMode,
-    P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
-    P2_PCZT_LAST, P2_PCZT_MORE, P2ShieldedAddrMode, P2VkMode,
+    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_LAST, P1_NEXT,
+    P1HashSignMode, P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE,
+    P2_HASH_INPUT_START_SAPLING, P2ShieldedAddrMode, P2VkMode,
 };
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
@@ -209,7 +209,7 @@ impl TryFrom<ApduHeader> for Instruction {
             }
             (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
                 first: p1 == P1_FIRST,
-                next: p1 == P1_NEXT,
+                next: p1 == P1_LAST,
             }),
             (
                 INS_HASH_INPUT_START,
@@ -230,13 +230,12 @@ impl TryFrom<ApduHeader> for Instruction {
             (INS_HASH_SIGN, p1, 0) => Ok(Instruction::HashSign {
                 mode: P1HashSignMode::try_from(p1)?,
             }),
-            (INS_PCZT_TRANSPARENT_INPUT, p1, p2)
-                if (p1 == P1_FIRST || p1 == P1_NEXT)
-                    && (p2 == P2_PCZT_MORE || p2 == P2_PCZT_LAST) =>
+            (INS_PCZT_TRANSPARENT_INPUT, p1, 0)
+                if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
             {
                 Ok(Instruction::PcztTransparentInput {
                     first: value.p1 == P1_FIRST,
-                    last: value.p2 == P2_PCZT_LAST,
+                    last: value.p1 == P1_LAST,
                 })
             }
             (INS_SIGN_MESSAGE, p1, 0) => Ok(Instruction::SignMessage {
