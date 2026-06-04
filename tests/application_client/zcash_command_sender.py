@@ -17,6 +17,7 @@ from application_client.zcash_utils import write_varint
 MAGIC_TRUSTED_INPUT: int = 0x32
 
 MAX_APDU_LEN: int = 255
+PCZT_DEFAULT_SEED_FINGERPRINT: bytes = bytes(32)
 
 CLA: int = 0xE0
 
@@ -128,7 +129,6 @@ class PcztTransparentInput:
     script_pubkey: bytes
     sequence: bytes
     signing_path: str
-    seed_fingerprint: bytes = bytes(32)
     sighash_type: int = 0x01
 
 
@@ -498,9 +498,7 @@ class ZcashCommandSender:
             payload.extend(inp.sighash_type.to_bytes(1, byteorder="little"))
             payload.extend(write_varint(1))
             payload.extend(self._compressed_pubkey_from_path(inp.signing_path))
-            if len(inp.seed_fingerprint) != 32:
-                raise ValueError("seed_fingerprint must be 32 bytes")
-            payload.extend(inp.seed_fingerprint)
+            payload.extend(PCZT_DEFAULT_SEED_FINGERPRINT)
             path_components = self._path_components_from_path(inp.signing_path)
             payload.extend(write_varint(len(path_components)))
             for component in path_components:
