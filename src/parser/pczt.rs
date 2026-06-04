@@ -1,5 +1,5 @@
 use alloc::{string::ToString, vec::Vec};
-use core::mem;
+use core::{cmp, mem};
 
 use core2::io::Read;
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256};
@@ -24,8 +24,10 @@ use crate::tx::{Hashers, TxInfo, TxOutput, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _};
 use crate::utils::check_output_displayable;
 use crate::utils::{
-    CheckDispOutput, HexSlice,
+    Bip44CheckMode, CheckDispOutput, HexSlice,
     base58_address::{Base58Address, ToBase58Address},
+    bip32_path::{Bip32Path, MAX_ZCASH_BIP32_PATH},
+    check_bip44_compliance,
 };
 
 use super::reader::ByteReader;
@@ -36,6 +38,19 @@ const PCZT_VERSION_1: u32 = 1;
 const DEFAULT_SEQUENCE: u32 = 0xFFFF_FFFF;
 const PREVOUT_SIZE: usize = 32 + 4;
 const SIGHASH_ALL: u8 = 0x01;
+const COMPRESSED_PUBKEY_SIZE: usize = 33;
+const ZIP32_SEED_FINGERPRINT_SIZE: usize = 32;
+const ZIP32_DERIVATION_PATH_COUNT_OFFSET: usize =
+    COMPRESSED_PUBKEY_SIZE + ZIP32_SEED_FINGERPRINT_SIZE;
+const ZIP32_DERIVATION_MIN_SIZE: usize = ZIP32_DERIVATION_PATH_COUNT_OFFSET + 1;
+
+enum PathCountParse {
+    NeedMore(usize),
+    Ready {
+        path_count: usize,
+        path_offset: usize,
+    },
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub enum PcztParserState {
@@ -47,6 +62,10 @@ pub enum PcztParserState {
         remaining_size: usize,
     },
     WaitTransparentInputSighashType,
+    WaitTransparentInputBip32Derivation,
+    ProcessTransparentInputBip32Derivation {
+        expected_size: Option<usize>,
+    },
     TransparentInputsDone,
     WaitTransparentOutput,
     ProcessTransparentOutputScript {
@@ -62,6 +81,7 @@ struct PcztTransparentInputRecord {
     amount: [u8; 8],
     script_pubkey: Vec<u8>,
     sighash_type: u8,
+    path: Bip32Path,
 }
 
 pub struct PcztParserCtx<'ctx> {
@@ -82,9 +102,11 @@ pub struct PcztParser {
     current_input_sequence: u32,
     current_input_amount: [u8; 8],
     current_input_script_pubkey: Vec<u8>,
+    current_input_sighash_type: u8,
     current_output_amount: u64,
     total_output_amount: u64,
     script_bytes: Vec<u8>,
+    bip32_derivation_bytes: Vec<u8>,
 }
 
 impl PcztParser {
@@ -128,7 +150,13 @@ impl PcztParser {
     //   redeem_script          SKIPPED
     //   partial_signatures     SKIPPED
     //   sighash_type           u8
-    //   bip32_derivation       SKIPPED
+    //   bip32_derivation       BTreeMap<[u8; 33], Zip32Derivation> as:
+    //                            CompactSize entry count, followed by entries:
+    //                              key compressed_pubkey [u8; 33]
+    //                              seed_fingerprint [u8; 32]
+    //                              derivation_path Vec<u32> as CompactSize count
+    //                                followed by LE u32 path segments
+    //                            exactly one entry is currently used
     //   ripemd160_preimages    SKIPPED
     //   sha256_preimages       SKIPPED
     //   hash160_preimages      SKIPPED
@@ -155,9 +183,11 @@ impl PcztParser {
             current_input_sequence: 0,
             current_input_amount: [0; 8],
             current_input_script_pubkey: Vec::new(),
+            current_input_sighash_type: SIGHASH_ALL,
             current_output_amount: 0,
             total_output_amount: 0,
             script_bytes: Vec::new(),
+            bip32_derivation_bytes: Vec::new(),
         }
     }
 
@@ -197,6 +227,15 @@ impl PcztParser {
                 PcztParserState::WaitTransparentInputSighashType => {
                     self.parse_transparent_input_sighash_type(ctx, &mut reader)?
                 }
+                PcztParserState::WaitTransparentInputBip32Derivation => {
+                    self.parse_transparent_input_bip32_derivation(ctx, &mut reader)?
+                }
+                PcztParserState::ProcessTransparentInputBip32Derivation { expected_size } => self
+                    .parse_transparent_input_bip32_derivation_bytes(
+                    ctx,
+                    &mut reader,
+                    expected_size,
+                )?,
                 PcztParserState::TransparentInputsDone
                 | PcztParserState::WaitTransparentOutput
                 | PcztParserState::ProcessTransparentOutputScript { .. }
@@ -242,6 +281,8 @@ impl PcztParser {
                 PcztParserState::None
                 | PcztParserState::WaitTransparentInput
                 | PcztParserState::WaitTransparentInputSighashType
+                | PcztParserState::WaitTransparentInputBip32Derivation
+                | PcztParserState::ProcessTransparentInputBip32Derivation { .. }
                 | PcztParserState::ProcessTransparentInputScript { .. }
                 | PcztParserState::TransparentOutputsDone => {
                     return Err(ParserError::from_sw(AppSW::BadState));
@@ -280,6 +321,8 @@ impl PcztParser {
         self.transparent_input_parsed_count = 0;
         self.transparent_inputs.clear();
         self.current_input_script_pubkey.clear();
+        self.current_input_sighash_type = SIGHASH_ALL;
+        self.bip32_derivation_bytes.clear();
         ctx.tx_state.total_input_count = input_count;
 
         if input_count == 0 {
@@ -539,7 +582,7 @@ impl PcztParser {
 
     fn parse_transparent_input_sighash_type(
         &mut self,
-        ctx: &mut PcztParserCtx<'_>,
+        _ctx: &mut PcztParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         let sighash_type = ok!(reader.read_u8());
@@ -554,12 +597,216 @@ impl PcztParser {
             self.transparent_input_parsed_count, sighash_type
         );
 
+        self.current_input_sighash_type = sighash_type;
+        self.state = PcztParserState::WaitTransparentInputBip32Derivation;
+
+        Ok(())
+    }
+
+    fn parse_transparent_input_bip32_derivation(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let derivation_count: usize = ok!(CompactSize::read_t(&mut *reader));
+        if derivation_count != 1 {
+            return Err(ParserError::from_str(
+                "Expected exactly one PCZT input bip32 derivation",
+            ));
+        }
+
+        debug!(
+            "PCZT transparent input #{} bip32 derivation count: {}",
+            self.transparent_input_parsed_count, derivation_count
+        );
+
+        self.bip32_derivation_bytes.clear();
+        self.state = PcztParserState::ProcessTransparentInputBip32Derivation {
+            expected_size: None,
+        };
+        self.parse_transparent_input_bip32_derivation_bytes(ctx, reader, None)
+    }
+
+    fn parse_transparent_input_bip32_derivation_bytes(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+        mut expected_size: Option<usize>,
+    ) -> Result<(), ParserError> {
+        loop {
+            let (target_size, is_header_target) = if let Some(size) = expected_size {
+                (size, false)
+            } else {
+                match Self::parse_derivation_path_count(&self.bip32_derivation_bytes)? {
+                    PathCountParse::NeedMore(size) => (size, true),
+                    PathCountParse::Ready {
+                        path_count,
+                        path_offset,
+                    } => {
+                        let size = path_offset + path_count * 4;
+                        debug!(
+                            "PCZT transparent input #{} bip32 derivation path len: {}",
+                            self.transparent_input_parsed_count, path_count
+                        );
+                        (size, false)
+                    }
+                }
+            };
+
+            let missing = target_size.saturating_sub(self.bip32_derivation_bytes.len());
+
+            if missing > 0 {
+                let to_read = cmp::min(missing, reader.remaining_len());
+                if to_read == 0 {
+                    let expected_size = if is_header_target {
+                        None
+                    } else {
+                        Some(target_size)
+                    };
+                    self.state =
+                        PcztParserState::ProcessTransparentInputBip32Derivation { expected_size };
+                    debug!(
+                        "Need more PCZT transparent input bip32 derivation bytes, currently read: {}",
+                        self.bip32_derivation_bytes.len()
+                    );
+                    return Ok(());
+                }
+
+                let offset = self.bip32_derivation_bytes.len();
+                self.bip32_derivation_bytes.resize(offset + to_read, 0);
+                ok!(reader.read_exact(&mut self.bip32_derivation_bytes[offset..]));
+            }
+
+            if self.bip32_derivation_bytes.len() == target_size {
+                if is_header_target {
+                    expected_size = None;
+                    continue;
+                }
+
+                return self.finish_transparent_input_bip32_derivation(ctx);
+            }
+        }
+    }
+
+    fn parse_derivation_path_count(data: &[u8]) -> Result<PathCountParse, ParserError> {
+        if data.len() < ZIP32_DERIVATION_MIN_SIZE {
+            return Ok(PathCountParse::NeedMore(ZIP32_DERIVATION_MIN_SIZE));
+        }
+
+        let count_offset = ZIP32_DERIVATION_PATH_COUNT_OFFSET;
+        let first = data[count_offset];
+        let (path_count, compact_size_len) = match first {
+            0x00..=0xfc => (first as usize, 1),
+            0xfd => {
+                let size = count_offset + 3;
+                if data.len() < size {
+                    return Ok(PathCountParse::NeedMore(size));
+                }
+
+                (
+                    u16::from_le_bytes(data[count_offset + 1..count_offset + 3].try_into().unwrap())
+                        as usize,
+                    3,
+                )
+            }
+            0xfe => {
+                let size = count_offset + 5;
+                if data.len() < size {
+                    return Ok(PathCountParse::NeedMore(size));
+                }
+
+                (
+                    u32::from_le_bytes(data[count_offset + 1..count_offset + 5].try_into().unwrap())
+                        as usize,
+                    5,
+                )
+            }
+            0xff => {
+                let size = count_offset + 9;
+                if data.len() < size {
+                    return Ok(PathCountParse::NeedMore(size));
+                }
+
+                let path_count = u64::from_le_bytes(
+                    data[count_offset + 1..count_offset + 9].try_into().unwrap(),
+                );
+                if path_count > usize::MAX as u64 {
+                    return Err(ParserError::from_str(
+                        "Bad PCZT input bip32 derivation path length",
+                    ));
+                }
+
+                (path_count as usize, 9)
+            }
+        };
+
+        if path_count > MAX_ZCASH_BIP32_PATH {
+            return Err(ParserError::from_str(
+                "Bad PCZT input bip32 derivation path length",
+            ));
+        }
+
+        Ok(PathCountParse::Ready {
+            path_count,
+            path_offset: count_offset + compact_size_len,
+        })
+    }
+
+    fn finish_transparent_input_bip32_derivation(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+    ) -> Result<(), ParserError> {
+        let derivation = mem::take(&mut self.bip32_derivation_bytes);
+        let pubkey = &derivation[..COMPRESSED_PUBKEY_SIZE];
+        let _seed_fingerprint =
+            &derivation[COMPRESSED_PUBKEY_SIZE..ZIP32_DERIVATION_PATH_COUNT_OFFSET];
+        let (path_count, path_offset) = match Self::parse_derivation_path_count(&derivation)? {
+            PathCountParse::Ready {
+                path_count,
+                path_offset,
+            } => (path_count, path_offset),
+            PathCountParse::NeedMore(_) => {
+                return Err(ParserError::from_str(
+                    "Incomplete PCZT input bip32 derivation",
+                ));
+            }
+        };
+
+        let mut derivation_path = Vec::new();
+        for chunk in derivation[path_offset..path_offset + path_count * 4].chunks_exact(4) {
+            derivation_path.push(u32::from_le_bytes(chunk.try_into().unwrap()));
+        }
+
+        let path = ok!(Bip32Path::try_from(derivation_path.as_slice()));
+
+        if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
+            return Err(ParserError::from_str(
+                "PCZT transparent signing path not compliant",
+            ));
+        }
+
+        debug!(
+            "PCZT transparent input #{} bip32 derivation pubkey: {}",
+            self.transparent_input_parsed_count,
+            HexSlice(pubkey)
+        );
+        debug!(
+            "PCZT transparent input #{} seed fingerprint: {}",
+            self.transparent_input_parsed_count,
+            HexSlice(_seed_fingerprint)
+        );
+        debug!(
+            "PCZT transparent input #{} signing path: {:?}",
+            self.transparent_input_parsed_count, path
+        );
+
         self.transparent_inputs.push(PcztTransparentInputRecord {
             prevout: self.current_input_prevout,
             sequence: self.current_input_sequence,
             amount: self.current_input_amount,
             script_pubkey: mem::take(&mut self.current_input_script_pubkey),
-            sighash_type,
+            sighash_type: self.current_input_sighash_type,
+            path,
         });
 
         self.transparent_input_parsed_count = self.transparent_input_parsed_count.saturating_add(1);
@@ -661,6 +908,20 @@ impl PcztParser {
         finalize_signature_hash_from_txin_digest(tx_info, &txin_sig_digest, input.sighash_type)?;
 
         Ok(input.sighash_type)
+    }
+
+    pub fn transparent_input_signing_path(
+        &self,
+        input_index: usize,
+    ) -> Result<&Bip32Path, ParserError> {
+        if !self.is_finished() {
+            return Err(ParserError::from_sw(AppSW::BadState));
+        }
+
+        self.transparent_inputs
+            .get(input_index)
+            .map(|input| &input.path)
+            .ok_or_else(|| ParserError::from_str("Bad PCZT transparent input index"))
     }
 
     fn finish_transparent_output_script(

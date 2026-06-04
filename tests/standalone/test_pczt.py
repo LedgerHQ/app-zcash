@@ -29,6 +29,15 @@ PCZT_TRANSPARENT_INPUT = PcztTransparentInput(
     value=INPUT_VALUE,
     script_pubkey=INPUT_SCRIPT_PUBKEY,
     sequence=INPUT_SEQUENCE,
+    signing_path="m/44'/133'/0'/0/2",
+)
+PCZT_CHANGE_TRANSPARENT_INPUT = PcztTransparentInput(
+    prevout_txid=PREVOUT_TXID,
+    prevout_index=PREVOUT_INDEX,
+    value=INPUT_VALUE,
+    script_pubkey=INPUT_SCRIPT_PUBKEY,
+    sequence=INPUT_SEQUENCE,
+    signing_path="m/44'/133'/0'/0/0",
 )
 SIMPLE_OUTPUT = PcztTransparentOutput(
     value=int.from_bytes(bytes.fromhex("958ddd0400000000"), byteorder="little"),
@@ -51,6 +60,7 @@ MULT_INPUTS = [
         value=81624725,
         script_pubkey=MULT_INPUT_SCRIPT_PUBKEY,
         sequence=MULT_INPUT_SEQUENCE,
+        signing_path="m/44'/133'/2'/0/2",
     ),
     PcztTransparentInput(
         prevout_txid=bytes.fromhex("28ca5b91000f74b9adbb3f467adf1088caf7f334192895e59a540067531d7136"),
@@ -58,6 +68,7 @@ MULT_INPUTS = [
         value=1776650,
         script_pubkey=MULT_INPUT_SCRIPT_PUBKEY,
         sequence=MULT_INPUT_SEQUENCE,
+        signing_path="m/44'/133'/2'/0/2",
     ),
     PcztTransparentInput(
         prevout_txid=bytes.fromhex("0b2218186261dda6d04db9c41c5aff38a75548ad85170a7ba530a30cec0d1da8"),
@@ -65,6 +76,7 @@ MULT_INPUTS = [
         value=2988680,
         script_pubkey=MULT_INPUT_SCRIPT_PUBKEY,
         sequence=MULT_INPUT_SEQUENCE,
+        signing_path="m/44'/133'/2'/0/2",
     ),
 ]
 MULT_INPUTS_OUTPUT = PcztTransparentOutput(
@@ -85,6 +97,7 @@ V4_NU6_INPUT = PcztTransparentInput(
     value=int.from_bytes(bytes.fromhex("62e52a0300000000"), byteorder="little"),
     script_pubkey=bytes.fromhex("76a914c91bd3bb62b6abbb0005ea78613c0c4f11330b4a88ac"),
     sequence=bytes.fromhex("00000000"),
+    signing_path="m/44'/133'/4'/0/0",
 )
 V4_NU6_RECIPIENT_OUTPUT = PcztTransparentOutput(
     value=int.from_bytes(bytes.fromhex("8096980000000000"), byteorder="little"),
@@ -148,7 +161,7 @@ def test_pczt_sign_tx_v5_simple(
     ):
         _review_approve(scenario_navigator, "test_sign_tx_v5_simple")
 
-    resp = client.pczt_sign_transparent(path=path, input_index=0).data
+    resp = client.pczt_sign_transparent(input_index=0).data
     signature = resp[:-1]
 
     assert check_tx_v5_signature_validity(
@@ -185,13 +198,13 @@ def test_pczt_sign_tx_v5_change(
 
     with client.send_pczt(
         transaction=tx_bytes,
-        transparent_inputs=[PCZT_TRANSPARENT_INPUT],
+        transparent_inputs=[PCZT_CHANGE_TRANSPARENT_INPUT],
         transparent_outputs=[CHANGE_RECIPIENT_OUTPUT, CHANGE_OUTPUT],
         change_or_shielded_path=change_path,
     ):
         _review_approve(scenario_navigator, "test_sign_tx_v5_change")
 
-    resp = client.pczt_sign_transparent(path=path, input_index=0).data
+    resp = client.pczt_sign_transparent(input_index=0).data
     signature = resp[:-1]
 
     assert check_tx_v5_signature_validity(
@@ -254,8 +267,6 @@ def test_pczt_sign_tx_v5_mult_inputs(
         "19" + "76a9147340a80cad7353cff25bad918e73837c2e2863eb88ac" +
         "000000"
     )
-    path = "m/44'/133'/2'/0/2"
-
     client = ZcashCommandSender(backend)
 
     with client.send_pczt(
@@ -266,7 +277,7 @@ def test_pczt_sign_tx_v5_mult_inputs(
         _review_approve(scenario_navigator, "test_sign_tx_v5_mult_inputs_old")
 
     signatures = [
-        client.pczt_sign_transparent(path=path, input_index=input_index).data
+        client.pczt_sign_transparent(input_index=input_index).data
         for input_index in range(len(MULT_INPUTS))
     ]
 
@@ -306,7 +317,7 @@ def test_pczt_sign_tx_v5_mult_outputs(
     ):
         _review_approve(scenario_navigator, "test_sign_tx_v5_mult_outputs_old")
 
-    resp = client.pczt_sign_transparent(path=path, input_index=0).data
+    resp = client.pczt_sign_transparent(input_index=0).data
 
     assert resp.hex() == expected_sig
     assert check_tx_v5_signature_validity(
@@ -335,7 +346,6 @@ def test_pczt_sign_tx_with_v4_nu6_input(
         "19" + "76a914c628ce8ff6367f0ea6763f1c1d865329af0715ac88ac" +
         "000000"
     )
-    path = "m/44'/133'/4'/0/0"
     change_path = "m/44'/133'/4'/1/0"
 
     client = ZcashCommandSender(backend)
@@ -348,6 +358,6 @@ def test_pczt_sign_tx_with_v4_nu6_input(
     ):
         _review_approve(scenario_navigator, "test_sign_tx_with_v4_nu6_input")
 
-    resp = client.pczt_sign_transparent(path=path, input_index=0).data
+    resp = client.pczt_sign_transparent(input_index=0).data
 
     assert resp.hex() == expected_sig

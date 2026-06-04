@@ -5,8 +5,6 @@ use crate::AppSW;
 use crate::handlers::sign_tx::append_signature;
 use crate::parser::{ParserMode, ParserSourceError, PcztParserCtx};
 use crate::tx::TxContext;
-use crate::utils::bip32_path::Bip32Path;
-use crate::utils::{Bip44CheckMode, check_bip44_compliance};
 
 pub fn handler_pczt_transparent_input(
     comm: &mut Comm,
@@ -114,19 +112,13 @@ pub fn handler_pczt_sign_transparent(
 ) -> Result<(), AppSW> {
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
-    if data.is_empty() {
-        error!("Not enough data for PCZT transparent signing");
+    if !data.is_empty() {
+        error!("Unexpected data for PCZT transparent signing");
         return Err(AppSW::WrongApduLength);
     }
 
     if !ctx.pczt_parser.is_finished() {
         error!("PCZT transparent inputs and outputs are not ready for signing");
-        return Err(AppSW::ConditionsOfUseNotSatisfied);
-    }
-
-    let path: Bip32Path = data.try_into()?;
-    if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
-        error!("PCZT transparent signing path not compliant");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
 
@@ -145,10 +137,21 @@ pub fn handler_pczt_sign_transparent(
             }
         })?;
 
+    let path = ctx
+        .pczt_parser
+        .transparent_input_signing_path(input_index)
+        .map_err(|e| {
+            error!("Error reading PCZT transparent signing path: {:#?}", e);
+            match e.source {
+                ParserSourceError::AppSW(sw) => sw,
+                _ => AppSW::IncorrectData,
+            }
+        })?;
+
     append_signature(
         comm,
         &ctx.tx_info.signature_digest,
-        &path,
+        path,
         sighash_type,
         true,
     )?;
