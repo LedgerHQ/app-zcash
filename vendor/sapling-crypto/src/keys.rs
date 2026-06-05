@@ -6,7 +6,7 @@
 
 use alloc::vec::Vec;
 use core::fmt;
-use core2::io::{self, Read, Write};
+use corez::io::{self, Read, Write};
 
 use super::{
     address::PaymentAddress,
@@ -31,6 +31,8 @@ use zcash_spec::PrfExpand;
 use rand_core::RngCore;
 
 /// Errors that can occur in the decoding of Sapling spending keys.
+#[derive(Debug)]
+#[non_exhaustive]
 pub enum DecodingError {
     /// The length of the byte slice provided for decoding was incorrect.
     LengthInvalid { expected: usize, actual: usize },
@@ -42,6 +44,25 @@ pub enum DecodingError {
     /// index, or a non-zero index at depth 0.
     UnsupportedChildIndex,
 }
+
+impl fmt::Display for DecodingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DecodingError::LengthInvalid { expected, actual } => {
+                write!(f, "invalid slice length (expected {expected}, got {actual}")
+            }
+            DecodingError::InvalidAsk => write!(f, "invalid `ask`"),
+            DecodingError::InvalidNsk => write!(f, "invalid `nsk`"),
+            DecodingError::UnsupportedChildIndex => write!(
+                f,
+                "unsupported child index (either non-hardened, or non-zero at depth 0)"
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for DecodingError {}
 
 /// A spend authorizing key, used to create spend authorization signatures.
 ///
@@ -325,7 +346,7 @@ impl ProofGenerationKey {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct NullifierDerivingKey(pub jubjub::SubgroupPoint);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewingKey {
     pub ak: SpendValidatingKey,
     pub nk: NullifierDerivingKey,
@@ -346,7 +367,7 @@ impl ViewingKey {
 }
 
 /// A Sapling key that provides the capability to view incoming and outgoing transactions.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct FullViewingKey {
     pub vk: ViewingKey,
     pub ovk: OutgoingViewingKey,
@@ -426,7 +447,7 @@ impl FullViewingKey {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaplingIvk(pub jubjub::Fr);
 
 impl SaplingIvk {

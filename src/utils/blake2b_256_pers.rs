@@ -1,5 +1,5 @@
 use core::ptr;
-use core2::io::Write;
+use corez::io::Write;
 
 use ledger_device_sdk::hash::{HashError, HashInit as _, blake2::Blake2b_256};
 use ledger_device_sdk::log::error;
@@ -36,15 +36,15 @@ impl<'w> AsWriter<'w> for Blake2b_256 {
 }
 
 impl Write for Blake2b256IoWriter<'_> {
-    fn write(&mut self, buf: &[u8]) -> core2::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> corez::io::Result<usize> {
         self.0.update(buf).map_err(|err| {
             error!("Blake2b256IoWriter write error {:?}", err);
-            core2::io::Error::new(core2::io::ErrorKind::Other, "Blake2b256 update error")
+            corez::io::Error::new_static(corez::io::ErrorKind::Other, "Blake2b256 update error")
         })?;
         Ok(buf.len())
     }
 
-    fn flush(&mut self) -> core2::io::Result<()> {
+    fn flush(&mut self) -> corez::io::Result<()> {
         unimplemented!("flush is not supported for Blake2b256IoWriter")
     }
 }
@@ -97,15 +97,15 @@ impl<'w> AsWriterB<'w> for Sha2_256 {
 }
 
 impl Write for Sha256IoWriter<'_> {
-    fn write(&mut self, buf: &[u8]) -> core2::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> corez::io::Result<usize> {
         self.0.update(buf).map_err(|err| {
             error!("Sha256IoWriter write error {:?}", err);
-            core2::io::Error::new(core2::io::ErrorKind::Other, "Sha256 update error")
+            corez::io::Error::new_static(corez::io::ErrorKind::Other, "Sha256 update error")
         })?;
         Ok(buf.len())
     }
 
-    fn flush(&mut self) -> core2::io::Result<()> {
+    fn flush(&mut self) -> corez::io::Result<()> {
         unimplemented!("flush is not supported for Sha256IoWriter")
     }
 }

@@ -1,8 +1,8 @@
 diff --git a/Cargo.toml b/Cargo.toml
-index 868d316..42121a7 100644
+index 864bc05..02045af 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -51,7 +51,7 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
+@@ -52,7 +52,7 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
  
  # Logging and metrics
  memuse = { version = "0.2.2", default-features = false }
@@ -11,16 +11,16 @@ index 868d316..42121a7 100644
  
  # Note Commitment Trees
  bitvec = { version = "1", default-features = false }
-@@ -64,7 +64,7 @@ zcash_note_encryption = { version = "0.4", features = ["pre-zip-212"] }
- subtle = { version = "2.2.3", default-features = false }
+@@ -65,7 +65,7 @@ zcash_note_encryption = { version = "0.4", features = ["pre-zip-212"] }
+ subtle = { version = "2.6", default-features = false }
  
  # Static constants
 -lazy_static = "1"
 +lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
  
  # Test dependencies
- proptest = { version = "1", optional = true }
-@@ -104,6 +104,8 @@ circuit = [
+ proptest = { version = ">=1.0.0, <1.7.0", optional = true }
+@@ -105,6 +105,8 @@ circuit = [
    "std"
  ]
  
