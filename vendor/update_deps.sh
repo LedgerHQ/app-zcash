@@ -29,10 +29,10 @@ popd > /dev/null
 # Create dir if it doesn't exist
 mkdir -p "$VENDOR_DIR"
 
-clone_repo "https://github.com/zcash/orchard.git"               "9d89b504c52dc69064ca431e8311a4cd1c279b44" "$VENDOR_DIR/orchard"
+clone_repo "https://github.com/zcash/orchard.git"               "8de172448be10f3a470f9ac83198dc8a185986ad" "$VENDOR_DIR/orchard"
 clone_repo "https://github.com/ferrilab/radium.git"             "3f27e0d827338aee919213fd071b99819a1b9fff" "$VENDOR_DIR/radium"
 clone_repo "https://github.com/rust-bitcoin/rust-secp256k1.git" "1a1fc57fb99a5a42b996d3cdde5c48fda3797709" "$VENDOR_DIR/rust-secp256k1"
-clone_repo "https://github.com/zcash/sapling-crypto.git"        "6a8282be0959b410a0b622cd5eb84f8c3c134078" "$VENDOR_DIR/sapling-crypto"
+clone_repo "https://github.com/zcash/sapling-crypto.git"        "8186b407b47b595a2ea4f04c73d59fdd83bd401f" "$VENDOR_DIR/sapling-crypto"
 clone_repo "https://github.com/zesterer/spin-rs.git"            "502c9dca17c99762184095c9d64c0aedd1db97ff" "$VENDOR_DIR/spin"
 
 pushd "$VENDOR_DIR" > /dev/null

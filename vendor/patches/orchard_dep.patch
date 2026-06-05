@@ -1,7 +1,16 @@
 diff --git a/Cargo.toml b/Cargo.toml
-index 07b1a66..9295680 100644
+index af477a6..c9b270f 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
+@@ -30,7 +30,7 @@ ff = { version = "0.13", default-features = false }
+ fpe = { version = "0.6", default-features = false, features = ["alloc"] }
+ group = "0.13"
+ hex = { version = "0.4", default-features = false, features = ["alloc"] }
+-lazy_static = "1"
++lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
+ memuse = { version = "0.2.2", default-features = false }
+ pasta_curves = "0.5"
+ proptest = { version = ">=1.0.0, <1.7.0", optional = true }
 @@ -56,7 +56,7 @@ halo2_proofs = { version = "0.3", optional = true, default-features = false, fea
  getset = "0.1"
  
@@ -10,12 +19,12 @@ index 07b1a66..9295680 100644
 +#tracing = { version = "0.1", default-features = false }
  
  # No-std support
- core2 = { version = "0.3", default-features = false, features = ["alloc"] }
+ corez = { version = "0.1.1", default-features = false, features = ["alloc"] }
 diff --git a/src/bundle/commitments.rs b/src/bundle/commitments.rs
-index fee2419..ab3fc3e 100644
+index fee2419..6afc2d8 100644
 --- a/src/bundle/commitments.rs
 +++ b/src/bundle/commitments.rs
-@@ -1,14 +1,15 @@
+@@ -1,14 +1,16 @@
 +#![allow(missing_docs)]
  //! Utility functions for computing bundle commitments
  
@@ -31,7 +40,8 @@ index fee2419..ab3fc3e 100644
 +pub const ZCASH_ORCHARD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrchardHash";
 +pub const ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrcActCHash";
 +pub const ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrcActMHash";
-+pub const ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrcActNHash";
++pub const ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] =
++    b"ZTxIdOrcActNHash";
 +pub const ZCASH_ORCHARD_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthOrchaHash";
  
  fn hasher(personal: &[u8; 16]) -> State {
