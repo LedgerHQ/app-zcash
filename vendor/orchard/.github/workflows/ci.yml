@@ -1,6 +1,9 @@
 name: CI checks
 
-on: [push, pull_request]
+on:
+  pull_request:
+  push:
+    branches: main
 
 jobs:
   test:
@@ -42,7 +45,7 @@ jobs:
     strategy:
       matrix:
         target:
-          - wasm32-wasi
+          - wasm32-wasip1
           - thumbv7em-none-eabihf
     steps:
       - uses: actions/checkout@v4
@@ -67,12 +70,14 @@ jobs:
       - name: Add lazy_static with the spin_no_std feature
         working-directory: ./ci-build
         run: cargo add lazy_static --no-default-features --features "spin_no_std"
-      - name: Add typenum with the no_std feature
+      - name: Add typenum with no default features
         working-directory: ./ci-build
-        run: cargo add typenum --no-default-features --features "no_std"
+        run: cargo add typenum --no-default-features
       - name: Show Cargo.toml for the synthetic crate
         working-directory: ./ci-build
         run: cat Cargo.toml
+      - name: Copy pinned dependencies into synthetic crate
+        run: cp crate_root/Cargo.lock ci-build/
       - name: Add target
         working-directory: ./ci-build
         run: rustup target add ${{ matrix.target }}

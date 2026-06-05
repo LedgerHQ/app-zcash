@@ -20,7 +20,7 @@ use crate::{
     note_encryption::OrchardNoteEncryption,
     primitives::redpallas::{self, Binding, SpendAuth},
     tree::{Anchor, MerklePath},
-    value::{self, NoteValue, OverflowError, ValueCommitTrapdoor, ValueCommitment, ValueSum},
+    value::{self, BalanceError, NoteValue, ValueCommitTrapdoor, ValueCommitment, ValueSum},
     Proof,
 };
 
@@ -28,7 +28,7 @@ use crate::{
 use {
     crate::{
         action::Action,
-        circuit::{Circuit, Instance, ProvingKey},
+        circuit::{Circuit, Instance, OrchardCircuitVersion, ProvingKey},
     },
     nonempty::NonEmpty,
 };
@@ -117,6 +117,7 @@ impl BundleType {
 
 /// An error type for the kinds of errors that can occur during bundle construction.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum BuildError {
     /// Spends are disabled for the provided bundle type.
     SpendsDisabled,
@@ -131,7 +132,7 @@ pub enum BuildError {
     Proof(halo2_proofs::plonk::Error),
     /// An overflow error occurred while attempting to construct the value
     /// for a bundle.
-    ValueSum(value::OverflowError),
+    ValueSum(value::BalanceError),
     /// External signature is not valid.
     InvalidExternalSignature,
     /// A signature is valid for more than one input. This should never happen if `alpha`
@@ -173,14 +174,15 @@ impl From<halo2_proofs::plonk::Error> for BuildError {
     }
 }
 
-impl From<value::OverflowError> for BuildError {
-    fn from(e: value::OverflowError) -> Self {
+impl From<value::BalanceError> for BuildError {
+    fn from(e: value::BalanceError) -> Self {
         BuildError::ValueSum(e)
     }
 }
 
 /// An error type for adding a spend to the builder.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SpendError {
     /// Spends aren't enabled for this builder.
     SpendsDisabled,
@@ -204,13 +206,20 @@ impl fmt::Display for SpendError {
 #[cfg(feature = "std")]
 impl std::error::Error for SpendError {}
 
-/// The only error that can occur here is if outputs are disabled for this builder.
+/// An error type for adding an output to the builder.
 #[derive(Debug, PartialEq, Eq)]
-pub struct OutputError;
+#[non_exhaustive]
+pub enum OutputError {
+    /// Outputs aren't enabled for this builder.
+    OutputsDisabled,
+}
 
 impl fmt::Display for OutputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Outputs are not enabled for this builder")
+        use OutputError::*;
+        f.write_str(match self {
+            OutputsDisabled => "Outputs are not enabled for this builder",
+        })
     }
 }
 
@@ -267,7 +276,7 @@ impl SpendInfo {
     }
 
     fn has_matching_anchor(&self, anchor: &Anchor) -> bool {
-        if self.note.value() == NoteValue::zero() {
+        if self.note.value() == NoteValue::ZERO {
             true
         } else {
             let cm = self.note.commitment();
@@ -351,7 +360,7 @@ impl OutputInfo {
         let fvk: FullViewingKey = (&SpendingKey::random(rng)).into();
         let recipient = fvk.address_at(0u32, Scope::External);
 
-        Self::new(None, recipient, NoteValue::zero(), [0u8; 512])
+        Self::new(None, recipient, NoteValue::ZERO, [0u8; 512])
     }
 
     /// Builds the output half of an action.
@@ -431,9 +440,23 @@ impl ActionInfo {
     ///
     /// Defined in [Zcash Protocol Spec § 4.7.3: Sending Notes (Orchard)][orchardsend].
     ///
+    /// The circuit version defaults to [`OrchardCircuitVersion::FixedPostNu6_2`],
+    /// which should be used for all new proofs.
+    ///
     /// [orchardsend]: https://zips.z.cash/protocol/nu5.pdf#orchardsend
     #[cfg(feature = "circuit")]
-    fn build(self, mut rng: impl RngCore) -> (Action<SigningMetadata>, Circuit) {
+    fn build(self, rng: impl RngCore) -> (Action<SigningMetadata>, Circuit) {
+        self.build_for_version(rng, OrchardCircuitVersion::FixedPostNu6_2)
+    }
+
+    /// Builds the action for a given circuit version. This must be consistent
+    /// between actions in a bundle.
+    #[cfg(feature = "circuit")]
+    fn build_for_version(
+        self,
+        mut rng: impl RngCore,
+        circuit_version: OrchardCircuitVersion,
+    ) -> (Action<SigningMetadata>, Circuit) {
         let v_net = self.value_sum();
         let cv_net = ValueCommitment::derive(v_net, self.rcv.clone());
 
@@ -451,8 +474,18 @@ impl ActionInfo {
                     dummy_ask: self.spend.dummy_sk.as_ref().map(SpendAuthorizingKey::from),
                     parts: SigningParts { ak, alpha },
                 },
+            )
+            .expect(
+                "rk is non-identity (α was generated randomly) and epk is a \
+                 valid non-identity point by construction",
             ),
-            Circuit::from_action_context_unchecked(self.spend, note, alpha, self.rcv),
+            Circuit::from_action_context_unchecked(
+                self.spend,
+                note,
+                alpha,
+                self.rcv,
+                circuit_version,
+            ),
         )
     }
 
@@ -536,16 +569,59 @@ pub struct Builder {
     outputs: Vec<OutputInfo>,
     bundle_type: BundleType,
     anchor: Anchor,
+    // Only proving (the `circuit` feature) consults the circuit version.
+    #[cfg(feature = "circuit")]
+    circuit_version: OrchardCircuitVersion,
 }
 
 impl Builder {
     /// Constructs a new empty builder for an Orchard bundle.
+    #[cfg_attr(
+        feature = "circuit",
+        doc = "",
+        doc = "When proving, the circuit version defaults to `FixedPostNu6_2`, which should be used",
+        doc = "for all new proofs; use [`Builder::new_for_version`] to choose another."
+    )]
     pub fn new(bundle_type: BundleType, anchor: Anchor) -> Self {
+        Self::new_internal(
+            bundle_type,
+            anchor,
+            #[cfg(feature = "circuit")]
+            OrchardCircuitVersion::FixedPostNu6_2,
+        )
+    }
+
+    /// Constructs a new empty builder for an Orchard bundle with a given
+    /// circuit version.
+    ///
+    /// Setting this to [`OrchardCircuitVersion::InsecurePreNu6_2`] produces a
+    /// bundle whose proof must be created with an insecure proving key (see
+    /// [`ProvingKey::build_for_version`]); this is intended only for
+    /// reproducing pre-NU6.2 proofs in tests, never for proving transactions
+    /// for the network.
+    ///
+    /// [`ProvingKey::build_for_version`]: crate::circuit::ProvingKey::build_for_version
+    #[cfg(feature = "circuit")]
+    pub fn new_for_version(
+        bundle_type: BundleType,
+        anchor: Anchor,
+        circuit_version: OrchardCircuitVersion,
+    ) -> Self {
+        Self::new_internal(bundle_type, anchor, circuit_version)
+    }
+
+    fn new_internal(
+        bundle_type: BundleType,
+        anchor: Anchor,
+        #[cfg(feature = "circuit")] circuit_version: OrchardCircuitVersion,
+    ) -> Self {
         Builder {
             spends: vec![],
             outputs: vec![],
             bundle_type,
             anchor,
+            #[cfg(feature = "circuit")]
+            circuit_version,
         }
     }
 
@@ -594,7 +670,7 @@ impl Builder {
     ) -> Result<(), OutputError> {
         let flags = self.bundle_type.flags();
         if !flags.outputs_enabled() {
-            return Err(OutputError);
+            return Err(OutputError::OutputsDisabled);
         }
 
         self.outputs
@@ -625,19 +701,20 @@ impl Builder {
     ///
     /// [added]: https://zips.z.cash/protocol/protocol.pdf#orchardbalance
     /// [must not have a negative value]: https://zips.z.cash/protocol/protocol.pdf#transactions
-    pub fn value_balance<V: TryFrom<i64>>(&self) -> Result<V, value::OverflowError> {
+    pub fn value_balance<V: TryFrom<i64>>(&self) -> Result<V, value::BalanceError> {
         let value_balance = self
             .spends
             .iter()
-            .map(|spend| spend.note.value() - NoteValue::zero())
+            .map(|spend| spend.note.value() - NoteValue::ZERO)
             .chain(
                 self.outputs
                     .iter()
-                    .map(|output| NoteValue::zero() - output.value),
+                    .map(|output| NoteValue::ZERO - output.value),
             )
             .try_fold(ValueSum::zero(), |acc, note_value| acc + note_value)
-            .ok_or(OverflowError)?;
-        i64::try_from(value_balance).and_then(|i| V::try_from(i).map_err(|_| value::OverflowError))
+            .ok_or(BalanceError::Overflow)?;
+        i64::try_from(value_balance)
+            .and_then(|i| V::try_from(i).map_err(|_| value::BalanceError::Overflow))
     }
 
     /// Builds a bundle containing the given spent notes and outputs.
@@ -649,12 +726,13 @@ impl Builder {
         self,
         rng: impl RngCore,
     ) -> Result<Option<(UnauthorizedBundle<V>, BundleMetadata)>, BuildError> {
-        bundle(
+        bundle_for_version(
             rng,
             self.anchor,
             self.bundle_type,
             self.spends,
             self.outputs,
+            self.circuit_version,
         )
     }
 
@@ -705,6 +783,34 @@ pub fn bundle<V: TryFrom<i64>>(
     spends: Vec<SpendInfo>,
     outputs: Vec<OutputInfo>,
 ) -> Result<Option<(UnauthorizedBundle<V>, BundleMetadata)>, BuildError> {
+    bundle_for_version(
+        rng,
+        anchor,
+        bundle_type,
+        spends,
+        outputs,
+        OrchardCircuitVersion::FixedPostNu6_2,
+    )
+}
+
+/// Builds a bundle containing the given spent notes and outputs, with the Action circuits
+/// built for the given `circuit_version`.
+///
+/// Only [`OrchardCircuitVersion::FixedPostNu6_2`] should be used to prove transactions for the
+/// network; [`OrchardCircuitVersion::InsecurePreNu6_2`] exists only to reproduce pre-NU6.2
+/// proofs in tests, and requires an insecure proving key (see
+/// [`ProvingKey::build_for_version`]) to create the proof.
+///
+/// [`ProvingKey::build_for_version`]: crate::circuit::ProvingKey::build_for_version
+#[cfg(feature = "circuit")]
+pub fn bundle_for_version<V: TryFrom<i64>>(
+    rng: impl RngCore,
+    anchor: Anchor,
+    bundle_type: BundleType,
+    spends: Vec<SpendInfo>,
+    outputs: Vec<OutputInfo>,
+    circuit_version: OrchardCircuitVersion,
+) -> Result<Option<(UnauthorizedBundle<V>, BundleMetadata)>, BuildError> {
     build_bundle(
         rng,
         anchor,
@@ -715,7 +821,7 @@ pub fn bundle<V: TryFrom<i64>>(
             let result_value_balance: V = i64::try_from(value_balance)
                 .map_err(BuildError::ValueSum)
                 .and_then(|i| {
-                    V::try_from(i).map_err(|_| BuildError::ValueSum(value::OverflowError))
+                    V::try_from(i).map_err(|_| BuildError::ValueSum(value::BalanceError::Overflow))
                 })?;
 
             // Compute the transaction binding signing key.
@@ -726,8 +832,10 @@ pub fn bundle<V: TryFrom<i64>>(
                 .into_bsk();
 
             // Create the actions.
-            let (actions, circuits): (Vec<_>, Vec<_>) =
-                pre_actions.into_iter().map(|a| a.build(&mut rng)).unzip();
+            let (actions, circuits): (Vec<_>, Vec<_>) = pre_actions
+                .into_iter()
+                .map(|a| a.build_for_version(&mut rng, circuit_version))
+                .unzip();
 
             // Verify that bsk and bvk are consistent.
             let bvk = (actions.iter().map(|a| a.cv_net()).sum::<ValueCommitment>()
@@ -737,13 +845,16 @@ pub fn bundle<V: TryFrom<i64>>(
 
             Ok(NonEmpty::from_vec(actions).map(|actions| {
                 (
-                    Bundle::from_parts(
+                    Bundle::from_parts_unchecked(
                         actions,
                         flags,
                         result_value_balance,
                         anchor,
                         InProgress {
-                            proof: Unproven { circuits },
+                            proof: Unproven {
+                                circuits,
+                                circuit_version,
+                            },
                             sigs: Unauthorized { bsk },
                         },
                     ),
@@ -833,7 +944,7 @@ fn build_bundle<B, R: RngCore>(
     let value_balance = pre_actions
         .iter()
         .try_fold(ValueSum::zero(), |acc, action| acc + action.value_sum())
-        .ok_or(OverflowError)?;
+        .ok_or(BalanceError::Overflow)?;
 
     finisher(pre_actions, flags, value_balance, bundle_meta, rng)
 }
@@ -862,6 +973,7 @@ impl<P: fmt::Debug, S: InProgressSignatures> Authorization for InProgress<P, S> 
 #[derive(Clone, Debug)]
 pub struct Unproven {
     circuits: Vec<Circuit>,
+    circuit_version: OrchardCircuitVersion,
 }
 
 #[cfg(feature = "circuit")]
@@ -879,6 +991,12 @@ impl<S: InProgressSignatures> InProgress<Unproven, S> {
 
 #[cfg(feature = "circuit")]
 impl<S: InProgressSignatures, V> Bundle<InProgress<Unproven, S>, V> {
+    /// The circuit version this bundle's actions were built for, and that its proof must
+    /// therefore be created against (with a matching [`ProvingKey`]).
+    pub fn circuit_version(&self) -> OrchardCircuitVersion {
+        self.authorization().proof.circuit_version
+    }
+
     /// Creates the proof for this bundle.
     pub fn create_proof(
         self,
@@ -1271,7 +1389,7 @@ pub mod testing {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "circuit"))]
 mod tests {
     use rand::rngs::OsRng;
 
