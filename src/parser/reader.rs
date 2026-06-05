@@ -1,9 +1,9 @@
 use core::cmp;
 
-use core2::io::Error as IoError;
-use core2::io::ErrorKind as IoErrorKind;
-use core2::io::Read;
-use core2::io::Result;
+use corez::io::Error as IoError;
+use corez::io::ErrorKind as IoErrorKind;
+use corez::io::Read;
+use corez::io::Result;
 use ledger_device_sdk::log::debug;
 
 pub struct ByteReader<'b> {
