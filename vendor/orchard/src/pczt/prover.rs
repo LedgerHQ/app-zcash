@@ -1,3 +1,5 @@
+use core::fmt;
+
 use alloc::vec::Vec;
 
 use halo2_proofs::plonk;
@@ -94,8 +96,9 @@ impl super::Bundle {
                     self.flags.spends_enabled(),
                     self.flags.outputs_enabled(),
                 )
+                .ok_or(ProverError::IdentityRk)
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, ProverError>>()?;
 
         let proof =
             Proof::create(pk, &circuits, &instances, rng).map_err(ProverError::ProofFailed)?;
@@ -108,6 +111,7 @@ impl super::Bundle {
 
 /// Errors that can occur while creating Orchard proofs for a PCZT.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ProverError {
     /// The output note's components do not produce a valid note commitment.
     InvalidOutputNote,
@@ -133,6 +137,49 @@ pub enum ProverError {
     ProofFailed(plonk::Error),
     /// The `rho` of the `output_note` is not equal to the nullifier of the spent note.
     RhoMismatch,
+    /// An action has an identity `rk`, which is forbidden by the consensus
+    /// rule introduced in zcashd v6.12.1 and Zebra 4.3.1.
+    IdentityRk,
     /// The provided `fvk` does not own the spent note.
     WrongFvkForNote,
 }
+
+impl fmt::Display for ProverError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProverError::InvalidOutputNote => write!(f, "output note is invalid"),
+            ProverError::InvalidSpendNote => write!(f, "spent note is invalid"),
+            ProverError::MissingFullViewingKey => {
+                write!(f, "`fvk` must be set for the Prover role")
+            }
+            ProverError::MissingRandomSeed => {
+                write!(f, "`rseed` fields must be set for the Prover role")
+            }
+            ProverError::MissingRecipient => {
+                write!(f, "`recipient` fields must be set for the Prover role")
+            }
+            ProverError::MissingRho => write!(f, "`rho` must be set for the Prover role"),
+            ProverError::MissingSpendAuthRandomizer => {
+                write!(f, "`alpha` must be set for the Prover role")
+            }
+            ProverError::MissingValue => {
+                write!(f, "`value` fields must be set for the Prover role")
+            }
+            ProverError::MissingValueCommitTrapdoor => {
+                write!(f, "`rcv` must be set for the Prover role")
+            }
+            ProverError::MissingWitness => write!(f, "`witness` must be set for the Prover role"),
+            ProverError::ProofFailed(e) => write!(f, "Failed to create proof: {e}"),
+            ProverError::RhoMismatch => {
+                write!(f, "output's `rho` does not match spent note's nullifier")
+            }
+            ProverError::IdentityRk => {
+                write!(f, "an Orchard action with identity `rk` is not valid")
+            }
+            ProverError::WrongFvkForNote => write!(f, "`fvk` does not own the action's spent note"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ProverError {}

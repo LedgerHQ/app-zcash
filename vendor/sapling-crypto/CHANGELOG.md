@@ -7,6 +7,64 @@ and this library adheres to Rust's notion of
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-21
+
+### Changed
+- MSRV is now 1.85.1
+- Migrated from the yanked `core2` crate to `corez` for no_std IO support.
+- `sapling_crypto::pczt::Bundle::extract` now takes its `self` argument by
+  reference instead of by value.
+
+## [0.6.2] - 2026-03-31
+
+- `impl {PartiaEq, Eq} for sapling_crypto::keys::SaplingIvk`
+- `impl {PartiaEq, Eq} for sapling_crypto::zip32::IncomingViewingKey`
+
+## [0.6.1] - 2026-03-26
+
+### Added
+- `impl {PartiaEq, Eq} for sapling_crypto::keys::ViewingKey`
+- `impl {PartiaEq, Eq} for sapling_crypto::keys::FullViewingKey`
+- `impl {PartiaEq, Eq} for sapling_crypto::zip32::DiversifiableFullViewingKey`
+
+## [0.6.0] - 2025-12-05
+
+### Added
+- `sapling_crypto::pczt::Spend::apply_signature`
+- `sapling_crypto::value::BalanceError`
+- `impl std::error::Error` for the following errors:
+  - `sapling_crypto::builder::Error`
+  - `sapling_crypto::keys::DecodingError`
+  - `sapling_crypto::pczt`:
+    - `IoFinalizerError`
+    - `ParseError`
+    - `ProverError`
+    - `SignerError`
+    - `TxExtractorError`
+    - `UpdaterError`
+    - `VerifyError`
+
+### Changed
+- The `proptest` dependency (used by the `test-dependencies` feature flag) is
+  now bounded to at most `1.6` to fix version resolution problems.
+- All error enums in this crate are now `#[non_exhaustive]`, to allow future
+  error variants to be added without a SemVer break:
+  - `sapling_crypto::builder::Error`
+  - `sapling_crypto::keys::DecodingError`
+  - `sapling_crypto::pczt`:
+    - `IoFinalizerError`
+    - `ParseError`
+    - `ProverError`
+    - `SignerError`
+    - `TxExtractorError`
+    - `UpdaterError`
+    - `VerifyError`
+- `sapling_crypto::pczt::SignerError` has added variants:
+  - `InvalidExternalSignature`
+
+### Removed
+- `sapling_crypto::value::OverflowError` (use `BalanceError` instead).
+
 ## [0.5.0] - 2025-02-20
 
 ### Added
