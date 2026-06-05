@@ -10,7 +10,7 @@ use zcash_primitives::transaction::sighash_v5::{
     ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
 };
 
-use core2::io::Read;
+use corez::io::Read;
 use ledger_device_sdk::hash::HashInit;
 use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::hmac::{HMACInit, sha2::Sha2_256 as HmacSha256};
