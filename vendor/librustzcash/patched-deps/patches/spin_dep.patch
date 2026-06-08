@@ -1,0 +1,39 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 24761ec..eb9862b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -14,7 +14,7 @@ rust-version = "1.38"
+ 
+ [dependencies]
+ lock_api_crate = { package = "lock_api", version = "0.4", optional = true }
+-portable-atomic = { version = "1", optional = true, default-features = false }
++portable-atomic = { version = "1", default-features = false, features = ["unsafe-assume-single-core"] }
+ 
+ [features]
+ default = ["lock_api", "mutex", "spin_mutex", "rwlock", "once", "lazy", "barrier"]
+@@ -60,7 +60,7 @@ std = []
+ # implementation that sound for your system by implementing an unsafe trait.
+ # See the documentation for the `portable-atomic` crate for more information:
+ # https://docs.rs/portable-atomic/latest/portable_atomic/#optional-cfg
+-portable_atomic = ["portable-atomic"]
++#portable_atomic = ["portable-atomic"]
+ 
+ [package.metadata.docs.rs]
+ all-features = true
+diff --git a/src/lib.rs b/src/lib.rs
+index 50768bc..692e6eb 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -63,12 +63,7 @@
+ #[cfg(any(test, feature = "std"))]
+ extern crate core;
+ 
+-#[cfg(feature = "portable_atomic")]
+ extern crate portable_atomic;
+-
+-#[cfg(not(feature = "portable_atomic"))]
+-use core::sync::atomic;
+-#[cfg(feature = "portable_atomic")]
+ use portable_atomic as atomic;
+ 
+ #[cfg(feature = "barrier")]

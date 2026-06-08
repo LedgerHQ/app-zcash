@@ -105,9 +105,3 @@ harness = false
 name = "circuit"
 harness = false
 required-features = ["circuit"]
-
-[profile.release]
-debug = true
-
-[profile.bench]
-debug = true

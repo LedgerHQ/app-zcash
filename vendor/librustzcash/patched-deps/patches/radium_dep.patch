@@ -1,0 +1,39 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 8204e6d..4b691cf 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -22,3 +22,13 @@ edition = "2018"
+ 
+ [dev-dependencies]
+ static_assertions = "1"
++
++
++[lints.rust]
++unexpected_cfgs = { level = "warn", check-cfg = [
++    'cfg(radium_atomic_8)',
++    'cfg(radium_atomic_16)',
++    'cfg(radium_atomic_32)',
++    'cfg(radium_atomic_64)',
++    'cfg(radium_atomic_ptr)'
++] }
+\ No newline at end of file
+diff --git a/build.rs b/build.rs
+index 884ec99..eb26703 100644
+--- a/build.rs
++++ b/build.rs
+@@ -83,13 +83,14 @@ fn main() -> Result<(), Box<dyn Error>> {
+     match tgt_arch {
+         "armv5te" | "mips" | "mipsel" | "powerpc" | "riscv32imac" | "thumbv7em" | "thumbv7m"
+         | "thumbv8m.base" | "thumbv8m.main" | "armebv7r" | "armv7r" => atomics.has_64 = false,
++        "nanosplus" | "stax" | "flex" | "apex_p"  => atomics.has_64 = false,
+         // These ARMv7 targets have 32-bit pointers and 64-bit atomics.
+         "armv7" | "armv7a" | "armv7s" => atomics.has_64 = true,
+         // "riscv32imc-unknown-none-elf" and "riscv32imac-unknown-none-elf" are
+         // both `target_arch = "riscv32", and have no stable `cfg`-discoverable
+         // distinction. As such, the non-atomic RISC-V targets must be
+         // discovered here.
+-        "riscv32i" | "riscv32imc" | "thumbv6m" => atomics = Atomics::NONE,
++        "riscv32i" | "riscv32imc" | "thumbv6m" | "nanox" => atomics = Atomics::NONE,
+         _ => {}
+     }
+     #[allow(clippy::match_single_binding, clippy::single_match)]

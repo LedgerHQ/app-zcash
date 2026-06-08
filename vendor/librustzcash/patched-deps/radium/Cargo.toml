@@ -1,0 +1,34 @@
+[package]
+name = "radium"
+version = "0.7.0"
+authors = [
+    "Nika Layzell <nika@thelayzells.com>",
+    "myrrlyn <self@myrrlyn.dev>"
+]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/bitvecto-rs/radium"
+homepage = "https://github.com/bitvecto-rs/radium"
+documentation = "https://docs.rs/radium"
+description = "Portable interfaces for maybe-atomic types"
+keywords = ["atomic", "cell", "sync", "generic", "trait"]
+categories = ["concurrency", "no-std"]
+
+include = ["src/**/*.rs", "Cargo.toml", "README.md", "LICENSE.txt", "build.rs"]
+
+edition = "2018"
+
+[dependencies]
+
+[dev-dependencies]
+static_assertions = "1"
+
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(radium_atomic_8)',
+    'cfg(radium_atomic_16)',
+    'cfg(radium_atomic_32)',
+    'cfg(radium_atomic_64)',
+    'cfg(radium_atomic_ptr)'
+] }

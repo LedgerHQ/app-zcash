@@ -1,0 +1,26 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 7fd4f9cfc..59c751aea 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -23,7 +23,7 @@ resolver = "2"
+ 
+ [workspace.package]
+ edition = "2024"
+-rust-version = "1.85.1"
++rust-version = "1.85.0"
+ repository = "https://github.com/zcash/librustzcash"
+ license = "MIT OR Apache-2.0"
+ categories = ["cryptography::cryptocurrencies"]
+diff --git a/zcash_primitives/Cargo.toml b/zcash_primitives/Cargo.toml
+index 2b74e67a4..819971082 100644
+--- a/zcash_primitives/Cargo.toml
++++ b/zcash_primitives/Cargo.toml
+@@ -38,7 +38,7 @@ sha2.workspace = true
+ 
+ # - Logging and metrics
+ memuse.workspace = true
+-tracing = { workspace = true, default-features = false }
++#tracing = { workspace = true, default-features = false }
+ 
+ # - Secret management
+ subtle.workspace = true

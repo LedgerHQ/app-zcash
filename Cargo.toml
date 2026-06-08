@@ -1,3 +1,13 @@
+[workspace]
+members = ["ledger_zcash_crypto"]
+default-members = ["."]
+# These vendored deps declare their own [workspace]; exclude them so Cargo
+# doesn't treat their roots as nested workspace roots inside ours.
+exclude = ["vendor/librustzcash", "vendor/rust-secp256k1"]
+
+[workspace.dependencies]
+ledger_device_sdk = { version = "1.*", features = ["sys"] }
+
 [package]
 name = "zcash"
 version = "3.4.0"
@@ -5,17 +15,17 @@ authors = ["Ledger"]
 edition = "2024"
 
 [dependencies]
-ledger_device_sdk = { version = "1.*", features = ["sys"] }
+ledger_device_sdk = { workspace = true }
 ledger_zcash_crypto = { path = "ledger_zcash_crypto" }
 corez = { version = "0.1.1", default-features = false, features = ["alloc"] }
 arrayvec = { version = "0.7.6", default-features = false }
 bs58 = { version = "0.5.1", default-features = false }
 
-zcash_primitives = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
-zcash_protocol = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
-zcash_encoding = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
-zcash_transparent = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
-zcash_address = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
+zcash_primitives = { path = "./vendor/librustzcash/zcash_primitives", default-features = false }
+zcash_protocol = { path = "./vendor/librustzcash/components/zcash_protocol", default-features = false }
+zcash_encoding = { path = "./vendor/librustzcash/components/zcash_encoding", default-features = false }
+zcash_transparent = { path = "./vendor/librustzcash/zcash_transparent", default-features = false }
+zcash_address = { path = "./vendor/librustzcash/components/zcash_address", default-features = false }
 
 orchard = { path = "./vendor/orchard", default-features = false }
 num_enum = { version = "0.7.5", default-features = false }
@@ -40,6 +50,12 @@ image = "0.25.7"
 [profile.release]
 opt-level = 'z'
 lto = 'fat'
+
+[profile.release.package.orchard]
+debug = true
+
+[profile.bench.package.orchard]
+debug = true
 
 [features]
 default = ["ledger_device_sdk/nano_nbgl", "legacy_path"]

@@ -1,0 +1,31 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 868d316..42121a7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -51,7 +51,7 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
+ 
+ # Logging and metrics
+ memuse = { version = "0.2.2", default-features = false }
+-tracing = { version = "0.1", default-features = false }
++#tracing = { version = "0.1", default-features = false }
+ 
+ # Note Commitment Trees
+ bitvec = { version = "1", default-features = false }
+@@ -64,7 +64,7 @@ zcash_note_encryption = { version = "0.4", features = ["pre-zip-212"] }
+ subtle = { version = "2.2.3", default-features = false }
+ 
+ # Static constants
+-lazy_static = "1"
++lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
+ 
+ # Test dependencies
+ proptest = { version = "1", optional = true }
+@@ -104,6 +104,8 @@ circuit = [
+   "std"
+ ]
+ 
++#no_std = [ "lazy_static/spin_no_std" ]
++
+ ## Enables multithreading support for creating proofs.
+ multicore = ["bellman?/multicore"]
+ 
