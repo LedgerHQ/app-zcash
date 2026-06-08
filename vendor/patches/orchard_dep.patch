@@ -383,3 +383,17 @@ index 17ee92f..ea88461 100644
  }
  
  impl Deref for NonIdentityPallasPoint {
+diff --git a/Cargo.toml b/Cargo.toml
+index d343a31..644f5d5 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -105,9 +105,3 @@ harness = false
+ name = "circuit"
+ harness = false
+ required-features = ["circuit"]
+-
+-[profile.release]
+-debug = true
+-
+-[profile.bench]
+-debug = true
