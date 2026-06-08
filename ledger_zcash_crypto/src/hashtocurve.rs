@@ -324,11 +324,11 @@ impl Fp {
         Ok(result)
     }
 
-    fn to_bn(&self) -> Result<Bn, Error> {
+    fn to_bn(self) -> Result<Bn, Error> {
         Ok(Bn::alloc_init(&self.to_be_bytes())?)
     }
 
-    fn to_be_bytes(&self) -> [u8; 32] {
+    fn to_be_bytes(self) -> [u8; 32] {
         let mut be = [0u8; 32];
         reverse_copy(&mut be, &self.0);
         be
@@ -437,7 +437,7 @@ impl JacobianPoint {
         }
     }
 
-    fn to_compressed_bytes(&self) -> Result<Option<[u8; 32]>, Error> {
+    fn to_compressed_bytes(self) -> Result<Option<[u8; 32]>, Error> {
         if self.is_identity() {
             return Ok(None);
         }

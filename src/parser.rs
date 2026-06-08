@@ -1,3 +1,7 @@
+use self::personalization::{
+    ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
+    ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
+};
 use ::orchard::bundle::commitments::{
     ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION, ZCASH_ORCHARD_HASH_PERSONALIZATION,
 };
@@ -5,23 +9,19 @@ use alloc::{string::ToString, vec::Vec};
 use core::{iter, mem};
 use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
-use self::personalization::{
-    ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
-    ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
-};
 
-use corez::io::Read;
-use ledger_device_sdk::hash::HashInit;
-use ledger_device_sdk::hash::blake2::Blake2b_256;
-use ledger_device_sdk::hmac::{HMACInit, sha2::Sha2_256 as HmacSha256};
-use num_enum::TryFromPrimitive;
-use zcash_encoding::CompactSize;
 use self::personalization::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_OUTPUTS_HASH_PERSONALIZATION,
     ZCASH_PREVOUTS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_SEQUENCE_HASH_PERSONALIZATION,
 };
 use self::reader::ReadBytesExt;
+use corez::io::Read;
+use ledger_device_sdk::hash::HashInit;
+use ledger_device_sdk::hash::blake2::Blake2b_256;
+use ledger_device_sdk::hmac::{HMACInit, sha2::Sha2_256 as HmacSha256};
+use num_enum::TryFromPrimitive;
+use zcash_encoding::CompactSize;
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 use zcash_protocol::value::Zatoshis;
