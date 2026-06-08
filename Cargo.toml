@@ -8,7 +8,7 @@ ledger_device_sdk = { version = "1.*", features = ["sys"] }
 
 [package]
 name = "zcash"
-version = "3.4.0"
+version = "3.4.1"
 authors = ["Ledger"]
 edition = "2024"
 
