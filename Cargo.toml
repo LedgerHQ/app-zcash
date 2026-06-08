@@ -1,3 +1,11 @@
+[workspace]
+members = ["ledger_zcash_crypto"]
+default-members = ["."]
+exclude = ["vendor/rust-secp256k1"]
+
+[workspace.dependencies]
+ledger_device_sdk = { version = "1.*", features = ["sys"] }
+
 [package]
 name = "zcash"
 version = "3.4.0"
@@ -5,33 +13,35 @@ authors = ["Ledger"]
 edition = "2024"
 
 [dependencies]
-ledger_device_sdk = { version = "1.*", features = ["sys"] }
+ledger_device_sdk = { workspace = true }
 ledger_zcash_crypto = { path = "ledger_zcash_crypto" }
 corez = { version = "0.1.1", default-features = false, features = ["alloc"] }
 arrayvec = { version = "0.7.6", default-features = false }
 bs58 = { version = "0.5.1", default-features = false }
 
-zcash_primitives = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
-zcash_protocol = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
-zcash_encoding = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
-zcash_transparent = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
-zcash_address = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
+zcash_primitives = { version = "0.28.0", default-features = false }
+zcash_protocol = { version = "0.9.0", default-features = false }
+zcash_encoding = { version = "0.4.0", default-features = false }
+zcash_transparent = { version = "0.8.0", default-features = false }
+zcash_address = { version = "0.12.0", default-features = false }
 
 orchard = { path = "./vendor/orchard", default-features = false }
 num_enum = { version = "0.7.5", default-features = false }
 zeroize = { version = "1.6.0", default-features = false }
 
 [patch.crates-io]
-# Used in orchard
+# Pulled by bitvec (via orchard)
 radium = { path = "./vendor/radium" }
-# Used in bip32 in librustzcash
+# Pulled by bip32 (zcash_transparent) and zcash_script
 secp256k1 = { path = "./vendor/rust-secp256k1" }
-# Used in librustzcash
+# Used directly and by zcash_primitives
 orchard = { path = "./vendor/orchard" }
+# Pulled by zcash_primitives
 sapling-crypto = { path = "./vendor/sapling-crypto" }
-# Used by multiple deps
+# Pulled by lazy_static
 spin = { path = "./vendor/spin" }
 portable-atomic = { git = "https://github.com/taiki-e/portable-atomic.git", tag = "v1.12.0" }
+# Pulled by orchard and redjubjub
 reddsa = { path = "./vendor/reddsa" }
 
 [build-dependencies]
@@ -40,6 +50,12 @@ image = "0.25.7"
 [profile.release]
 opt-level = 'z'
 lto = 'fat'
+
+[profile.release.package.orchard]
+debug = true
+
+[profile.bench.package.orchard]
+debug = true
 
 [features]
 default = ["ledger_device_sdk/nano_nbgl", "legacy_path"]

@@ -5,7 +5,7 @@ use alloc::{string::ToString, vec::Vec};
 use core::{iter, mem};
 use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
-use zcash_primitives::transaction::sighash_v5::{
+use self::personalization::{
     ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
 };
@@ -16,13 +16,13 @@ use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::hmac::{HMACInit, sha2::Sha2_256 as HmacSha256};
 use num_enum::TryFromPrimitive;
 use zcash_encoding::CompactSize;
-use zcash_primitives::encoding::ReadBytesExt;
-use zcash_primitives::transaction::TxVersion;
-use zcash_primitives::transaction::txid::{
+use self::personalization::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_OUTPUTS_HASH_PERSONALIZATION,
     ZCASH_PREVOUTS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_SEQUENCE_HASH_PERSONALIZATION,
 };
+use self::reader::ReadBytesExt;
+use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 use zcash_protocol::value::Zatoshis;
 use zcash_transparent::address::Script;
@@ -52,6 +52,7 @@ mod compute;
 mod error;
 mod orchard;
 mod output_parser;
+mod personalization;
 mod reader;
 mod sapling;
 mod transparent;
