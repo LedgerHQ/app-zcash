@@ -330,7 +330,7 @@ class ZcashCommandSender:
         self,
         transaction: bytes,
         trusted_inputs: list[bytes],
-        change_path: str | None = None,
+        change_or_shielded_path: str | None = None,
     ) -> Generator[None, None, None]:
         # pylint: disable=too-many-locals
         self.tx_chunks = split_tx_v5_for_hash_input(transaction)
@@ -346,13 +346,13 @@ class ZcashCommandSender:
         outputs_num_bytes = outputs_num.to_bytes(1, byteorder="big")
         finalize_chunks: list[bytes] = []
 
-        if change_path:
+        if change_or_shielded_path:
             self.backend.exchange(
                 cla=CLA,
                 ins=InsType.HASH_INPUT_FINALIZE_FULL,
                 p1=P1.P1_FINALIZE_FULL_CHANGEINFO,
                 p2=P2.P2_FINALIZE_FULL_DEFAULT,
-                data=pack_derivation_path(change_path),
+                data=pack_derivation_path(change_or_shielded_path),
             )
 
         for idx, out in enumerate(outputs):

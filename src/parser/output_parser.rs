@@ -2,10 +2,18 @@ use ::orchard::bundle::commitments::{
     ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION,
     ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION,
 };
+use alloc::format;
+use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
+use zcash_protocol::consensus::NetworkType;
 
 use crate::parser::orchard::{
     ORCHARD_ACTIONS_COMPACT_SIZE, ORCHARD_ACTIONS_NONCOMPACT_SIZE, ORCHARD_BALANCE_SIZE,
     ORCHARD_DIGEST_DATA_SIZE, ORCHARD_MEMO_SIZE,
+};
+use crate::parser::orchard_decipher::{
+    DecipheredOrchardOutput, ORCHARD_ENC_CIPHERTEXT_SIZE, ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE,
+    ORCHARD_OUT_CIPHERTEXT_SIZE, OrchardActionCiphertext, OrchardCompactAction,
+    decipher_compact_value, decipher_value_with_ovk,
 };
 
 use super::*;
@@ -29,6 +37,12 @@ enum OutputParseState {
     OutputProcessingDone,
 }
 
+#[derive(Clone)]
+struct PendingOrchardAction {
+    compact: OrchardCompactAction,
+    memo: [u8; ORCHARD_MEMO_SIZE],
+}
+
 pub struct OutputParser {
     state: OutputParseState,
     output_count: usize,
@@ -38,6 +52,8 @@ pub struct OutputParser {
     orchard_value_balance: i64,
     orchard_action_count: usize,
     orchard_action_parsed_count: usize,
+    orchard_actions: Vec<PendingOrchardAction>,
+    orchard_decrypted_output_count: usize,
     script_bytes: Vec<u8>,
 }
 
@@ -52,6 +68,8 @@ impl OutputParser {
             orchard_value_balance: 0,
             orchard_action_count: 0,
             orchard_action_parsed_count: 0,
+            orchard_actions: Vec::new(),
+            orchard_decrypted_output_count: 0,
             script_bytes: Vec::new(),
         }
     }
@@ -68,6 +86,12 @@ impl OutputParser {
         &mut self,
         ctx: &mut OutputParserCtx<'_>,
     ) -> Result<(), ParserError> {
+        if self.orchard_decrypted_output_count == 0 && ctx.tx_info.outputs.is_empty() {
+            return Err(ParserError::from_str(
+                "No transparent or shielded outputs detected",
+            ));
+        }
+
         let fees_i128 = i128::from(ctx.tx_info.total_amount)
             + i128::from(self.orchard_value_balance)
             - i128::from(self.total_output_amount);
@@ -106,6 +130,157 @@ impl OutputParser {
         Ok(())
     }
 
+    fn parse_orchard_compact_action(&mut self, bytes: &[u8]) -> Result<(), ParserError> {
+        if bytes.len() != ORCHARD_ACTIONS_COMPACT_SIZE {
+            return Err(ParserError::from_str("Bad orchard compact action size"));
+        }
+
+        let mut nullifier = [0u8; HASH_SIZE];
+        let mut cmx = [0u8; HASH_SIZE];
+        let mut ephemeral_key = [0u8; HASH_SIZE];
+        let mut enc_ciphertext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
+
+        nullifier.copy_from_slice(&bytes[..HASH_SIZE]);
+        cmx.copy_from_slice(&bytes[HASH_SIZE..HASH_SIZE * 2]);
+        ephemeral_key.copy_from_slice(&bytes[HASH_SIZE * 2..HASH_SIZE * 3]);
+        enc_ciphertext_prefix.copy_from_slice(
+            &bytes[HASH_SIZE * 3..HASH_SIZE * 3 + ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
+        );
+
+        self.orchard_actions.push(PendingOrchardAction {
+            compact: OrchardCompactAction {
+                nullifier,
+                cmx,
+                ephemeral_key,
+                enc_ciphertext_prefix,
+            },
+            memo: [0u8; ORCHARD_MEMO_SIZE],
+        });
+
+        Ok(())
+    }
+
+    fn store_orchard_memo_chunk(
+        &mut self,
+        mut offset: usize,
+        mut bytes: &[u8],
+    ) -> Result<(), ParserError> {
+        while !bytes.is_empty() {
+            let action_index = offset / ORCHARD_MEMO_SIZE;
+            let action_offset = offset % ORCHARD_MEMO_SIZE;
+
+            let action = self
+                .orchard_actions
+                .get_mut(action_index)
+                .ok_or_else(|| ParserError::from_str("Bad orchard memo action index"))?;
+
+            let to_copy = core::cmp::min(bytes.len(), ORCHARD_MEMO_SIZE - action_offset);
+            action.memo[action_offset..action_offset + to_copy].copy_from_slice(&bytes[..to_copy]);
+            offset += to_copy;
+            bytes = &bytes[to_copy..];
+        }
+
+        Ok(())
+    }
+
+    fn push_deciphered_orchard_output(
+        &mut self,
+        ctx: &mut OutputParserCtx<'_>,
+        output: DecipheredOrchardOutput,
+        network: NetworkType,
+        is_change: bool,
+    ) -> Result<(), ParserError> {
+        if is_change && ctx.tx_info.is_change_found {
+            error!("Multiple change outputs detected");
+            return Err(ParserError::from_str("Multiple change outputs detected"));
+        }
+
+        let address =
+            UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(output.raw_address,)])
+                .map(|address| address.encode(&network))
+                .unwrap_or_else(|_| format!("orchard:{}", HexSlice(&output.raw_address)));
+
+        ctx.tx_info.outputs.push(TxOutput {
+            amount: output.value,
+            address,
+            is_change,
+        });
+
+        if is_change {
+            ctx.tx_info.is_change_found = true;
+        }
+
+        self.orchard_decrypted_output_count = self.orchard_decrypted_output_count.saturating_add(1);
+        Ok(())
+    }
+
+    fn parse_orchard_noncompact_action(
+        &mut self,
+        ctx: &mut OutputParserCtx<'_>,
+        bytes: &[u8],
+    ) -> Result<(), ParserError> {
+        if bytes.len() != ORCHARD_ACTIONS_NONCOMPACT_SIZE {
+            return Err(ParserError::from_str("Bad orchard non-compact action size"));
+        }
+
+        let Some(pending) = self
+            .orchard_actions
+            .get(self.orchard_action_parsed_count)
+            .cloned()
+        else {
+            return Err(ParserError::from_str("Bad orchard action index"));
+        };
+
+        let Some(keys) = ctx.tx_info.orchard_decipher_keys.as_ref() else {
+            debug!("No orchard decipher keys available");
+            return Ok(());
+        };
+        let network = keys.network;
+
+        match decipher_compact_value(&keys.internal_ivk, &pending.compact) {
+            Ok(Some(output)) => {
+                self.push_deciphered_orchard_output(ctx, output, network, true)?;
+                return Ok(());
+            }
+            Ok(None) => debug!("Orchard internal IVK decryption did not match this action"),
+            Err(err) => debug!("Orchard compact decryption failed: {:?}", err),
+        }
+
+        let mut cv_net = [0u8; HASH_SIZE];
+        let mut rk = [0u8; HASH_SIZE];
+        let mut out_ciphertext = [0u8; ORCHARD_OUT_CIPHERTEXT_SIZE];
+
+        cv_net.copy_from_slice(&bytes[..HASH_SIZE]);
+        rk.copy_from_slice(&bytes[HASH_SIZE..HASH_SIZE * 2]);
+        out_ciphertext.copy_from_slice(
+            &bytes[HASH_SIZE * 2 + 16..HASH_SIZE * 2 + 16 + ORCHARD_OUT_CIPHERTEXT_SIZE],
+        );
+
+        let mut enc_ciphertext = Vec::with_capacity(ORCHARD_ENC_CIPHERTEXT_SIZE);
+        enc_ciphertext.extend_from_slice(&pending.compact.enc_ciphertext_prefix);
+        enc_ciphertext.extend_from_slice(&pending.memo);
+        enc_ciphertext.extend_from_slice(&bytes[HASH_SIZE * 2..HASH_SIZE * 2 + 16]);
+
+        let action = OrchardActionCiphertext {
+            compact: pending.compact,
+            rk,
+            cv_net,
+            enc_ciphertext: &enc_ciphertext,
+            out_ciphertext,
+        };
+
+        match decipher_value_with_ovk(&keys.external_ovk, &action) {
+            Ok(Some(output)) => {
+                self.push_deciphered_orchard_output(ctx, output, network, false)?;
+                return Ok(());
+            }
+            Ok(None) => debug!("Orchard external OVK recovery did not match this action"),
+            Err(err) => debug!("Orchard OVK recovery failed: {:?}", err),
+        }
+
+        Ok(())
+    }
+
     pub fn parse(&mut self, ctx: &mut OutputParserCtx<'_>, data: &[u8]) -> Result<(), ParserError> {
         let mut reader = ByteReader::new(data);
 
@@ -128,6 +303,10 @@ impl OutputParser {
 
                     self.output_count = output_count;
                     self.orchard_value_balance = 0;
+                    self.orchard_action_count = 0;
+                    self.orchard_action_parsed_count = 0;
+                    self.orchard_actions.clear();
+                    self.orchard_decrypted_output_count = 0;
                     self.state = if output_count == 0 {
                         if reader.remaining_len() == 0 {
                             self.finalize_outputs_review(ctx)?;
@@ -264,6 +443,8 @@ impl OutputParser {
 
                     self.orchard_action_count = orchard_actions;
                     self.orchard_action_parsed_count = 0;
+                    self.orchard_actions.clear();
+                    self.orchard_decrypted_output_count = 0;
 
                     if orchard_actions == 0 {
                         self.finalize_outputs_review(ctx)?;
@@ -278,12 +459,16 @@ impl OutputParser {
                 }
 
                 OutputParseState::ParsingOrchardCompact => {
-                    hash_reader_exact(
-                        &mut reader,
-                        &mut ctx.hashers.tx_compact_hasher,
-                        ORCHARD_ACTIONS_COMPACT_SIZE,
-                        "Not enough data for orchard compact output",
-                    )?;
+                    if reader.remaining_len() < ORCHARD_ACTIONS_COMPACT_SIZE {
+                        return Err(ParserError::from_str(
+                            "Not enough data for orchard compact output",
+                        ));
+                    }
+
+                    let bytes = &reader.remaining_slice()[..ORCHARD_ACTIONS_COMPACT_SIZE];
+                    ok!(ctx.hashers.tx_compact_hasher.update(bytes));
+                    self.parse_orchard_compact_action(bytes)?;
+                    ok!(reader.advance(ORCHARD_ACTIONS_COMPACT_SIZE));
 
                     self.orchard_action_parsed_count += 1;
 
@@ -303,11 +488,15 @@ impl OutputParser {
                     size,
                     remaining_size,
                 } => {
-                    let new_remaining_size = hash_reader_chunk(
-                        &mut reader,
-                        &mut ctx.hashers.tx_memo_hasher,
-                        *remaining_size,
-                    )?;
+                    let memo_size = *size;
+                    let memo_remaining_size = *remaining_size;
+                    let to_read = core::cmp::min(memo_remaining_size, reader.remaining_len());
+                    let memo_offset = memo_size - memo_remaining_size;
+                    let bytes = &reader.remaining_slice()[..to_read];
+                    ok!(ctx.hashers.tx_memo_hasher.update(bytes));
+                    self.store_orchard_memo_chunk(memo_offset, bytes)?;
+                    ok!(reader.advance(to_read));
+                    let new_remaining_size = memo_remaining_size.saturating_sub(to_read);
 
                     if new_remaining_size == 0 {
                         ok!(ctx.hashers.tx_non_compact_hasher.init_with_perso(
@@ -317,19 +506,23 @@ impl OutputParser {
                         self.state = OutputParseState::ParsingOrchardNonCompact;
                     } else {
                         self.state = OutputParseState::ParsingOrchardMemo {
-                            size: *size,
+                            size: memo_size,
                             remaining_size: new_remaining_size,
                         };
                     }
                 }
 
                 OutputParseState::ParsingOrchardNonCompact => {
-                    hash_reader_exact(
-                        &mut reader,
-                        &mut ctx.hashers.tx_non_compact_hasher,
-                        ORCHARD_ACTIONS_NONCOMPACT_SIZE,
-                        "Not enough data for orchard non-compact output",
-                    )?;
+                    if reader.remaining_len() < ORCHARD_ACTIONS_NONCOMPACT_SIZE {
+                        return Err(ParserError::from_str(
+                            "Not enough data for orchard non-compact output",
+                        ));
+                    }
+
+                    let bytes = &reader.remaining_slice()[..ORCHARD_ACTIONS_NONCOMPACT_SIZE];
+                    ok!(ctx.hashers.tx_non_compact_hasher.update(bytes));
+                    self.parse_orchard_noncompact_action(ctx, bytes)?;
+                    ok!(reader.advance(ORCHARD_ACTIONS_NONCOMPACT_SIZE));
 
                     self.orchard_action_parsed_count += 1;
 
@@ -373,15 +566,6 @@ impl OutputParser {
 
                     info!("Orchard digest: {}", HexSlice(&ctx.tx_info.orchard_digest));
                     info!("Orchard value balance: {}", self.orchard_value_balance);
-
-                    // TODO: for now adding dummy Orchard output, later should be replaced with real output
-                    if ctx.tx_info.outputs.is_empty() {
-                        ctx.tx_info.outputs.push(TxOutput {
-                            amount: 0, // for now dummy amount
-                            address: "unknown_orchard_recipient".to_string(),
-                            is_change: false,
-                        });
-                    }
 
                     self.finalize_outputs_review(ctx)?;
 

@@ -3,6 +3,7 @@
 mod bytes;
 mod hashtocurve;
 mod montgomery;
+pub mod orchard;
 pub mod redpallas;
 mod sinsemilla;
 
@@ -37,6 +38,10 @@ const ORCHARD_ASK_DOMAIN_SEPARATOR: u8 = 0x06;
 const ORCHARD_NK_DOMAIN_SEPARATOR: u8 = 0x07;
 const ORCHARD_RIVK_DOMAIN_SEPARATOR: u8 = 0x08;
 const ORCHARD_DK_OVK_DOMAIN_SEPARATOR: u8 = 0x82;
+const ORCHARD_RIVK_INTERNAL_DOMAIN_SEPARATOR: u8 = 0x83;
+const ORCHARD_ESK_DOMAIN_SEPARATOR: u8 = 0x04;
+const ORCHARD_RCM_DOMAIN_SEPARATOR: u8 = 0x05;
+const ORCHARD_PSI_DOMAIN_SEPARATOR: u8 = 0x09;
 const PRF_EXPAND_BYTES: usize = 64;
 
 pub fn _debug_print(str: &str) {
@@ -111,6 +116,20 @@ pub fn orchard_nk(sk: &[u8; 32]) -> Result<[u8; 32], Error> {
 /// Pallas scalar, matching Orchard's `pallas::Scalar::to_repr()`.
 pub fn orchard_rivk(sk: &[u8; 32]) -> Result<[u8; 32], Error> {
     let uniform = prf_expand_orchard_rivk(sk)?;
+    to_pallas_scalar_bytes(&uniform)
+}
+
+/// Computes the Orchard internal `rivk` bytes as:
+/// `to_scalar(PrfExpand::ORCHARD_RIVK_INTERNAL.with(&rivk, &ak, &nk))`.
+///
+/// The returned bytes are the canonical little-endian encoding of the reduced
+/// Pallas scalar, matching Orchard's `pallas::Scalar::to_repr()`.
+pub fn orchard_rivk_internal(
+    rivk: &[u8; 32],
+    ak: &[u8; 32],
+    nk: &[u8; 32],
+) -> Result<[u8; 32], Error> {
+    let uniform = prf_expand_orchard_rivk_internal(rivk, ak, nk)?;
     to_pallas_scalar_bytes(&uniform)
 }
 
@@ -285,6 +304,19 @@ pub fn prf_expand_orchard_nk(sk: &[u8; 32]) -> Result<[u8; PRF_EXPAND_BYTES], Er
 /// Computes `PrfExpand::ORCHARD_RIVK.with(sk)`.
 pub fn prf_expand_orchard_rivk(sk: &[u8; 32]) -> Result<[u8; PRF_EXPAND_BYTES], Error> {
     prf_expand_with_domain_separator(sk, ORCHARD_RIVK_DOMAIN_SEPARATOR)
+}
+
+/// Computes `PrfExpand::ORCHARD_RIVK_INTERNAL.with(rivk, ak, nk)`.
+pub fn prf_expand_orchard_rivk_internal(
+    rivk: &[u8; 32],
+    ak: &[u8; 32],
+    nk: &[u8; 32],
+) -> Result<[u8; PRF_EXPAND_BYTES], Error> {
+    prf_expand_with_domain_separator_and_inputs(
+        rivk,
+        ORCHARD_RIVK_INTERNAL_DOMAIN_SEPARATOR,
+        &[&ak[..], &nk[..]],
+    )
 }
 
 /// Computes `PrfExpand::ORCHARD_DK_OVK.with(rivk, ak, nk)`.
