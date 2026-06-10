@@ -43,6 +43,7 @@ spin = { path = "./vendor/spin" }
 portable-atomic = { git = "https://github.com/taiki-e/portable-atomic.git", tag = "v1.12.0" }
 # Pulled by orchard and redjubjub
 reddsa = { path = "./vendor/reddsa" }
+ledger_device_sdk = { git = "https://github.com/LedgerHQ/ledger-device-rust-sdk.git", branch = "develop" }
 
 [build-dependencies]
 image = "0.25.7"
