@@ -1,10 +1,10 @@
-use zcash_primitives::transaction::txid::ZCASH_SAPLING_OUTPUTS_MEMOS_HASH_PERSONALIZATION;
-use zcash_primitives::transaction::txid::ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION;
-use zcash_primitives::transaction::txid::{
+use crate::parser::personalization::ZCASH_SAPLING_OUTPUTS_MEMOS_HASH_PERSONALIZATION;
+use crate::parser::personalization::ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION;
+use crate::parser::personalization::{
     ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION, ZCASH_SAPLING_OUTPUTS_HASH_PERSONALIZATION,
     ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION,
 };
-use zcash_primitives::transaction::txid::{
+use crate::parser::personalization::{
     ZCASH_SAPLING_SPENDS_COMPACT_HASH_PERSONALIZATION, ZCASH_SAPLING_SPENDS_HASH_PERSONALIZATION,
 };
 use zcash_protocol::value::ZatBalance;
