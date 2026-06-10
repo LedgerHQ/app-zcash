@@ -15,6 +15,7 @@ from application_client.zcash_response_unpacker import (
     unpack_trusted_input_response,
 )
 from application_client.zcash_transaction import convert_raw_tx_v5_orchard_to_app_format
+from application_client.zcash_utils import write_varint
 from application_client.zcash_verify_sign import (
     check_orchard_binding_signature_validity,
     check_tx_v5_signature_validity,
