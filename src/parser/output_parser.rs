@@ -88,7 +88,7 @@ impl OutputParser {
     ) -> Result<(), ParserError> {
         if self.orchard_decrypted_output_count == 0 && ctx.tx_info.outputs.is_empty() {
             return Err(ParserError::from_str(
-                "No transparent or shielded outputs detected",
+                "No outputs to display (no transparent outputs, and no Orchard outputs could be decrypted)",
             ));
         }
 
