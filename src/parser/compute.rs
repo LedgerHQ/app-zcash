@@ -157,84 +157,13 @@ pub fn finalize_signature_hash(
     info!("txin sig digest {}", HexSlice(&txin_sig_digest));
     info!("sighash compute mode {:X?}", mode);
 
-    // Compute transparent_sig_digest
-    let transparent_digest = {
-        let mut hash = [0u8; 32];
-
-        let mut hasher = Blake2b_256::default();
-        ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
-
-        match mode {
-            SighHashComputeMode::NoTransparentInputsOrOutputs => {}
-            SighHashComputeMode::NoTransparentInputs => {
-                ok!(hasher.update(&ctx.tx_info.prevouts_hash));
-                ok!(hasher.update(&ctx.tx_info.sequence_hash));
-                ok!(hasher.update(&ctx.tx_info.outputs_hash));
-            }
-            SighHashComputeMode::SomeTransparentInputs => {
-                ok!(hasher.update(&[ctx.tx_info.sighash_type]));
-                ok!(hasher.update(&ctx.tx_info.prevouts_hash));
-                ok!(hasher.update(&ctx.tx_info.amounts_hash));
-                ok!(hasher.update(&ctx.tx_info.scripts_hash));
-                ok!(hasher.update(&ctx.tx_info.sequence_hash));
-                ok!(hasher.update(&ctx.tx_info.outputs_hash));
-                ok!(hasher.update(&txin_sig_digest));
-            }
-        }
-
-        ok!(hasher.finalize(&mut hash));
-        hash
-    };
-    debug!("Transparent hash: {}", HexSlice(&transparent_digest));
-
-    // Compute sapling_digest. Assume no Sapling spends or outputs are present
-    let sapling_digest = {
-        let mut sapling_digest = [0u8; 32];
-        ok!(ctx
-            .hashers
-            .sapling_hasher
-            .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION));
-        ok!(ctx.hashers.sapling_hasher.finalize(&mut sapling_digest));
-        sapling_digest
-    };
-
-    // Use default Orchard digests in case there are no Orchard actions
-    let orchard_digest = if ctx.tx_info.orchard_digest == [0; 32] {
-        let mut orchard_digest = [0u8; 32];
-        ok!(ctx
-            .hashers
-            .orchard_hasher
-            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION));
-        ok!(ctx.hashers.orchard_hasher.finalize(&mut orchard_digest));
-        orchard_digest
-    } else {
-        ctx.tx_info.orchard_digest
-    };
-
-    debug!("Orchard hash: {}", HexSlice(&orchard_digest));
-
-    let branch_id = ctx.tx_info.branch_id.expect("should be set at this point");
-
-    // Start to compute signature_digest
-    let mut personalization = [0u8; 16];
-    personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
-    personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
-
-    let mut hasher = Blake2b_256::default();
-    ok!(hasher.init_with_perso(&personalization));
-
-    ok!(hasher.update(&ctx.tx_info.header_digest));
-    ok!(hasher.update(&transparent_digest));
-    ok!(hasher.update(&sapling_digest));
-    ok!(hasher.update(&orchard_digest));
-    ok!(hasher.finalize(&mut ctx.tx_info.signature_digest));
-
-    debug!(
-        "Signature hash: {}",
-        HexSlice(&ctx.tx_info.signature_digest)
-    );
-
-    Ok(())
+    let transparent_digest = transparent_signature_digest(
+        ctx.tx_info,
+        mode,
+        ctx.tx_info.sighash_type,
+        Some(&txin_sig_digest),
+    )?;
+    finalize_signature_hash_from_transparent_digest(ctx.tx_info, &transparent_digest)
 }
 
 pub fn finalize_signature_hash_from_txin_digest(
@@ -242,6 +171,19 @@ pub fn finalize_signature_hash_from_txin_digest(
     txin_sig_digest: &[u8; 32],
     sighash_type: u8,
 ) -> Result<(), ParserError> {
+    compute_header_digest(tx_info)?;
+
+    let transparent_digest = transparent_signature_digest(
+        tx_info,
+        SighHashComputeMode::SomeTransparentInputs,
+        sighash_type,
+        Some(txin_sig_digest),
+    )?;
+
+    finalize_signature_hash_from_transparent_digest(tx_info, &transparent_digest)
+}
+
+fn compute_header_digest(tx_info: &mut TxInfo) -> Result<(), ParserError> {
     let tx_version = tx_info
         .tx_version
         .expect("tx_version should be set at this point");
@@ -249,45 +191,67 @@ pub fn finalize_signature_hash_from_txin_digest(
         .branch_id
         .expect("branch_id should be set at this point");
 
-    let mut header_hasher = Blake2b_256::default();
-    ok!(header_hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-    ok!(tx_version.write(&mut header_hasher.as_writer()));
-    ok!(header_hasher.update(&u32::from(branch_id).to_le_bytes()));
-    ok!(header_hasher.update(&tx_info.locktime.to_le_bytes()));
-    ok!(header_hasher.update(&tx_info.expiry_height.to_le_bytes()));
-    ok!(header_hasher.finalize(&mut tx_info.header_digest));
+    let mut hasher = Blake2b_256::default();
+    ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
+    ok!(tx_version.write(&mut hasher.as_writer()));
+    ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    ok!(hasher.update(&tx_info.locktime.to_le_bytes()));
+    ok!(hasher.update(&tx_info.expiry_height.to_le_bytes()));
+    ok!(hasher.finalize(&mut tx_info.header_digest));
     debug!("Header hash: {}", HexSlice(&tx_info.header_digest));
 
-    let transparent_digest = {
-        let mut hash = [0u8; 32];
-        let mut hasher = Blake2b_256::default();
-        ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
-        ok!(hasher.update(&[sighash_type]));
-        ok!(hasher.update(&tx_info.prevouts_hash));
-        ok!(hasher.update(&tx_info.amounts_hash));
-        ok!(hasher.update(&tx_info.scripts_hash));
-        ok!(hasher.update(&tx_info.sequence_hash));
-        ok!(hasher.update(&tx_info.outputs_hash));
-        ok!(hasher.update(txin_sig_digest));
-        ok!(hasher.finalize(&mut hash));
-        hash
-    };
-    debug!("Transparent hash: {}", HexSlice(&transparent_digest));
+    Ok(())
+}
 
-    let sapling_digest = {
-        let mut hash = [0u8; 32];
-        let mut hasher = Blake2b_256::default();
-        ok!(hasher.init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION));
-        ok!(hasher.finalize(&mut hash));
-        hash
-    };
+fn transparent_signature_digest(
+    tx_info: &TxInfo,
+    mode: SighHashComputeMode,
+    sighash_type: u8,
+    txin_sig_digest: Option<&[u8; 32]>,
+) -> Result<[u8; 32], ParserError> {
+    let mut hash = [0u8; 32];
+    let mut hasher = Blake2b_256::default();
+    ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
 
+    match mode {
+        SighHashComputeMode::NoTransparentInputsOrOutputs => {}
+        SighHashComputeMode::NoTransparentInputs => {
+            ok!(hasher.update(&tx_info.prevouts_hash));
+            ok!(hasher.update(&tx_info.sequence_hash));
+            ok!(hasher.update(&tx_info.outputs_hash));
+        }
+        SighHashComputeMode::SomeTransparentInputs => {
+            let txin_sig_digest = txin_sig_digest.ok_or_else(|| {
+                ParserError::from_str("Missing transparent input signature digest")
+            })?;
+
+            ok!(hasher.update(&[sighash_type]));
+            ok!(hasher.update(&tx_info.prevouts_hash));
+            ok!(hasher.update(&tx_info.amounts_hash));
+            ok!(hasher.update(&tx_info.scripts_hash));
+            ok!(hasher.update(&tx_info.sequence_hash));
+            ok!(hasher.update(&tx_info.outputs_hash));
+            ok!(hasher.update(txin_sig_digest));
+        }
+    }
+
+    ok!(hasher.finalize(&mut hash));
+    debug!("Transparent hash: {}", HexSlice(&hash));
+
+    Ok(hash)
+}
+
+fn finalize_signature_hash_from_transparent_digest(
+    tx_info: &mut TxInfo,
+    transparent_digest: &[u8; 32],
+) -> Result<(), ParserError> {
+    let branch_id = tx_info
+        .branch_id
+        .expect("branch_id should be set at this point");
+
+    let sapling_digest = empty_digest(ZCASH_SAPLING_HASH_PERSONALIZATION)?;
     let orchard_digest = if tx_info.orchard_digest == [0; 32] {
-        let mut hash = [0u8; 32];
-        let mut hasher = Blake2b_256::default();
-        ok!(hasher.init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION));
-        ok!(hasher.finalize(&mut hash));
-        hash
+        empty_digest(ZCASH_ORCHARD_HASH_PERSONALIZATION)?
     } else {
         tx_info.orchard_digest
     };
@@ -300,7 +264,7 @@ pub fn finalize_signature_hash_from_txin_digest(
     let mut hasher = Blake2b_256::default();
     ok!(hasher.init_with_perso(&personalization));
     ok!(hasher.update(&tx_info.header_digest));
-    ok!(hasher.update(&transparent_digest));
+    ok!(hasher.update(transparent_digest));
     ok!(hasher.update(&sapling_digest));
     ok!(hasher.update(&orchard_digest));
     ok!(hasher.finalize(&mut tx_info.signature_digest));
@@ -308,4 +272,12 @@ pub fn finalize_signature_hash_from_txin_digest(
     debug!("Signature hash: {}", HexSlice(&tx_info.signature_digest));
 
     Ok(())
+}
+
+fn empty_digest(personalization: &[u8; 16]) -> Result<[u8; 32], ParserError> {
+    let mut hash = [0u8; 32];
+    let mut hasher = Blake2b_256::default();
+    ok!(hasher.init_with_perso(personalization));
+    ok!(hasher.finalize(&mut hash));
+    Ok(hash)
 }
