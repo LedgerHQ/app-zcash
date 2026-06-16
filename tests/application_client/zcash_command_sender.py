@@ -6,18 +6,30 @@ from contextlib import contextmanager
 from struct import pack
 
 from ragger.backend.interface import BackendInterface, RAPDU
-from ragger.bip import pack_derivation_path
+from ragger.bip import (
+    CurveChoice,
+    calculate_public_key_and_chaincode,
+    pack_derivation_path,
+)
 
 from application_client.zcash_transaction import (
     split_tx_to_chunks,
     split_tx_v5_for_hash_input,
 )
 from application_client.zcash_utils import write_varint
+from application_client.pczt import (
+    PCZT_DEFAULT_SEED_FINGERPRINT,
+    PcztGlobal,
+    PcztOrchardAction,
+    PcztOrchardBundle,
+    PcztTransparentInput,
+    PcztTransparentOutput,
+    pczt_orchard_bundle_from_raw_tx,
+)
 
 MAGIC_TRUSTED_INPUT: int = 0x32
 
 MAX_APDU_LEN: int = 255
-PCZT_DEFAULT_SEED_FINGERPRINT: bytes = bytes(32)
 
 CLA: int = 0xE0
 
@@ -68,6 +80,9 @@ class P2(IntEnum):
     # Parameter 2 for HASH_INPUT_FINALIZE_FULL
     P2_FINALIZE_FULL_DEFAULT = 0x00
 
+    # Parameter 2 for the last PCZT data APDU.
+    P2_PCZT_FINISHED = 0x01
+
 class InsType(IntEnum):
     GET_VERSION = 0xC4
     GET_APP_NAME = 0x04
@@ -81,6 +96,8 @@ class InsType(IntEnum):
     PCZT_TRANSPARENT_INPUT = 0x52
     PCZT_TRANSPARENT_OUTPUT = 0x53
     PCZT_SIGN_TRANSPARENT = 0x54
+    PCZT_ORCHARD_ACTION = 0x55
+    PCZT_SIGN_ORCHARD = 0x56
 
 class GetVkMode(IntEnum):
     UFVK = 0x00
@@ -119,23 +136,6 @@ class ForgeTxParams:
     vout_idx: int
     locktime: int
     expiry: int
-
-
-@dataclass
-class PcztTransparentInput:
-    prevout_txid: bytes
-    prevout_index: int
-    value: int
-    script_pubkey: bytes
-    sequence: bytes
-    signing_path: str
-    sighash_type: int = 0x01
-
-
-@dataclass
-class PcztTransparentOutput:
-    value: int
-    script_pubkey: bytes
 
 
 @dataclass
@@ -430,12 +430,11 @@ class ZcashCommandSender:
         return b"\x01" + value.to_bytes(4, byteorder="little")
 
     def _compressed_pubkey_from_path(self, path: str) -> bytes:
-        response = self.get_public_key(path=path).data
-        pubkey_len = response[0]
-        pubkey = response[1:1 + pubkey_len]
+        public_key, _ = calculate_public_key_and_chaincode(CurveChoice.Secp256k1, path=path)
+        pubkey = bytes.fromhex(public_key)
 
-        if pubkey_len != 65 or len(pubkey) != 65:
-            raise ValueError("Unexpected public key response")
+        if len(pubkey) != 65:
+            raise ValueError("Unexpected public key length")
 
         prefix = b"\x02" if pubkey[64] % 2 == 0 else b"\x03"
         return prefix + pubkey[1:33]
@@ -454,76 +453,168 @@ class ZcashCommandSender:
 
     def _build_pczt_header_and_global_payload(
         self,
-        transaction: bytes,
+        pczt_global: PcztGlobal,
     ) -> bytes:
-        tx_header = int.from_bytes(transaction[0:4], byteorder="little")
-        tx_version = tx_header & 0x7FFFFFFF
-        version_group_id = int.from_bytes(transaction[4:8], byteorder="little")
-        consensus_branch_id = int.from_bytes(transaction[8:12], byteorder="little")
-        fallback_lock_time = int.from_bytes(transaction[12:16], byteorder="little")
-        expiry_height = int.from_bytes(transaction[16:20], byteorder="little")
-
         payload = bytearray(b"PCZT")
         payload.extend((1).to_bytes(4, byteorder="little"))
-        payload.extend(tx_version.to_bytes(4, byteorder="little"))
-        payload.extend(version_group_id.to_bytes(4, byteorder="little"))
-        payload.extend(consensus_branch_id.to_bytes(4, byteorder="little"))
-        payload.extend(self._pczt_optional_u32(fallback_lock_time))
-        payload.extend(expiry_height.to_bytes(4, byteorder="little"))
-        payload.extend((133).to_bytes(4, byteorder="little"))  # Zcash SLIP-44 coin type
-        payload.extend(b"\x00")  # tx_modifiable
+        payload.extend(pczt_global.tx_version.to_bytes(4, byteorder="little"))
+        payload.extend(pczt_global.version_group_id.to_bytes(4, byteorder="little"))
+        payload.extend(pczt_global.consensus_branch_id.to_bytes(4, byteorder="little"))
+        payload.extend(self._pczt_optional_u32(pczt_global.fallback_lock_time))
+        payload.extend(pczt_global.expiry_height.to_bytes(4, byteorder="little"))
+        payload.extend(pczt_global.coin_type.to_bytes(4, byteorder="little"))
+        payload.extend(pczt_global.tx_modifiable.to_bytes(1, byteorder="little"))
 
         return bytes(payload)
 
-    def _build_pczt_transparent_input_payload(
-        self,
-        transaction: bytes,
-        transparent_inputs: list[PcztTransparentInput],
-    ) -> bytes:
-        tx_inputs: list[dict] = self.tx_chunks["inputs"] # type: ignore
+    def _checked_pczt_packet(self, payload: bytes, label: str) -> bytes:
+        if len(payload) > MAX_APDU_LEN:
+            raise ValueError(f"{label} PCZT APDU packet exceeds {MAX_APDU_LEN} bytes")
+        return payload
 
-        if len(transparent_inputs) != len(tx_inputs):
-            raise ValueError("transparent_inputs length must match transaction inputs length")
+    def _split_pczt_field_packet(self, payload: bytes) -> list[bytes]:
+        return split_message(payload, MAX_APDU_LEN)
 
-        payload = bytearray(self._build_pczt_header_and_global_payload(transaction))
-        payload.extend(write_varint(len(transparent_inputs)))
-
-        for inp in transparent_inputs:
-            payload.extend(inp.prevout_txid)
-            payload.extend(inp.prevout_index.to_bytes(4, byteorder="little"))
-            sequence = int.from_bytes(inp.sequence, byteorder="little")
-            payload.extend(self._pczt_optional_u32(sequence))
-            payload.extend(inp.value.to_bytes(8, byteorder="little"))
-            payload.extend(write_varint(len(inp.script_pubkey)) + inp.script_pubkey)
-            payload.extend(inp.sighash_type.to_bytes(1, byteorder="little"))
+    def _build_pczt_bip32_derivation_packet(self, signing_path: str | None) -> bytes:
+        payload = bytearray()
+        if signing_path is None:
+            payload.extend(write_varint(0))
+        else:
             payload.extend(write_varint(1))
-            payload.extend(self._compressed_pubkey_from_path(inp.signing_path))
+            payload.extend(self._compressed_pubkey_from_path(signing_path))
             payload.extend(PCZT_DEFAULT_SEED_FINGERPRINT)
-            path_components = self._path_components_from_path(inp.signing_path)
+            path_components = self._path_components_from_path(signing_path)
             payload.extend(write_varint(len(path_components)))
             for component in path_components:
                 payload.extend(component.to_bytes(4, byteorder="little"))
 
-        return bytes(payload)
+        return self._checked_pczt_packet(bytes(payload), "bip32_derivation")
 
-    def _build_pczt_transparent_output_payload(
+    def _build_pczt_zip32_derivation_packet(self, signing_path: str) -> bytes:
+        payload = bytearray(PCZT_DEFAULT_SEED_FINGERPRINT)
+        path_components = self._path_components_from_path(signing_path)
+        payload.extend(write_varint(len(path_components)))
+        for component in path_components:
+            payload.extend(component.to_bytes(4, byteorder="little"))
+
+        return self._checked_pczt_packet(bytes(payload), "zip32_derivation")
+
+    def _build_pczt_transparent_input_packets(
         self,
-        transaction: bytes,
+        pczt_global: PcztGlobal,
+        transparent_inputs: list[PcztTransparentInput],
+    ) -> list[bytes]:
+        packets = [
+            self._checked_pczt_packet(
+                self._build_pczt_header_and_global_payload(pczt_global)
+                + write_varint(len(transparent_inputs)),
+                "transparent inputs header",
+            )
+        ]
+
+        for inp in transparent_inputs:
+            packet = bytearray()
+            packet.extend(inp.prevout_txid)
+            packet.extend(inp.prevout_index.to_bytes(4, byteorder="little"))
+            sequence = int.from_bytes(inp.sequence, byteorder="little")
+            packet.extend(self._pczt_optional_u32(sequence))
+            packet.extend(inp.value.to_bytes(8, byteorder="little"))
+            packets.append(self._checked_pczt_packet(bytes(packet), "transparent input small fields"))
+
+            packets.extend(
+                self._split_pczt_field_packet(
+                    write_varint(len(inp.script_pubkey)) + inp.script_pubkey
+                )
+            )
+
+            packets.append(
+                self._checked_pczt_packet(
+                    inp.sighash_type.to_bytes(1, byteorder="little")
+                    + self._build_pczt_bip32_derivation_packet(inp.signing_path),
+                    "transparent input sighash and bip32_derivation",
+                )
+            )
+
+        return packets
+
+    def _build_pczt_transparent_output_packets(
+        self,
         transparent_outputs: list[PcztTransparentOutput],
-    ) -> bytes:
-        tx_outputs: list[dict] = self.tx_chunks["outputs"] # type: ignore
-
-        if len(transparent_outputs) != len(tx_outputs):
-            raise ValueError("transparent_outputs length must match transaction outputs length")
-
-        payload = bytearray(self._build_pczt_header_and_global_payload(transaction))
-        payload.extend(write_varint(len(transparent_outputs)))
+    ) -> list[bytes]:
+        packets = [
+            self._checked_pczt_packet(
+                write_varint(len(transparent_outputs)),
+                "transparent outputs header",
+            )
+        ]
 
         for out in transparent_outputs:
-            payload.extend(out.value.to_bytes(8, byteorder="little"))
-            payload.extend(write_varint(len(out.script_pubkey)) + out.script_pubkey)
+            packets.append(
+                self._checked_pczt_packet(
+                    out.value.to_bytes(8, byteorder="little"),
+                    "transparent output value",
+                )
+            )
+            packets.extend(
+                self._split_pczt_field_packet(
+                    write_varint(len(out.script_pubkey)) + out.script_pubkey
+                )
+            )
+            packets.append(self._build_pczt_bip32_derivation_packet(out.signing_path))
 
-        return bytes(payload)
+        return packets
+
+    def _build_pczt_orchard_action_packets(
+        self,
+        orchard_bundle: PcztOrchardBundle,
+    ) -> list[bytes]:
+        packets = [
+            self._checked_pczt_packet(
+                write_varint(len(orchard_bundle.actions)),
+                "orchard actions header",
+            )
+        ]
+
+        if not orchard_bundle.actions:
+            return packets
+
+        for action in orchard_bundle.actions:
+            if len(action.alpha) != 32:
+                raise ValueError("Orchard alpha must be 32 bytes")
+
+            packets.append(
+                self._checked_pczt_packet(
+                    action.cv_net + action.nullifier + action.rk + action.alpha,
+                    "orchard action spend small fields",
+                )
+            )
+            packets.append(self._build_pczt_zip32_derivation_packet(action.signing_path))
+            packets.append(
+                self._checked_pczt_packet(
+                    action.cmx + action.ephemeral_key,
+                    "orchard action output small fields",
+                )
+            )
+            packets.extend(
+                self._split_pczt_field_packet(
+                    write_varint(len(action.enc_ciphertext)) + action.enc_ciphertext
+                )
+            )
+            packets.extend(
+                self._split_pczt_field_packet(
+                    write_varint(len(action.out_ciphertext)) + action.out_ciphertext
+                )
+            )
+
+        trailer = bytearray()
+        value_balance = orchard_bundle.value_balance
+        trailer.extend(orchard_bundle.flags.to_bytes(1, byteorder="little"))
+        trailer.extend(abs(value_balance).to_bytes(8, byteorder="little"))
+        trailer.extend((1 if value_balance < 0 else 0).to_bytes(1, byteorder="little"))
+        trailer.extend(orchard_bundle.anchor)
+        packets.append(self._checked_pczt_packet(bytes(trailer), "orchard bundle trailer"))
+
+        return packets
 
     def _pczt_chunk_p1(self, idx: int, total_chunks: int) -> P1:
         if idx == 0:
@@ -532,79 +623,115 @@ class ZcashCommandSender:
             return P1.P1_LAST
         return P1.P1_NEXT
 
+    def _pczt_chunk_p2(self, idx: int, total_chunks: int, pczt_finished: bool = False) -> P2:
+        if pczt_finished and idx == total_chunks - 1:
+            return P2.P2_PCZT_FINISHED
+        return P2.P2_NONE
+
     def _send_pczt_transparent_inputs(
         self,
-        transaction: bytes,
+        pczt_global: PcztGlobal,
         transparent_inputs: list[PcztTransparentInput],
     ) -> None:
-        chunks = split_message(
-            self._build_pczt_transparent_input_payload(
-                transaction,
-                transparent_inputs,
-            ),
-            MAX_APDU_LEN,
+        packets = self._build_pczt_transparent_input_packets(
+            pczt_global,
+            transparent_inputs,
         )
 
-        for idx, chunk in enumerate(chunks):
+        for idx, packet in enumerate(packets):
             self.backend.exchange(
                 cla=CLA,
                 ins=InsType.PCZT_TRANSPARENT_INPUT,
-                p1=self._pczt_chunk_p1(idx, len(chunks)),
+                p1=self._pczt_chunk_p1(idx, len(packets)),
                 p2=P2.P2_NONE,
-                data=chunk,
+                data=packet,
             )
-
-    def _pczt_transparent_outputs_from_tx(self) -> list[PcztTransparentOutput]:
-        outputs: list[dict] = self.tx_chunks["outputs"] # type: ignore
-        return [
-            PcztTransparentOutput(
-                value=int.from_bytes(out["value"], byteorder="little"),
-                script_pubkey=out["script"],
-            )
-            for out in outputs
-        ]
 
     @contextmanager
     def _send_pczt_transparent_outputs(
         self,
-        transaction: bytes,
         transparent_outputs: list[PcztTransparentOutput],
-        change_or_shielded_path: str | None = None,
+        pczt_finished: bool = False,
     ) -> Generator[None, None, None]:
-        if change_or_shielded_path:
-            self.backend.exchange(
-                cla=CLA,
-                ins=InsType.HASH_INPUT_FINALIZE_FULL,
-                p1=P1.P1_FINALIZE_FULL_CHANGEINFO,
-                p2=P2.P2_FINALIZE_FULL_DEFAULT,
-                data=pack_derivation_path(change_or_shielded_path),
-            )
-
-        chunks = split_message(
-            self._build_pczt_transparent_output_payload(
-                transaction,
-                transparent_outputs,
-            ),
-            MAX_APDU_LEN,
+        packets = self._build_pczt_transparent_output_packets(
+            transparent_outputs,
         )
 
-        for idx, chunk in enumerate(chunks[:-1]):
+        for idx, packet in enumerate(packets[:-1]):
             self.backend.exchange(
                 cla=CLA,
                 ins=InsType.PCZT_TRANSPARENT_OUTPUT,
-                p1=self._pczt_chunk_p1(idx, len(chunks)),
-                p2=P2.P2_NONE,
-                data=chunk,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                data=packet,
             )
 
         with self.backend.exchange_async(
             cla=CLA,
             ins=InsType.PCZT_TRANSPARENT_OUTPUT,
-            p1=self._pczt_chunk_p1(len(chunks) - 1, len(chunks)),
-            p2=P2.P2_NONE,
-            data=chunks[-1],
+            p1=self._pczt_chunk_p1(len(packets) - 1, len(packets)),
+            p2=self._pczt_chunk_p2(len(packets) - 1, len(packets), pczt_finished),
+            data=packets[-1],
         ) as response:
             yield response
+
+    def _send_pczt_transparent_outputs_sync(
+        self,
+        transparent_outputs: list[PcztTransparentOutput],
+        pczt_finished: bool = False,
+    ) -> None:
+        packets = self._build_pczt_transparent_output_packets(
+            transparent_outputs,
+        )
+
+        for idx, packet in enumerate(packets):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_TRANSPARENT_OUTPUT,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                data=packet,
+            )
+
+    @contextmanager
+    def _send_pczt_orchard_actions(
+        self,
+        orchard_bundle: PcztOrchardBundle,
+        pczt_finished: bool = False,
+    ) -> Generator[None, None, None]:
+        packets = self._build_pczt_orchard_action_packets(
+            orchard_bundle,
+        )
+
+        for idx, packet in enumerate(packets[:-1]):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_ORCHARD_ACTION,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                data=packet,
+            )
+
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.PCZT_ORCHARD_ACTION,
+            p1=self._pczt_chunk_p1(len(packets) - 1, len(packets)),
+            p2=self._pczt_chunk_p2(len(packets) - 1, len(packets), pczt_finished),
+            data=packets[-1],
+        ) as response:
+            yield response
+
+    def pczt_orchard_bundle_from_raw_tx(
+        self,
+        raw_transaction: bytes,
+        signing_path: str,
+        alpha: bytes,
+    ) -> PcztOrchardBundle:
+        return pczt_orchard_bundle_from_raw_tx(
+            raw_transaction,
+            signing_path,
+            alpha,
+        )
 
     def pczt_sign_transparent(
         self,
@@ -618,31 +745,130 @@ class ZcashCommandSender:
             data=b"",
         )
 
+    def pczt_sign_orchard(
+        self,
+        action_index: int = 0,
+    ) -> RAPDU:
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_SIGN_ORCHARD,
+            p1=P1.P1_FIRST,
+            p2=action_index,
+            data=b"",
+        )
+
     @contextmanager
     def send_pczt(
         self,
-        transaction: bytes,
+        pczt_global: PcztGlobal,
         transparent_inputs: list[PcztTransparentInput],
-        transparent_outputs: list[PcztTransparentOutput] | None = None,
-        change_or_shielded_path: str | None = None,
+        transparent_outputs: list[PcztTransparentOutput],
+        orchard_bundle: PcztOrchardBundle | None = None,
     ) -> Generator[None, None, None]:
-        self.tx_chunks = split_tx_v5_for_hash_input(transaction)
         self.trusted_inputs = []
         self.pczt_transparent_inputs = transparent_inputs
-        self.pczt_transparent_outputs = (
-            transparent_outputs
-            if transparent_outputs is not None
-            else self._pczt_transparent_outputs_from_tx()
+        self.pczt_transparent_outputs = transparent_outputs
+
+        self._send_pczt_transparent_inputs(pczt_global, transparent_inputs)
+        self._send_pczt_transparent_outputs_sync(
+            self.pczt_transparent_outputs,
         )
 
-        self._send_pczt_transparent_inputs(transaction, transparent_inputs)
+        if orchard_bundle is None:
+            orchard_bundle = PcztOrchardBundle(
+                actions=[],
+                flags=0,
+                value_balance=0,
+                anchor=bytes(32),
+            )
 
-        with self._send_pczt_transparent_outputs(
-            transaction,
-            self.pczt_transparent_outputs,
-            change_or_shielded_path,
+        with self._send_pczt_orchard_actions(
+            orchard_bundle,
+            pczt_finished=True,
         ) as response:
             yield response
+
+    def _prepare_hash_sign(
+        self,
+        locktime: Optional[int],
+        expiry: Optional[int],
+        sighash_type: int,
+    ) -> None:
+        if self.pczt_transparent_inputs:
+            raise ValueError("Use pczt_sign_transparent for PCZT transparent signing")
+
+        if locktime is None or expiry is None:
+            raise ValueError("locktime and expiry are required when prepare=True")
+
+        self.backend.exchange(
+            cla=CLA,
+            ins=InsType.HASH_SIGN,
+            p1=P1.P1_FIRST,
+            p2=P2.P2_NONE,
+            data=0x00.to_bytes(2, byteorder="big")
+            + self._hash_sign_trailer(locktime, expiry, sighash_type),
+        )
+
+        self._send_trusted_inputs_and_header(continue_hashing=True)
+
+    @staticmethod
+    def _hash_sign_trailer(locktime: int, expiry: int, sighash_type: int) -> bytes:
+        return (
+            locktime.to_bytes(4, byteorder="big")
+            + sighash_type.to_bytes(1, byteorder="big")
+            + expiry.to_bytes(4, byteorder="big")
+        )
+
+    @staticmethod
+    def _binding_sign_data(
+        binding_signing_key: Optional[bytes],
+        orchard_alpha: Optional[bytes],
+    ) -> bytes:
+        if binding_signing_key is None:
+            raise ValueError("binding_signing_key is required for BindingSig mode")
+        if len(binding_signing_key) != 32:
+            raise ValueError("binding_signing_key must be 32 bytes")
+        if orchard_alpha is not None:
+            raise ValueError("orchard_alpha is only supported for SpendAuthSig mode")
+
+        return binding_signing_key
+
+    @staticmethod
+    def _spend_auth_alpha(orchard_alpha: Optional[bytes]) -> bytes:
+        if orchard_alpha is None:
+            raise ValueError("orchard_alpha is required for SpendAuthSig mode")
+        if len(orchard_alpha) != 32:
+            raise ValueError("orchard_alpha must be 32 bytes")
+
+        return orchard_alpha
+
+    def _hash_sign_data(
+        self,
+        path: str,
+        locktime: Optional[int],
+        expiry: Optional[int],
+        sighash_type: int,
+        mode: HashSignMode,
+        binding_signing_key: Optional[bytes],
+        orchard_alpha: Optional[bytes],
+    ) -> bytes:
+        # pylint: disable=too-many-positional-arguments
+        if mode == HashSignMode.BindingSig:
+            return self._binding_sign_data(binding_signing_key, orchard_alpha)
+
+        sign_data = pack_derivation_path(path)
+        if mode == HashSignMode.SpendAuthSig:
+            return sign_data + self._spend_auth_alpha(orchard_alpha)
+        if orchard_alpha is not None:
+            raise ValueError("orchard_alpha is only supported for SpendAuthSig mode")
+        if locktime is None or expiry is None:
+            return sign_data
+
+        return sign_data + b"\x00" + self._hash_sign_trailer(
+            locktime,
+            expiry,
+            sighash_type,
+        )
 
     def hash_sign(
         self,
@@ -660,56 +886,17 @@ class ZcashCommandSender:
             raise ValueError("locktime and expiry must be provided together")
 
         if prepare:
-            if self.pczt_transparent_inputs:
-                raise ValueError("Use pczt_sign_transparent for PCZT transparent signing")
+            self._prepare_hash_sign(locktime, expiry, sighash_type)
 
-            if locktime is None or expiry is None:
-                raise ValueError("locktime and expiry are required when prepare=True")
-
-            # Send extra header data
-            self.backend.exchange(
-                cla=CLA,
-                ins=InsType.HASH_SIGN,
-                p1=P1.P1_FIRST,
-                p2=P2.P2_NONE,
-                data=0x00.to_bytes(2, byteorder="big")
-                + locktime.to_bytes(4, byteorder="big")
-                + sighash_type.to_bytes(1, byteorder="big")
-                + expiry.to_bytes(4, byteorder="big"),
-            )
-
-            self._send_trusted_inputs_and_header(continue_hashing=True)
-
-        if mode == HashSignMode.BindingSig:
-            if binding_signing_key is None:
-                raise ValueError("binding_signing_key is required for BindingSig mode")
-            if len(binding_signing_key) != 32:
-                raise ValueError("binding_signing_key must be 32 bytes")
-            if orchard_alpha is not None:
-                raise ValueError("orchard_alpha is only supported for SpendAuthSig mode")
-            sign_data = binding_signing_key
-        else:
-            sign_data = pack_derivation_path(path)
-            if mode == HashSignMode.SpendAuthSig:
-                if orchard_alpha is None:
-                    raise ValueError("orchard_alpha is required for SpendAuthSig mode")
-                if len(orchard_alpha) != 32:
-                    raise ValueError("orchard_alpha must be 32 bytes")
-                sign_data += orchard_alpha
-            elif orchard_alpha is not None:
-                raise ValueError("orchard_alpha is only supported for SpendAuthSig mode")
-
-            if (
-                mode != HashSignMode.SpendAuthSig
-                and locktime is not None
-                and expiry is not None
-            ):
-                sign_data += (
-                    0x00.to_bytes(1, byteorder="big")
-                    + locktime.to_bytes(4, byteorder="big")
-                    + sighash_type.to_bytes(1, byteorder="big")
-                    + expiry.to_bytes(4, byteorder="big")
-                )
+        sign_data = self._hash_sign_data(
+            path,
+            locktime,
+            expiry,
+            sighash_type,
+            mode,
+            binding_signing_key,
+            orchard_alpha,
+        )
 
         return self.backend.exchange(
             cla=CLA,
