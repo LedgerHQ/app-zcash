@@ -8,6 +8,7 @@ pub const ZCASH_DECIMALS_DIV: u64 = 10u64.pow(ZCASH_DECIMALS);
 pub const MAX_SCRIPT_SIZE: usize = 1024 * 2;
 pub const MAX_TRANSPARENT_INPUTS_NUMBER: usize = 10;
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
+pub const MAX_ORCHARD_ACTIONS: usize = 10;
 pub const SIGHASH_ALL: u8 = 0x01;
 pub const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
 pub const ZIP32_PATH_LEN: usize = 3;

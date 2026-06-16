@@ -8,6 +8,8 @@ impl PcztParser {
     ) -> Result<(), ParserError> {
         debug!("PCZT transparent inputs start");
 
+        *ctx.tx_info = TxInfo::default();
+
         ok!(ctx.hashers.init_v5_tx_hashers());
         ctx.tx_info.tx_version = Some(TxVersion::V5);
         ctx.tx_info.total_amount = 0;
@@ -441,6 +443,7 @@ impl PcztParser {
             amount: self.current_input_amount,
             script_pubkey: mem::take(&mut self.current_input_script_pubkey),
             path,
+            signed: false,
         });
 
         self.transparent_input_parsed_count = self.transparent_input_parsed_count.saturating_add(1);
@@ -459,6 +462,12 @@ impl PcztParser {
         ctx: &mut PcztParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
+        // Change detection is established per-output by that output's own change
+        // bip32_derivation. Clear any hash carried over from a previous output so an
+        // output without its own derivation can never be matched against a stale
+        // change hash and silently classified as change (and hidden from the user).
+        ctx.tx_info.change_pk_hash = [0u8; 20];
+
         let script_size: usize = ok!(CompactSize::read_t(&mut *reader));
         if script_size > MAX_SCRIPT_SIZE {
             return Err(ParserError::from_str(
@@ -618,6 +627,24 @@ impl PcztParser {
             .get(input_index)
             .map(|input| &input.path)
             .ok_or_else(|| ParserError::from_str("Bad PCZT transparent input index"))
+    }
+
+    pub fn mark_transparent_input_signed(
+        &mut self,
+        input_index: usize,
+    ) -> Result<(), ParserError> {
+        let input = self
+            .transparent_inputs
+            .get_mut(input_index)
+            .ok_or_else(|| ParserError::from_str("Bad PCZT transparent input index"))?;
+
+        if input.signed {
+            return Err(ParserError::from_str("PCZT transparent input already signed"));
+        }
+
+        input.signed = true;
+
+        Ok(())
     }
 
     fn finish_transparent_output_script(

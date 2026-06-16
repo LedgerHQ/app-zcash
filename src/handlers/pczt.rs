@@ -208,6 +208,15 @@ pub fn handler_pczt_sign_transparent(
         ));
     }
 
+    // Reject a second signature for the same input
+    if let Err(e) = ctx.pczt_parser.mark_transparent_input_signed(input_index) {
+        error!(
+            "PCZT transparent input {} cannot be signed: {:#?}",
+            input_index, e
+        );
+        return Err(map_pczt_parser_error(ctx, e));
+    }
+
     let sighash_type = match ctx
         .pczt_parser
         .use_transparent_signature_digest(&mut ctx.tx_info, input_index)

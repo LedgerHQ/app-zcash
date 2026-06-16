@@ -25,7 +25,8 @@ use zcash_transparent::bundle::OutPoint;
 use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
 use crate::consts::{
-    MAX_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, MAX_TRANSPARENT_INPUTS_NUMBER, SIGHASH_ALL,
+    MAX_ORCHARD_ACTIONS, MAX_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, MAX_TRANSPARENT_INPUTS_NUMBER,
+    SIGHASH_ALL,
 };
 use crate::parser::compute::{
     compute_shielded_signature_digest, compute_transparent_input_signature_digest,
@@ -134,6 +135,7 @@ struct PcztTransparentInputRecord {
     amount: [u8; 8],
     script_pubkey: Vec<u8>,
     path: Bip32Path,
+    signed: bool,
 }
 
 struct PcztOrchardActionSigningRecord {

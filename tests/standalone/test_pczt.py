@@ -292,6 +292,70 @@ def test_pczt_sign_tx_v5_change(
     )
 
 
+def test_pczt_sign_tx_v5_change_hash_not_sticky(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    # Regression test for a clear-signing bug where the per-output change hash leaked
+    # across outputs. Output #0 is a *recipient* (script pays address A) but carries a
+    # change bip32_derivation for path P (deriving address H, with H != A); this sets the
+    # parser's change_pk_hash to H while output #0 itself is correctly shown as a payment
+    # to A. Output #1 pays address H and has *no* derivation of its own. Before the fix
+    # the stale change_pk_hash (H) caused output #1 to be classified as change and hidden
+    # from the user. After the fix change_pk_hash is cleared at the start of every output,
+    # so output #1 (no derivation) is shown as a normal payment. The golden snapshots
+    # capture that BOTH outputs are displayed.
+    PCZT_GLOBAL = PcztGlobal()
+    PATH = "m/44'/133'/0'/0/0"
+    CHANGE_PATH = "m/44'/133'/0'/1/0"
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path=PATH,
+    )
+    # Recipient output (address A) that nonetheless carries a change derivation for
+    # CHANGE_PATH (which derives address H = adee44a1...e339f5).
+    RECIPIENT_WITH_CHANGE_DERIVATION = PcztTransparentOutput(
+        value=40000000,
+        script_pubkey=bytes.fromhex("76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"),
+        signing_path=CHANGE_PATH,
+    )
+    # Output paying the change address H, with NO derivation of its own. Must not inherit
+    # the previous output's change classification.
+    PAYMENT_TO_CHANGE_ADDRESS = PcztTransparentOutput(
+        value=41628565,
+        script_pubkey=bytes.fromhex("76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"),
+    )
+    TRANSPARENT_OUTPUTS = [RECIPIENT_WITH_CHANGE_DERIVATION, PAYMENT_TO_CHANGE_ADDRESS]
+    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
+
+    client = ZcashCommandSender(backend)
+
+    response = client.get_public_key(path=PATH).data
+    public_key, _, _ = unpack_get_public_key_response(response)
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=TRANSPARENT_OUTPUTS,
+    ):
+        _review_approve(scenario_navigator, "test_sign_tx_v5_change_hash_not_sticky")
+
+    resp = client.pczt_sign_transparent(input_index=0).data
+    signature = resp[:-1]
+
+    assert check_tx_v5_signature_validity(
+        public_key,
+        signature,
+        TX_BYTES,
+        input_index=0,
+        input_amounts=[TRANSPARENT_INPUT.value],
+    )
+
+
 def test_pczt_sign_tx_refuse(
     backend,
     scenario_navigator: NavigateWithScenario,
@@ -380,6 +444,116 @@ def test_pczt_sign_tx_v5_mult_inputs(
     ]
 
     assert [signature.hex() for signature in signatures] == EXPECTED_SIGS
+
+
+def test_pczt_sign_tx_v5_transparent_input_no_replay(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    # Regression test: signing the same transparent input twice must be rejected.
+    # Before the fix the signed-input counter was incremented unconditionally, so
+    # repeatedly signing input #0 could reach total_input_count and prematurely mark
+    # the PCZT finished while input #1 was never signed. The parser now tracks a
+    # per-input `signed` flag (mirroring the Orchard per-action guard).
+    PCZT_GLOBAL = PcztGlobal()
+    TRANSPARENT_INPUTS = [
+        PcztTransparentInput(
+            prevout_txid=bytes.fromhex("9484c71dd0b3690b6b7d018577e253143139e70bc2ed5aafbc34ea88f6a157ab"),
+            prevout_index=0,
+            value=81624725,
+            script_pubkey=bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"),
+            sequence=bytes.fromhex("00000000"),
+            signing_path="m/44'/133'/2'/0/2",
+        ),
+        PcztTransparentInput(
+            prevout_txid=bytes.fromhex("28ca5b91000f74b9adbb3f467adf1088caf7f334192895e59a540067531d7136"),
+            prevout_index=0,
+            value=1776650,
+            script_pubkey=bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"),
+            sequence=bytes.fromhex("00000000"),
+            signing_path="m/44'/133'/2'/0/2",
+        ),
+    ]
+    TRANSPARENT_OUTPUT = PcztTransparentOutput(
+        value=83399455,
+        script_pubkey=bytes.fromhex("76a9147340a80cad7353cff25bad918e73837c2e2863eb88ac"),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=TRANSPARENT_INPUTS,
+        transparent_outputs=[TRANSPARENT_OUTPUT],
+    ):
+        _review_approve(scenario_navigator, "test_sign_tx_v5_transparent_input_no_replay")
+
+    # First signature for input #0 succeeds.
+    first_signature = client.pczt_sign_transparent(input_index=0).data
+    assert len(first_signature) > 0
+
+    # Re-signing the SAME input must be rejected, not silently counted.
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.pczt_sign_transparent(input_index=0)
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_sign_tx_orchard_action_count_limit(
+    backend,
+):
+    # Regression test: the Orchard action count is bounded by MAX_ORCHARD_ACTIONS (10),
+    # mirroring the transparent input/output limits. A bundle declaring more actions must
+    # be rejected at the action-count check, before any per-action allocation grows the
+    # signing-records vector (heap-exhaustion guard on a ~24 KB-RAM device).
+    PCZT_GLOBAL = PcztGlobal()
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    TRANSPARENT_OUTPUT = PcztTransparentOutput(
+        value=81628565,
+        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+    )
+
+    def _dummy_orchard_action() -> PcztOrchardAction:
+        # The action-count check fires before any field is parsed, so zero-filled
+        # fields of the correct size are sufficient; they only need to serialize.
+        return PcztOrchardAction(
+            cv_net=bytes(32),
+            nullifier=bytes(32),
+            rk=bytes(32),
+            alpha=bytes(32),
+            signing_path="m/32'/133'/0'",
+            cmx=bytes(32),
+            ephemeral_key=bytes(32),
+            enc_ciphertext=bytes(580),
+            out_ciphertext=bytes(80),
+        )
+
+    # MAX_ORCHARD_ACTIONS is 6; declare one more to trip the bound.
+    too_many_actions = PcztOrchardBundle(
+        actions=[_dummy_orchard_action() for _ in range(11)],
+        flags=0,
+        value_balance=0,
+        anchor=bytes(32),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_GLOBAL,
+            transparent_inputs=[TRANSPARENT_INPUT],
+            transparent_outputs=[TRANSPARENT_OUTPUT],
+            orchard_bundle=too_many_actions,
+        ):
+            pytest.fail("Device accepted a PCZT with too many Orchard actions")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
 def test_pczt_sign_tx_v5_mult_outputs(
