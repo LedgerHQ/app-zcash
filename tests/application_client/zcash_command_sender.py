@@ -653,6 +653,7 @@ class ZcashCommandSender:
         mode: HashSignMode = HashSignMode.Sign,
         prepare: bool = True,
         binding_signing_key: Optional[bytes] = None,
+        orchard_alpha: Optional[bytes] = None,
     ) -> RAPDU:
         # pylint: disable=too-many-positional-arguments
         if (locktime is None) != (expiry is None):
@@ -684,10 +685,25 @@ class ZcashCommandSender:
                 raise ValueError("binding_signing_key is required for BindingSig mode")
             if len(binding_signing_key) != 32:
                 raise ValueError("binding_signing_key must be 32 bytes")
+            if orchard_alpha is not None:
+                raise ValueError("orchard_alpha is only supported for SpendAuthSig mode")
             sign_data = binding_signing_key
         else:
             sign_data = pack_derivation_path(path)
-            if locktime is not None and expiry is not None:
+            if mode == HashSignMode.SpendAuthSig:
+                if orchard_alpha is None:
+                    raise ValueError("orchard_alpha is required for SpendAuthSig mode")
+                if len(orchard_alpha) != 32:
+                    raise ValueError("orchard_alpha must be 32 bytes")
+                sign_data += orchard_alpha
+            elif orchard_alpha is not None:
+                raise ValueError("orchard_alpha is only supported for SpendAuthSig mode")
+
+            if (
+                mode != HashSignMode.SpendAuthSig
+                and locktime is not None
+                and expiry is not None
+            ):
                 sign_data += (
                     0x00.to_bytes(1, byteorder="big")
                     + locktime.to_bytes(4, byteorder="big")

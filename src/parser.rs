@@ -23,9 +23,7 @@ use zcash_protocol::value::Zatoshis;
 use zcash_transparent::address::Script;
 use zcash_transparent::bundle::OutPoint;
 
-use crate::parser::compute::{
-    SighHashComputeMode, finalize_signature_hash, finalize_signature_input_hash,
-};
+use crate::parser::compute::{finalize_signature_hash, finalize_signature_input_hash};
 use crate::parser::reader::ByteReader;
 use crate::settings::Settings;
 use crate::swap;
@@ -40,6 +38,10 @@ use crate::{
 use error::ok;
 use ledger_device_sdk::log::{debug, error, info};
 
+pub use compute::{
+    SighHashComputeMode, TxInSignatureDigest, empty_txin_signature_digest,
+    finalize_signature_hash_from_txin_digest,
+};
 pub use error::{ParserError, ParserSourceError};
 pub use output_parser::{OutputParser, OutputParserCtx};
 pub use pczt::{PcztParser, PcztParserCtx};

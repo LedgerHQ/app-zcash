@@ -1,5 +1,6 @@
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
 use ledger_device_sdk::log::{debug, info};
+use zcash_primitives::transaction::sighash_v5::ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION;
 use zcash_primitives::transaction::txid::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TX_PERSONALIZATION_PREFIX,
@@ -148,6 +149,22 @@ pub enum SighHashComputeMode {
     SomeTransparentInputs,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum TxInSignatureDigest<'a> {
+    Absent,
+    Provided(&'a [u8; 32]),
+}
+
+pub fn empty_txin_signature_digest() -> Result<[u8; 32], ParserError> {
+    let mut txin_sig_digest = [0u8; 32];
+    let mut hasher = Blake2b_256::default();
+    ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
+    ok!(hasher.finalize(&mut txin_sig_digest));
+    debug!("Shielded txin sig digest: {}", HexSlice(&txin_sig_digest));
+
+    Ok(txin_sig_digest)
+}
+
 pub fn finalize_signature_hash(
     ctx: &mut ParserCtx<'_>,
     mode: SighHashComputeMode,
@@ -168,17 +185,19 @@ pub fn finalize_signature_hash(
 
 pub fn finalize_signature_hash_from_txin_digest(
     tx_info: &mut TxInfo,
-    txin_sig_digest: &[u8; 32],
+    mode: SighHashComputeMode,
     sighash_type: u8,
+    txin_sig_digest: TxInSignatureDigest<'_>,
 ) -> Result<(), ParserError> {
     compute_header_digest(tx_info)?;
 
-    let transparent_digest = transparent_signature_digest(
-        tx_info,
-        SighHashComputeMode::SomeTransparentInputs,
-        sighash_type,
-        Some(txin_sig_digest),
-    )?;
+    let txin_sig_digest = match txin_sig_digest {
+        TxInSignatureDigest::Absent => None,
+        TxInSignatureDigest::Provided(digest) => Some(digest),
+    };
+
+    let transparent_digest =
+        transparent_signature_digest(tx_info, mode, sighash_type, txin_sig_digest)?;
 
     finalize_signature_hash_from_transparent_digest(tx_info, &transparent_digest)
 }
