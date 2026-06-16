@@ -1,3 +1,4 @@
+use crate::consts::{UNHARDENED_MASK, ZIP32_PATH_LEN, ZIP32_PURPOSE};
 use crate::utils::bip32_path::Bip32Path;
 use alloc::vec::Vec;
 use ledger_device_sdk::log::{debug, error};
@@ -166,7 +167,6 @@ pub enum Bip44CheckMode {
 
 pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const HARDENED: u32 = 0x8000_0000;
-    const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
     const PURPOSE_OFFSET: usize = 0;
 
     const BIP44_PATH_LEN: usize = 5;
@@ -177,8 +177,6 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const BIP44_COIN_TYPE: u32 = 133;
     const MAX_BIP44_ACCOUNT_RECOMMENDED: u32 = 100;
     const MAX_BIP44_ADDRESS_INDEX_RECOMMENDED: u32 = 50000;
-    const ZIP32_PATH_LEN: usize = 3;
-    const ZIP32_PURPOSE: u32 = 32;
 
     let path = path.as_slice();
     let is_zip32 = path.len() == ZIP32_PATH_LEN && (path[0] & UNHARDENED_MASK) == ZIP32_PURPOSE;

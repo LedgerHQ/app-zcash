@@ -20,11 +20,11 @@ use ledger_device_sdk::log::{debug, error, info};
 use ledger_device_sdk::random::{LedgerRng, rand_bytes};
 
 use crate::AppSW;
-use crate::consts::P1HashSignMode;
+use crate::consts::{P1HashSignMode, SIGHASH_ALL, UNHARDENED_MASK, ZIP32_PATH_LEN, ZIP32_PURPOSE};
 use crate::parser::orchard_decipher::OrchardDecipherKeys;
 use crate::parser::{
-    OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError, SighHashComputeMode,
-    TxInSignatureDigest, empty_txin_signature_digest, finalize_signature_hash_from_txin_digest,
+    OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError,
+    compute_shielded_signature_digest,
 };
 use crate::tx::TxContext;
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
@@ -35,13 +35,8 @@ use crate::zip32::{
 
 const ORCHARD_BINDING_SIGNING_KEY_LEN: usize = 32;
 const ORCHARD_SPEND_ALPHA_LEN: usize = 32;
-const SIGHASH_ALL: u8 = 0x01;
 
 fn is_zip32_orchard_path(path: &Bip32Path) -> bool {
-    const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
-    const ZIP32_PATH_LEN: usize = 3;
-    const ZIP32_PURPOSE: u32 = 32;
-
     path.as_slice().len() == ZIP32_PATH_LEN
         && (path.as_slice()[0] & UNHARDENED_MASK) == ZIP32_PURPOSE
 }
@@ -72,43 +67,12 @@ fn parse_orchard_alpha(data: &[u8]) -> Result<[u8; ORCHARD_SPEND_ALPHA_LEN], App
 }
 
 fn prepare_spend_auth_signature_digest(ctx: &mut TxContext) -> Result<(), AppSW> {
-    ctx.tx_info.sighash_type = SIGHASH_ALL;
-
-    let result = if ctx.tx_signing_state.total_input_count == 0 {
-        let mode = if ctx.output_parser.transparent_output_count() == 0 {
-            SighHashComputeMode::NoTransparentInputsOrOutputs
-        } else {
-            SighHashComputeMode::NoTransparentInputs
-        };
-
-        finalize_signature_hash_from_txin_digest(
-            &mut ctx.tx_info,
-            mode,
-            SIGHASH_ALL,
-            TxInSignatureDigest::Absent,
-        )
-    } else {
-        let txin_sig_digest = empty_txin_signature_digest().map_err(|e| {
-            error!(
-                "Error computing empty transparent input digest for spend auth signature: {:#?}",
-                e
-            );
-            match e.source {
-                ParserSourceError::Hash(_) => AppSW::TechnicalProblem,
-                ParserSourceError::AppSW(sw) => sw,
-                _ => AppSW::IncorrectData,
-            }
-        })?;
-
-        finalize_signature_hash_from_txin_digest(
-            &mut ctx.tx_info,
-            SighHashComputeMode::SomeTransparentInputs,
-            SIGHASH_ALL,
-            TxInSignatureDigest::Provided(&txin_sig_digest),
-        )
-    };
-
-    result.map_err(|e| {
+    compute_shielded_signature_digest(
+        &mut ctx.tx_info,
+        ctx.tx_signing_state.total_input_count,
+        ctx.output_parser.transparent_output_count(),
+    )
+    .map_err(|e| {
         error!(
             "Error preparing spend auth signature digest from transaction data: {:#?}",
             e
@@ -277,6 +241,11 @@ fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
     let locktime: u32 = u32::from_be_bytes(buf[..4].try_into().unwrap());
     let sighash_type: u8 = buf[4];
     let expiry_height: u32 = u32::from_be_bytes(buf[5..9].try_into().unwrap());
+
+    if sighash_type != SIGHASH_ALL {
+        error!("Unsupported sighash_type: {}", sighash_type);
+        return Err(AppSW::IncorrectData);
+    }
 
     info!("Extra TX data received:");
     info!("locktime: {}", locktime);

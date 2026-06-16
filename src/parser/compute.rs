@@ -5,8 +5,10 @@ use zcash_primitives::transaction::txid::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TX_PERSONALIZATION_PREFIX,
 };
+use zcash_transparent::address::Script;
 
 use crate::{
+    consts::SIGHASH_ALL,
     parser::{
         ParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, finalize_and_log_hash, ok,
     },
@@ -143,61 +145,94 @@ pub fn finalize_signature_input_hash(ctx: &mut ParserCtx<'_>) -> Result<(), Pars
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum SighHashComputeMode {
+enum SighHashComputeMode<'a> {
     NoTransparentInputsOrOutputs,
     NoTransparentInputs,
-    SomeTransparentInputs,
+    SomeTransparentInputs { txin_sig_digest: &'a [u8; 32] },
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum TxInSignatureDigest<'a> {
-    Absent,
-    Provided(&'a [u8; 32]),
-}
-
-pub fn empty_txin_signature_digest() -> Result<[u8; 32], ParserError> {
-    let mut txin_sig_digest = [0u8; 32];
-    let mut hasher = Blake2b_256::default();
-    ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
-    ok!(hasher.finalize(&mut txin_sig_digest));
+fn empty_txin_signature_digest() -> Result<[u8; 32], ParserError> {
+    let txin_sig_digest = empty_digest(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION)?;
     debug!("Shielded txin sig digest: {}", HexSlice(&txin_sig_digest));
 
     Ok(txin_sig_digest)
 }
 
-pub fn finalize_signature_hash(
-    ctx: &mut ParserCtx<'_>,
-    mode: SighHashComputeMode,
+pub fn compute_shielded_signature_digest(
+    tx_info: &mut TxInfo,
+    transparent_input_count: usize,
+    transparent_output_count: usize,
 ) -> Result<(), ParserError> {
-    let mut txin_sig_digest = [0u8; 32];
-    ok!(ctx.hashers.prevouts_hasher.finalize(&mut txin_sig_digest));
-    info!("txin sig digest {}", HexSlice(&txin_sig_digest));
-    info!("sighash compute mode {:X?}", mode);
-
-    let transparent_digest = transparent_signature_digest(
-        ctx.tx_info,
-        mode,
-        ctx.tx_info.sighash_type,
-        Some(&txin_sig_digest),
-    )?;
-    finalize_signature_hash_from_transparent_digest(ctx.tx_info, &transparent_digest)
+    // Implements ZIP 244 S.2g for Sapling Spend and Orchard Action signatures:
+    // when transparent inputs exist, txin_sig_digest is Zcash___TxInHash over empty input data.
+    if transparent_input_count == 0 {
+        compute_no_transparent_input_signature_digest(
+            tx_info,
+            transparent_output_count,
+            SIGHASH_ALL,
+        )
+    } else {
+        let txin_sig_digest = empty_txin_signature_digest()?;
+        compute_transparent_input_signature_digest(tx_info, &txin_sig_digest, SIGHASH_ALL)
+    }
 }
 
-pub fn finalize_signature_hash_from_txin_digest(
+pub fn compute_no_transparent_input_signature_digest(
     tx_info: &mut TxInfo,
-    mode: SighHashComputeMode,
+    transparent_output_count: usize,
     sighash_type: u8,
-    txin_sig_digest: TxInSignatureDigest<'_>,
+) -> Result<(), ParserError> {
+    tx_info.sighash_type = sighash_type;
+
+    let mode = if transparent_output_count == 0 {
+        SighHashComputeMode::NoTransparentInputsOrOutputs
+    } else {
+        SighHashComputeMode::NoTransparentInputs
+    };
+
+    finalize_signature_hash(tx_info, mode, sighash_type)
+}
+
+pub fn compute_transparent_input_signature_digest(
+    tx_info: &mut TxInfo,
+    txin_sig_digest: &[u8; 32],
+    sighash_type: u8,
+) -> Result<(), ParserError> {
+    tx_info.sighash_type = sighash_type;
+
+    finalize_signature_hash(
+        tx_info,
+        SighHashComputeMode::SomeTransparentInputs { txin_sig_digest },
+        sighash_type,
+    )
+}
+
+pub fn transparent_input_txin_signature_digest(
+    prevout: &[u8],
+    amount: &[u8; 8],
+    script_pubkey: &Script,
+    sequence: u32,
+) -> Result<[u8; 32], ParserError> {
+    let mut txin_sig_digest = [0u8; 32];
+    let mut hasher = Blake2b_256::default();
+    ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
+    ok!(hasher.update(prevout));
+    ok!(hasher.update(amount));
+    ok!(script_pubkey.write(hasher.as_writer()));
+    ok!(hasher.update(&sequence.to_le_bytes()));
+    ok!(hasher.finalize(&mut txin_sig_digest));
+
+    Ok(txin_sig_digest)
+}
+
+fn finalize_signature_hash(
+    tx_info: &mut TxInfo,
+    mode: SighHashComputeMode<'_>,
+    sighash_type: u8,
 ) -> Result<(), ParserError> {
     compute_header_digest(tx_info)?;
 
-    let txin_sig_digest = match txin_sig_digest {
-        TxInSignatureDigest::Absent => None,
-        TxInSignatureDigest::Provided(digest) => Some(digest),
-    };
-
-    let transparent_digest =
-        transparent_signature_digest(tx_info, mode, sighash_type, txin_sig_digest)?;
+    let transparent_digest = transparent_signature_digest(tx_info, mode, sighash_type)?;
 
     finalize_signature_hash_from_transparent_digest(tx_info, &transparent_digest)
 }
@@ -224,9 +259,8 @@ fn compute_header_digest(tx_info: &mut TxInfo) -> Result<(), ParserError> {
 
 fn transparent_signature_digest(
     tx_info: &TxInfo,
-    mode: SighHashComputeMode,
+    mode: SighHashComputeMode<'_>,
     sighash_type: u8,
-    txin_sig_digest: Option<&[u8; 32]>,
 ) -> Result<[u8; 32], ParserError> {
     let mut hash = [0u8; 32];
     let mut hasher = Blake2b_256::default();
@@ -239,11 +273,7 @@ fn transparent_signature_digest(
             ok!(hasher.update(&tx_info.sequence_hash));
             ok!(hasher.update(&tx_info.outputs_hash));
         }
-        SighHashComputeMode::SomeTransparentInputs => {
-            let txin_sig_digest = txin_sig_digest.ok_or_else(|| {
-                ParserError::from_str("Missing transparent input signature digest")
-            })?;
-
+        SighHashComputeMode::SomeTransparentInputs { txin_sig_digest } => {
             ok!(hasher.update(&[sighash_type]));
             ok!(hasher.update(&tx_info.prevouts_hash));
             ok!(hasher.update(&tx_info.amounts_hash));
