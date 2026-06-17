@@ -59,11 +59,12 @@ use tx::TxContext;
 use zeroize::Zeroizing;
 
 use crate::consts::{
-    INS_GET_SHIELD_ADDR, P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE,
-    P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE,
-    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_LAST, P1_NEXT,
-    P1HashSignMode, P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE,
-    P2_HASH_INPUT_START_SAPLING, P2_PCZT_CONTINUE, P2_PCZT_FINISHED, P2ShieldedAddrMode, P2VkMode,
+    INS_GET_SHIELD_ADDR, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER, P1_FINALIZE_FULL_CHANGEINFO,
+    P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY,
+    P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE, P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST,
+    P1_HASH_INPUT_START_NEXT, P1_LAST, P1_NEXT, P1HashSignMode, P2_FINALIZE_FULL_DEFAULT,
+    P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING, P2_PCZT_CONTINUE, P2_PCZT_FINISHED,
+    P2ShieldedAddrMode, P2VkMode,
 };
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
@@ -277,9 +278,13 @@ impl TryFrom<ApduHeader> for Instruction {
                     finished: value.p2 == P2_PCZT_FINISHED,
                 })
             }
-            (INS_PCZT_SIGN_TRANSPARENT, 0, p2) => Ok(Instruction::PcztSignTransparent {
-                input_index: p2 as usize,
-            }),
+            (INS_PCZT_SIGN_TRANSPARENT, 0, p2)
+                if (p2 as usize) < MAX_PCZT_TRANSPARENT_INPUTS_NUMBER =>
+            {
+                Ok(Instruction::PcztSignTransparent {
+                    input_index: p2 as usize,
+                })
+            }
             (INS_PCZT_SIGN_ORCHARD, 0, p2) => Ok(Instruction::PcztSignOrchard {
                 action_index: p2 as usize,
             }),

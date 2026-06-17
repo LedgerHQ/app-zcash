@@ -1,9 +1,9 @@
 use core::cmp;
 
-use core2::io::Error as IoError;
-use core2::io::ErrorKind as IoErrorKind;
-use core2::io::Read;
-use core2::io::Result;
+use corez::io::Error as IoError;
+use corez::io::ErrorKind as IoErrorKind;
+use corez::io::Read;
+use corez::io::Result;
 use ledger_device_sdk::log::debug;
 
 pub struct ByteReader<'b> {
@@ -55,3 +55,31 @@ impl Read for ByteReader<'_> {
         Ok(to_read)
     }
 }
+
+/// Little-endian primitive reads on top of [`Read`].
+///
+/// Replaces the (crate-private) `zcash_primitives::encoding::ReadBytesExt` so
+/// the app can build against the published `zcash_primitives` crate. The
+/// blanket impl makes these methods available on any `Read`er, including
+/// [`ByteReader`].
+pub trait ReadBytesExt: Read {
+    fn read_u8(&mut self) -> Result<u8> {
+        let mut buf = [0u8; 1];
+        self.read_exact(&mut buf)?;
+        Ok(buf[0])
+    }
+
+    fn read_u32_le(&mut self) -> Result<u32> {
+        let mut buf = [0u8; 4];
+        self.read_exact(&mut buf)?;
+        Ok(u32::from_le_bytes(buf))
+    }
+
+    fn read_u64_le(&mut self) -> Result<u64> {
+        let mut buf = [0u8; 8];
+        self.read_exact(&mut buf)?;
+        Ok(u64::from_le_bytes(buf))
+    }
+}
+
+impl<R: Read + ?Sized> ReadBytesExt for R {}

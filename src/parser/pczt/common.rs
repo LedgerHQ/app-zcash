@@ -74,7 +74,7 @@ impl PcztParser {
         let mut reader = ByteReader::new(&data[count_offset..]);
         let path_count: usize = match CompactSize::read_t(&mut reader) {
             Ok(path_count) => path_count,
-            Err(err) if err.kind() == core2::io::ErrorKind::UnexpectedEof => {
+            Err(err) if err.kind() == corez::io::ErrorKind::UnexpectedEof => {
                 return Ok(PathCountParse::NeedMore(data.len() + 1));
             }
             Err(err) => {

@@ -1,0 +1,39 @@
+//! BLAKE2b personalization strings for ZIP-243/ZIP-244 transaction hashing.
+//!
+//! These constants are consensus-fixed by the Zcash protocol (ZIP-243 sighash,
+//! ZIP-244 txid) and are byte-for-byte identical to the (crate-private)
+//! definitions in `zcash_primitives::transaction::{txid, sighash_v5}`. They are
+//! reproduced here so the app can build against the published `zcash_primitives`
+//! crate, which does not expose them as public API.
+//!
+//! Orchard personalizations live in `orchard::bundle::commitments` (public) and
+//! are imported from there directly.
+
+// --- ZIP-244 txid tree (zcash_primitives::transaction::txid) ---
+
+/// Prefix for the top-level txid personalization; the consensus branch id is
+/// appended to form the full 16-byte personalization.
+pub const ZCASH_TX_PERSONALIZATION_PREFIX: &[u8; 12] = b"ZcashTxHash_";
+
+pub const ZCASH_HEADERS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdHeadersHash";
+pub const ZCASH_TRANSPARENT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdTranspaHash";
+pub const ZCASH_SAPLING_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSaplingHash";
+
+pub const ZCASH_PREVOUTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdPrevoutHash";
+pub const ZCASH_SEQUENCE_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSequencHash";
+pub const ZCASH_OUTPUTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOutputsHash";
+
+pub const ZCASH_SAPLING_SPENDS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSSpendsHash";
+pub const ZCASH_SAPLING_SPENDS_COMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSSpendCHash";
+pub const ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSSpendNHash";
+
+pub const ZCASH_SAPLING_OUTPUTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSOutputHash";
+pub const ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSOutC__Hash";
+pub const ZCASH_SAPLING_OUTPUTS_MEMOS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSOutM__Hash";
+pub const ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdSOutN__Hash";
+
+// --- ZIP-243 sighash tree (zcash_primitives::transaction::sighash_v5) ---
+
+pub const ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION: &[u8; 16] = b"Zcash___TxInHash";
+pub const ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrAmountsHash";
+pub const ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrScriptsHash";

@@ -7,13 +7,12 @@ use alloc::{format, string::ToString, vec::Vec};
 use core::{cmp, mem};
 
 use ::orchard::note::TransmittedNoteCiphertext;
-use core2::io::Read;
+use corez::io::Read;
 use ledger_device_sdk::hash::HashInit as _;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::log::{debug, info};
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
 use zcash_encoding::CompactSize;
-use zcash_primitives::encoding::ReadBytesExt;
 use zcash_primitives::transaction::TxVersion;
 use zcash_primitives::transaction::components::orchard as orchard_component;
 use zcash_protocol::consensus::{BranchId, NetworkType};
@@ -25,8 +24,8 @@ use zcash_transparent::bundle::OutPoint;
 use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
 use crate::consts::{
-    MAX_ORCHARD_ACTIONS, MAX_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, MAX_TRANSPARENT_INPUTS_NUMBER,
-    SIGHASH_ALL,
+    MAX_ORCHARD_ACTIONS, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER, MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER,
+    MAX_SCRIPT_SIZE, SIGHASH_ALL,
 };
 use crate::parser::compute::{
     compute_shielded_signature_digest, compute_transparent_input_signature_digest,
@@ -51,7 +50,7 @@ use crate::utils::{
 };
 use crate::zip32::{derive_orchard_fvk, orchard_network};
 
-use super::reader::ByteReader;
+use super::reader::{ByteReader, ReadBytesExt};
 use super::{ParserError, finalize_and_log_hash, ok};
 
 mod common;

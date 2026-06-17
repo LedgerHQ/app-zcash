@@ -428,8 +428,13 @@ def test_pczt_sign_tx_v5_mult_inputs(
         value=86385175,
         script_pubkey=bytes.fromhex("76a9147340a80cad7353cff25bad918e73837c2e2863eb88ac"),
     )
+    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, TRANSPARENT_INPUTS, [TRANSPARENT_OUTPUT])
 
     client = ZcashCommandSender(backend)
+    public_keys = [
+        unpack_get_public_key_response(client.get_public_key(path=inp.signing_path).data)[0]
+        for inp in TRANSPARENT_INPUTS
+    ]
 
     with client.send_pczt(
         pczt_global=PCZT_GLOBAL,
@@ -444,6 +449,14 @@ def test_pczt_sign_tx_v5_mult_inputs(
     ]
 
     assert [signature.hex() for signature in signatures] == EXPECTED_SIGS
+    for input_index, signature in enumerate(signatures):
+        assert check_tx_v5_signature_validity(
+            public_keys[input_index],
+            signature[:-1],
+            TX_BYTES,
+            input_index=input_index,
+            input_amounts=[inp.value for inp in TRANSPARENT_INPUTS],
+        )
 
 
 def test_pczt_sign_tx_v5_transparent_input_no_replay(

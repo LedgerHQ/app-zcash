@@ -4,7 +4,6 @@ use ::orchard::bundle::commitments::{
 };
 use alloc::format;
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
-use zcash_primitives::transaction::txid::ZCASH_OUTPUTS_HASH_PERSONALIZATION;
 use zcash_protocol::consensus::NetworkType;
 
 use crate::parser::orchard::{
@@ -16,6 +15,7 @@ use crate::parser::orchard_decipher::{
     ORCHARD_OUT_CIPHERTEXT_SIZE, OrchardActionCiphertext, OrchardCompactAction,
     decipher_compact_value, decipher_value_with_ovk,
 };
+use crate::parser::personalization::ZCASH_OUTPUTS_HASH_PERSONALIZATION;
 
 use super::*;
 
@@ -89,7 +89,7 @@ impl OutputParser {
     ) -> Result<(), ParserError> {
         if self.orchard_decrypted_output_count == 0 && ctx.tx_info.outputs.is_empty() {
             return Err(ParserError::from_str(
-                "No transparent or shielded outputs detected",
+                "No outputs to display (no transparent outputs, and no Orchard outputs could be decrypted)",
             ));
         }
 

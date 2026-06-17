@@ -1,10 +1,10 @@
+use crate::parser::personalization::{
+    ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
+    ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
+    ZCASH_TX_PERSONALIZATION_PREFIX,
+};
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
 use ledger_device_sdk::log::{debug, info};
-use zcash_primitives::transaction::sighash_v5::ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION;
-use zcash_primitives::transaction::txid::{
-    ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
-    ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TX_PERSONALIZATION_PREFIX,
-};
 use zcash_transparent::address::Script;
 
 use crate::{

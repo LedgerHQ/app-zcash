@@ -18,7 +18,7 @@ impl PcztParser {
         self.parse_global(ctx, reader)?;
 
         let input_count: usize = ok!(CompactSize::read_t(&mut *reader));
-        if input_count > MAX_TRANSPARENT_INPUTS_NUMBER {
+        if input_count > MAX_PCZT_TRANSPARENT_INPUTS_NUMBER {
             return Err(ParserError::from_str("Too many PCZT transparent inputs"));
         }
 
@@ -66,7 +66,7 @@ impl PcztParser {
         debug!("PCZT transparent outputs start");
 
         let output_count: usize = ok!(CompactSize::read_t(&mut *reader));
-        if output_count > MAX_OUTPUTS_NUMBER {
+        if output_count > MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER {
             return Err(ParserError::from_str("Too many PCZT transparent outputs"));
         }
 
