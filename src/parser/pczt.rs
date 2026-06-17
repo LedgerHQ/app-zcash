@@ -135,6 +135,9 @@ impl PcztParser {
     //   tx_modifiable          u8
     //
     // transparent::Bundle subset:
+    //   `Pczt` header and `common::Global` are sent exactly once at the
+    //   beginning of `PCZT_TRANSPARENT_INPUT`; `PCZT_TRANSPARENT_OUTPUT` starts
+    //   from its own bundle fields.
     //   inputs                 Vec<Input> as CompactSize count, followed by inputs
     //   outputs                Vec<Output> as CompactSize count, followed by outputs
     //
@@ -344,9 +347,6 @@ impl PcztParser {
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         debug!("PCZT transparent outputs start");
-
-        self.parse_pczt_header(reader)?;
-        self.parse_global(ctx, reader)?;
 
         let output_count: usize = ok!(CompactSize::read_t(&mut *reader));
         if output_count > MAX_OUTPUTS_NUMBER {

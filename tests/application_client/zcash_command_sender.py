@@ -508,7 +508,7 @@ class ZcashCommandSender:
 
     def _build_pczt_transparent_output_payload(
         self,
-        transaction: bytes,
+        _transaction: bytes,
         transparent_outputs: list[PcztTransparentOutput],
     ) -> bytes:
         tx_outputs: list[dict] = self.tx_chunks["outputs"] # type: ignore
@@ -516,7 +516,7 @@ class ZcashCommandSender:
         if len(transparent_outputs) != len(tx_outputs):
             raise ValueError("transparent_outputs length must match transaction outputs length")
 
-        payload = bytearray(self._build_pczt_header_and_global_payload(transaction))
+        payload = bytearray()
         payload.extend(write_varint(len(transparent_outputs)))
 
         for out in transparent_outputs:

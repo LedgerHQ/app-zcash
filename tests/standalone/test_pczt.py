@@ -268,6 +268,10 @@ def test_pczt_sign_tx_v5_mult_inputs(
         "000000"
     )
     client = ZcashCommandSender(backend)
+    public_keys = [
+        unpack_get_public_key_response(client.get_public_key(path=inp.signing_path).data)[0]
+        for inp in MULT_INPUTS
+    ]
 
     with client.send_pczt(
         transaction=tx_bytes,
@@ -282,6 +286,14 @@ def test_pczt_sign_tx_v5_mult_inputs(
     ]
 
     assert [signature.hex() for signature in signatures] == expected_sigs
+    for input_index, signature in enumerate(signatures):
+        assert check_tx_v5_signature_validity(
+            public_keys[input_index],
+            signature[:-1],
+            tx_bytes,
+            input_index=input_index,
+            input_amounts=[inp.value for inp in MULT_INPUTS],
+        )
 
 
 def test_pczt_sign_tx_v5_mult_outputs(
