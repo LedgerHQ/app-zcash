@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.5.0
+
+- Add clear signing support for Orchard transactions
+
+## 3.4.0
+
+- Add support for the NU6.2 branch ID (0x5437f330).
+
 ## 3.3.0
 
 - Add support for Orchard shielded transactions

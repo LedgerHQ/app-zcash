@@ -1,11 +1,10 @@
 use alloc::vec::Vec;
 use core::mem;
 
-use core2::io::Read;
+use corez::io::Read;
 use ledger_device_sdk::hash::HashInit as _;
 use ledger_device_sdk::log::{debug, info};
 use zcash_encoding::CompactSize;
-use zcash_primitives::encoding::ReadBytesExt;
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 use zcash_protocol::constants::{V5_TX_VERSION, V5_VERSION_GROUP_ID};
@@ -19,7 +18,7 @@ use crate::tx::{Hashers, TxInfo, TxSigningState};
 use crate::utils::HexSlice;
 use crate::utils::blake2b_256_pers::AsWriter as _;
 
-use super::reader::ByteReader;
+use super::reader::{ByteReader, ReadBytesExt};
 use super::{ParserError, ok};
 
 const MAGIC_BYTES: &[u8; 4] = b"PCZT";

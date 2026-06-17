@@ -7,18 +7,15 @@ use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::nbgl::NbglHomeAndSettings;
-use zcash_primitives::transaction::sighash_v5::{
-    ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
-};
-use zcash_primitives::transaction::txid::{
-    ZCASH_OUTPUTS_HASH_PERSONALIZATION, ZCASH_PREVOUTS_HASH_PERSONALIZATION,
-    ZCASH_SAPLING_HASH_PERSONALIZATION, ZCASH_SEQUENCE_HASH_PERSONALIZATION,
-};
-
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 
 use crate::parser::orchard_decipher::OrchardDecipherKeys;
+use crate::parser::personalization::{
+    ZCASH_OUTPUTS_HASH_PERSONALIZATION, ZCASH_PREVOUTS_HASH_PERSONALIZATION,
+    ZCASH_SAPLING_HASH_PERSONALIZATION, ZCASH_SEQUENCE_HASH_PERSONALIZATION,
+    ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
+};
 use crate::parser::{OutputParser, Parser, ParserMode, PcztParser};
 use crate::utils::blake2b_256_pers::Blake2b256Personalization as _;
 use orchard::bundle::commitments::ZCASH_ORCHARD_HASH_PERSONALIZATION;
