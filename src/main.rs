@@ -59,7 +59,7 @@ use tx::TxContext;
 use zeroize::Zeroizing;
 
 use crate::consts::{
-    INS_GET_SHIELD_ADDR, MAX_TRANSPARENT_INPUTS_NUMBER, P1_FINALIZE_FULL_CHANGEINFO,
+    INS_GET_SHIELD_ADDR, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER, P1_FINALIZE_FULL_CHANGEINFO,
     P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY,
     P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE, P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST,
     P1_HASH_INPUT_START_NEXT, P1_LAST, P1_NEXT, P1HashSignMode, P2_FINALIZE_FULL_DEFAULT,
@@ -257,7 +257,9 @@ impl TryFrom<ApduHeader> for Instruction {
                     last: value.p1 == P1_LAST,
                 })
             }
-            (INS_PCZT_SIGN_TRANSPARENT, 0, p2) if (p2 as usize) < MAX_TRANSPARENT_INPUTS_NUMBER => {
+            (INS_PCZT_SIGN_TRANSPARENT, 0, p2)
+                if (p2 as usize) < MAX_PCZT_TRANSPARENT_INPUTS_NUMBER =>
+            {
                 Ok(Instruction::PcztSignTransparent {
                     input_index: p2 as usize,
                 })

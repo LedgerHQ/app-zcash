@@ -17,7 +17,9 @@ use zcash_transparent::bundle::OutPoint;
 
 use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
-use crate::consts::{MAX_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, MAX_TRANSPARENT_INPUTS_NUMBER};
+use crate::consts::{
+    MAX_PCZT_TRANSPARENT_INPUTS_NUMBER, MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE,
+};
 use crate::parser::compute::finalize_signature_hash_from_txin_digest;
 use crate::swap;
 use crate::tx::{Hashers, TxInfo, TxOutput, TxSigningState};
@@ -318,7 +320,7 @@ impl PcztParser {
         self.parse_global(ctx, reader)?;
 
         let input_count: usize = ok!(CompactSize::read_t(&mut *reader));
-        if input_count > MAX_TRANSPARENT_INPUTS_NUMBER {
+        if input_count > MAX_PCZT_TRANSPARENT_INPUTS_NUMBER {
             return Err(ParserError::from_str("Too many PCZT transparent inputs"));
         }
 
@@ -349,7 +351,7 @@ impl PcztParser {
         debug!("PCZT transparent outputs start");
 
         let output_count: usize = ok!(CompactSize::read_t(&mut *reader));
-        if output_count > MAX_OUTPUTS_NUMBER {
+        if output_count > MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER {
             return Err(ParserError::from_str("Too many PCZT transparent outputs"));
         }
 

@@ -6,8 +6,13 @@ pub const ZCASH_DECIMALS: u32 = 8;
 pub const ZCASH_DECIMALS_DIV: u64 = 10u64.pow(ZCASH_DECIMALS);
 
 pub const MAX_SCRIPT_SIZE: usize = 1024 * 2;
-pub const MAX_TRANSPARENT_INPUTS_NUMBER: usize = 10;
+// Limit the number of transparent outputs and orchard action in legacy parser due to device memory constraints.
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
+
+// Limit the number of PCZT transparent inputs due to device memory constraints.
+pub const MAX_PCZT_TRANSPARENT_INPUTS_NUMBER: usize = 10;
+// Limit the number of PCZT transparent outputs due to device memory constraints.
+pub const MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER: usize = 10;
 
 pub const ZCASH_CLA: u8 = 0xE0;
 pub const INS_GET_WALLET_PUBLIC_KEY: u8 = 0x40;
