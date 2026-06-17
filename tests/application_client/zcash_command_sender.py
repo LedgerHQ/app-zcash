@@ -651,7 +651,6 @@ class ZcashCommandSender:
     def _send_pczt_transparent_outputs(
         self,
         transparent_outputs: list[PcztTransparentOutput],
-        pczt_finished: bool = False,
     ) -> Generator[None, None, None]:
         packets = self._build_pczt_transparent_output_packets(
             transparent_outputs,
@@ -662,7 +661,7 @@ class ZcashCommandSender:
                 cla=CLA,
                 ins=InsType.PCZT_TRANSPARENT_OUTPUT,
                 p1=self._pczt_chunk_p1(idx, len(packets)),
-                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                p2=P2.P2_NONE,
                 data=packet,
             )
 
@@ -670,7 +669,7 @@ class ZcashCommandSender:
             cla=CLA,
             ins=InsType.PCZT_TRANSPARENT_OUTPUT,
             p1=self._pczt_chunk_p1(len(packets) - 1, len(packets)),
-            p2=self._pczt_chunk_p2(len(packets) - 1, len(packets), pczt_finished),
+            p2=P2.P2_NONE,
             data=packets[-1],
         ) as response:
             yield response
@@ -678,7 +677,6 @@ class ZcashCommandSender:
     def _send_pczt_transparent_outputs_sync(
         self,
         transparent_outputs: list[PcztTransparentOutput],
-        pczt_finished: bool = False,
     ) -> None:
         packets = self._build_pczt_transparent_output_packets(
             transparent_outputs,
@@ -689,7 +687,7 @@ class ZcashCommandSender:
                 cla=CLA,
                 ins=InsType.PCZT_TRANSPARENT_OUTPUT,
                 p1=self._pczt_chunk_p1(idx, len(packets)),
-                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                p2=P2.P2_NONE,
                 data=packet,
             )
 

@@ -170,12 +170,10 @@ pub enum Instruction {
     PcztTransparentInput {
         first: bool,
         last: bool,
-        finished: bool,
     },
     PcztTransparentOutput {
         first: bool,
         last: bool,
-        finished: bool,
     },
     PcztOrchardAction {
         first: bool,
@@ -254,22 +252,20 @@ impl TryFrom<ApduHeader> for Instruction {
             (INS_HASH_SIGN, p1, 0) => Ok(Instruction::HashSign {
                 mode: P1HashSignMode::try_from(p1)?,
             }),
-            (INS_PCZT_TRANSPARENT_INPUT, p1, P2_PCZT_CONTINUE | P2_PCZT_FINISHED)
+            (INS_PCZT_TRANSPARENT_INPUT, p1, P2_PCZT_CONTINUE)
                 if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
             {
                 Ok(Instruction::PcztTransparentInput {
                     first: value.p1 == P1_FIRST,
                     last: value.p1 == P1_LAST,
-                    finished: value.p2 == P2_PCZT_FINISHED,
                 })
             }
-            (INS_PCZT_TRANSPARENT_OUTPUT, p1, P2_PCZT_CONTINUE | P2_PCZT_FINISHED)
+            (INS_PCZT_TRANSPARENT_OUTPUT, p1, P2_PCZT_CONTINUE)
                 if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
             {
                 Ok(Instruction::PcztTransparentOutput {
                     first: value.p1 == P1_FIRST,
                     last: value.p1 == P1_LAST,
-                    finished: value.p2 == P2_PCZT_FINISHED,
                 })
             }
             (INS_PCZT_ORCHARD_ACTION, p1, P2_PCZT_CONTINUE | P2_PCZT_FINISHED)
@@ -490,16 +486,12 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
             handler_hash_input_finalize_full(comm, ctx, *is_change)
         }
         Instruction::HashSign { mode } => handler_hash_sign(comm, ctx, *mode),
-        Instruction::PcztTransparentInput {
-            first,
-            last,
-            finished,
-        } => handler_pczt_transparent_input(comm, ctx, *first, *last, *finished),
-        Instruction::PcztTransparentOutput {
-            first,
-            last,
-            finished,
-        } => handler_pczt_transparent_output(comm, ctx, *first, *last, *finished),
+        Instruction::PcztTransparentInput { first, last } => {
+            handler_pczt_transparent_input(comm, ctx, *first, *last)
+        }
+        Instruction::PcztTransparentOutput { first, last } => {
+            handler_pczt_transparent_output(comm, ctx, *first, *last)
+        }
         Instruction::PcztOrchardAction {
             first,
             last,

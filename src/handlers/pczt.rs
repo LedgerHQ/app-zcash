@@ -72,7 +72,6 @@ pub fn handler_pczt_transparent_input(
     ctx: &mut TxContext,
     first: bool,
     last: bool,
-    finished: bool,
 ) -> Result<(), AppSW> {
     if first {
         info!("Reset TX context for PCZT transparent input parsing");
@@ -102,8 +101,6 @@ pub fn handler_pczt_transparent_input(
         return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength));
     }
 
-    finish_pczt_if_requested(ctx, finished)?;
-
     Ok(())
 }
 
@@ -112,7 +109,6 @@ pub fn handler_pczt_transparent_output(
     ctx: &mut TxContext,
     first: bool,
     last: bool,
-    finished: bool,
 ) -> Result<(), AppSW> {
     if first {
         debug!("Start PCZT transparent output parsing");
@@ -140,8 +136,6 @@ pub fn handler_pczt_transparent_output(
         error!("PCZT transparent output data ended before all outputs were parsed");
         return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength));
     }
-
-    finish_pczt_if_requested(ctx, finished)?;
 
     Ok(())
 }

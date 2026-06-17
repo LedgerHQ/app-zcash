@@ -629,17 +629,16 @@ impl PcztParser {
             .ok_or_else(|| ParserError::from_str("Bad PCZT transparent input index"))
     }
 
-    pub fn mark_transparent_input_signed(
-        &mut self,
-        input_index: usize,
-    ) -> Result<(), ParserError> {
+    pub fn mark_transparent_input_signed(&mut self, input_index: usize) -> Result<(), ParserError> {
         let input = self
             .transparent_inputs
             .get_mut(input_index)
             .ok_or_else(|| ParserError::from_str("Bad PCZT transparent input index"))?;
 
         if input.signed {
-            return Err(ParserError::from_str("PCZT transparent input already signed"));
+            return Err(ParserError::from_str(
+                "PCZT transparent input already signed",
+            ));
         }
 
         input.signed = true;
