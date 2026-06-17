@@ -10,6 +10,7 @@ use ledger_device_sdk::nbgl::NbglHomeAndSettings;
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 
+use crate::parser::orchard_decipher::OrchardDecipherKeys;
 use crate::parser::{OutputParser, Parser, ParserMode};
 
 #[derive(Default)]
@@ -63,6 +64,8 @@ pub struct TxInfo {
     pub header_digest: [u8; 32],
     pub orchard_digest: [u8; 32],
     pub signature_digest: [u8; 32],
+
+    pub orchard_decipher_keys: Option<OrchardDecipherKeys>,
 }
 
 pub enum SupportedTxVersion {

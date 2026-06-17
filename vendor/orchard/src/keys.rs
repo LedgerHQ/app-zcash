@@ -448,6 +448,26 @@ impl FullViewingKey {
         }
     }
 
+    /// Ledger-SDK equivalent of [`Self::rivk`].
+    pub(crate) fn rivk_ledger(
+        &self,
+        scope: Scope,
+    ) -> Result<CommitIvkRandomness, ledger_zcash_crypto::Error> {
+        match scope {
+            Scope::External => Ok(self.rivk),
+            Scope::Internal => {
+                let rivk = self.rivk.to_bytes();
+                let ak = self.ak.to_bytes();
+                let nk = self.nk.to_bytes();
+                let rivk_internal = ledger_zcash_crypto::orchard_rivk_internal(&rivk, &ak, &nk)?;
+
+                Ok(CommitIvkRandomness(
+                    ledger_zcash_crypto::pallas_scalar_from_repr(rivk_internal)?,
+                ))
+            }
+        }
+    }
+
     /// Defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
     ///
     /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
@@ -562,6 +582,15 @@ impl FullViewingKey {
         }
     }
 
+    /// Ledger-SDK equivalent of [`Self::derive_internal`].
+    fn derive_internal_ledger(&self) -> Result<Self, ledger_zcash_crypto::Error> {
+        Ok(FullViewingKey {
+            ak: self.ak.clone(),
+            nk: self.nk,
+            rivk: self.rivk_ledger(Scope::Internal)?,
+        })
+    }
+
     /// Derives an `IncomingViewingKey` for this full viewing key.
     pub fn to_ivk(&self, scope: Scope) -> IncomingViewingKey {
         match scope {
@@ -577,7 +606,9 @@ impl FullViewingKey {
     ) -> Result<IncomingViewingKey, ledger_zcash_crypto::Error> {
         Ok(match scope {
             Scope::External => IncomingViewingKey::from_fvk_ledger(self)?,
-            Scope::Internal => IncomingViewingKey::from_fvk_ledger(&self.derive_internal())?,
+            Scope::Internal => {
+                IncomingViewingKey::from_fvk_ledger(&self.derive_internal_ledger()?)?
+            }
         })
     }
 
@@ -587,6 +618,19 @@ impl FullViewingKey {
             Scope::External => OutgoingViewingKey::from_fvk(self),
             Scope::Internal => OutgoingViewingKey::from_fvk(&self.derive_internal()),
         }
+    }
+
+    /// Ledger-SDK equivalent of [`Self::to_ovk`].
+    pub fn to_ovk_ledger(
+        &self,
+        scope: Scope,
+    ) -> Result<OutgoingViewingKey, ledger_zcash_crypto::Error> {
+        Ok(match scope {
+            Scope::External => OutgoingViewingKey::from_fvk_ledger(self)?,
+            Scope::Internal => {
+                OutgoingViewingKey::from_fvk_ledger(&self.derive_internal_ledger()?)?
+            }
+        })
     }
 }
 
@@ -887,6 +931,11 @@ impl OutgoingViewingKey {
     /// Helper method.
     fn from_fvk(fvk: &FullViewingKey) -> Self {
         fvk.derive_dk_ovk().1
+    }
+
+    /// Ledger-SDK equivalent of [`Self::from_fvk`].
+    fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
+        Ok(fvk.derive_dk_ovk_ledger()?.1)
     }
 }
 
