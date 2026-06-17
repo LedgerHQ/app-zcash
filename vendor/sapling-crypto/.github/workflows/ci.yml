@@ -10,7 +10,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run tests
         run: cargo test --all-features --verbose --release
       - name: Verify working directory is clean
@@ -23,7 +23,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         id: toolchain
       - run: rustup override set ${{steps.toolchain.outputs.name}}
@@ -34,22 +34,22 @@ jobs:
       - name: Verify working directory is clean (excluding lockfile)
         run: git diff --exit-code ':!Cargo.lock'
 
-  build-nodefault:
+  build-nostd:
     name: Build target ${{ matrix.target }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         target:
-          - wasm32-wasi
+          - wasm32-wasip1
           - thumbv7em-none-eabihf
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: crate_root
       # We use a synthetic crate to ensure no dev-dependencies are enabled, which can
       # be incompatible with some of these targets.
       - name: Create synthetic crate for testing
-        run: cargo init --lib ci-build
+        run: cargo init --edition 2021 --lib ci-build
       - name: Copy Rust version into synthetic crate
         run: cp crate_root/rust-toolchain.toml ci-build/
       - name: Copy patch directives into synthetic crate
@@ -64,11 +64,18 @@ jobs:
         run: cargo add --no-default-features --path ../crate_root
       - name: Add lazy_static with the spin_no_std feature
         working-directory: ./ci-build
-        run: cargo add lazy_static --features "spin_no_std"
+        run: cargo add lazy_static --no-default-features --features "spin_no_std"
+      - name: Copy pinned dependencies into synthetic crate
+        run: cp crate_root/Cargo.lock ci-build/
+      - name: Show Cargo.toml for the synthetic crate
+        working-directory: ./ci-build
+        run: cat Cargo.toml
+      - name: Copy pinned dependencies into synthetic crate
+        run: cp crate_root/Cargo.lock ci-build/
       - name: Add target
         working-directory: ./ci-build
         run: rustup target add ${{ matrix.target }}
-      - name: Build for target
+      - name: Build no_std for target
         working-directory: ./ci-build
         run: cargo build --verbose --target ${{ matrix.target }}
 
@@ -76,7 +83,7 @@ jobs:
     name: Bitrot check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # Build benchmarks to prevent bitrot
       - name: Build benchmarks
         run: cargo build --all --benches
@@ -85,7 +92,7 @@ jobs:
     name: Clippy (MSRV)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run Clippy
         uses: auguwu/clippy-action@1.4.0
         with:
@@ -97,7 +104,7 @@ jobs:
     name: Intra-doc links
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: cargo fetch
       # Requires #![deny(rustdoc::broken_intra_doc_links)] in crate.
       - name: Check intra-doc links
@@ -107,6 +114,6 @@ jobs:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Check formatting
         run: cargo fmt -- --check

@@ -1,14 +1,12 @@
 use alloc::{string::ToString, vec::Vec};
 use core::{cmp, mem};
 
-use core2::io::Read;
+use corez::io::Read;
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256};
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::log::{debug, info};
 use zcash_encoding::CompactSize;
-use zcash_primitives::encoding::ReadBytesExt;
 use zcash_primitives::transaction::TxVersion;
-use zcash_primitives::transaction::sighash_v5::ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION;
 use zcash_protocol::consensus::BranchId;
 use zcash_protocol::constants::{V5_TX_VERSION, V5_VERSION_GROUP_ID};
 use zcash_protocol::value::Zatoshis;
@@ -21,6 +19,7 @@ use crate::consts::{
     MAX_PCZT_TRANSPARENT_INPUTS_NUMBER, MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE,
 };
 use crate::parser::compute::finalize_signature_hash_from_txin_digest;
+use crate::parser::personalization::ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION;
 use crate::swap;
 use crate::tx::{Hashers, TxInfo, TxOutput, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _};
@@ -32,7 +31,7 @@ use crate::utils::{
     check_bip44_compliance,
 };
 
-use super::reader::ByteReader;
+use super::reader::{ByteReader, ReadBytesExt};
 use super::{ParserError, ok};
 
 const MAGIC_BYTES: &[u8; 4] = b"PCZT";

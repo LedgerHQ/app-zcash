@@ -5,19 +5,19 @@ use alloc::{string::ToString, vec::Vec};
 use core::{iter, mem};
 use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
-use zcash_primitives::transaction::sighash_v5::{
-    ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
-};
 
-use core2::io::Read;
+use self::personalization::{
+    ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
+    ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
+};
+use self::reader::ReadBytesExt;
+use corez::io::Read;
 use ledger_device_sdk::hash::HashInit;
 use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::hmac::{HMACInit, sha2::Sha2_256 as HmacSha256};
 use num_enum::TryFromPrimitive;
 use zcash_encoding::CompactSize;
-use zcash_primitives::encoding::ReadBytesExt;
 use zcash_primitives::transaction::TxVersion;
-use zcash_primitives::transaction::txid::ZCASH_HEADERS_HASH_PERSONALIZATION;
 use zcash_protocol::consensus::BranchId;
 use zcash_protocol::value::Zatoshis;
 use zcash_transparent::address::Script;
@@ -50,6 +50,7 @@ mod orchard;
 pub(crate) mod orchard_decipher;
 mod output_parser;
 mod pczt;
+pub(crate) mod personalization;
 mod reader;
 mod sapling;
 mod transparent;

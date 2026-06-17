@@ -25,10 +25,12 @@ impl OrchardDecipherKeys {
             .to_ovk_ledger(Scope::External)
             .map_err(map_ledger_crypto_error)?
             .as_ref();
+        let mut internal_ivk_bytes = [0u8; 32];
+        internal_ivk_bytes.copy_from_slice(&internal_ivk[32..]);
 
         Ok(Self {
             network,
-            internal_ivk: internal_ivk[32..].try_into().unwrap(),
+            internal_ivk: internal_ivk_bytes,
             external_ovk,
         })
     }

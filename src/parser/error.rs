@@ -1,5 +1,5 @@
 use alloc::string::String;
-use core2::io::Error as IoError;
+use corez::io::Error as IoError;
 
 use ledger_device_sdk::hash::HashError;
 use ledger_device_sdk::hmac::HMACError;
