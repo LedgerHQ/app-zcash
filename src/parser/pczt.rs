@@ -7,6 +7,7 @@ use alloc::{format, string::ToString, vec::Vec};
 use core::{cmp, mem};
 
 use ::orchard::note::TransmittedNoteCiphertext;
+use ::orchard::primitives::redpallas::{SpendAuth, VerificationKey as RedpallasVerificationKey};
 use corez::io::Read;
 use ledger_device_sdk::hash::HashInit as _;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
@@ -48,7 +49,7 @@ use crate::utils::{
     check_bip44_compliance,
     extended_public_key::ExtendedPublicKey,
 };
-use crate::zip32::{derive_orchard_fvk, orchard_network};
+use crate::zip32::{derive_orchard_ask, derive_orchard_fvk, orchard_network};
 
 use super::reader::{ByteReader, ReadBytesExt};
 use super::{ParserError, finalize_and_log_hash, ok};

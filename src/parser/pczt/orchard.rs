@@ -542,6 +542,30 @@ impl PcztParser {
         Ok(())
     }
 
+    fn verify_current_orchard_rk(&self, path: &Bip32Path) -> Result<(), ParserError> {
+        let alpha = self
+            .current_orchard_alpha
+            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+
+        let alpha = ledger_zcash_crypto::pallas_scalar_from_repr(alpha)
+            .map_err(|_| ParserError::from_str("Bad PCZT orchard alpha"))?;
+
+        let ask = ok!(derive_orchard_ask(path));
+        let randomized_ask = ask
+            .randomize_ledger(&alpha)
+            .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
+        let expected_rk: [u8; 32] =
+            (&RedpallasVerificationKey::<SpendAuth>::from(&randomized_ask)).into();
+
+        if expected_rk != self.current_orchard_rk {
+            return Err(ParserError::from_str(
+                "PCZT orchard rk does not match alpha and signing key",
+            ));
+        }
+
+        Ok(())
+    }
+
     fn finish_orchard_anchor(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -699,6 +723,7 @@ impl PcztParser {
         );
 
         let orchard_fvk = ok!(derive_orchard_fvk(&path));
+        self.verify_current_orchard_rk(&path)?;
         let network = orchard_network(&path);
         ctx.tx_info.orchard_decipher_keys =
             Some(ok!(OrchardDecipherKeys::from_fvk(&orchard_fvk, network)));
