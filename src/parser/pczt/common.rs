@@ -114,7 +114,7 @@ impl PcztParser {
     ) -> Result<(), ParserError> {
         if ctx.tx_info.outputs.is_empty() {
             return Err(ParserError::from_str(
-                "No displayable PCZT outputs detected",
+                "No PCZT outputs to display (no transparent outputs, and no Orchard outputs could be decrypted)",
             ));
         }
 

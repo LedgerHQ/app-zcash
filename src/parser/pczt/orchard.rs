@@ -9,7 +9,7 @@ impl PcztParser {
         debug!("PCZT orchard actions start");
 
         let action_count: usize = ok!(CompactSize::read_t(&mut *reader));
-        if action_count > MAX_ORCHARD_ACTIONS {
+        if action_count > MAX_PCZT_ORCHARD_ACTIONS_NUMBER {
             return Err(ParserError::from_str("Too many PCZT orchard actions"));
         }
 
