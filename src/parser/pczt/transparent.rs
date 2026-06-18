@@ -8,15 +8,6 @@ impl PcztParser {
     ) -> Result<(), ParserError> {
         debug!("PCZT transparent inputs start");
 
-        *ctx.tx_info = TxInfo::default();
-
-        ok!(ctx.hashers.init_v5_tx_hashers());
-        ctx.tx_info.tx_version = Some(TxVersion::V5);
-        ctx.tx_info.total_amount = 0;
-
-        self.parse_pczt_header(reader)?;
-        self.parse_global(ctx, reader)?;
-
         let input_count: usize = ok!(CompactSize::read_t(&mut *reader));
         if input_count > MAX_PCZT_TRANSPARENT_INPUTS_NUMBER {
             return Err(ParserError::from_str("Too many PCZT transparent inputs"));

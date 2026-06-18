@@ -67,6 +67,31 @@ fn finish_pczt_if_requested(ctx: &mut TxContext, requested: bool) -> Result<(), 
     Ok(())
 }
 
+pub fn handler_pczt_header(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
+    info!("Reset TX context for PCZT header parsing");
+    ctx.reset(ParserMode::Signature);
+
+    let data = match comm.get_data() {
+        Ok(data) => data,
+        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
+    };
+
+    if let Err(e) = ctx.pczt_parser.parse_header(
+        &mut PcztParserCtx {
+            tx_state: &mut ctx.tx_signing_state,
+            tx_info: &mut ctx.tx_info,
+            hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
+        },
+        data,
+    ) {
+        error!("Error parsing PCZT header data: {:#?}", e);
+        return Err(map_pczt_parser_error(ctx, e));
+    }
+
+    Ok(())
+}
+
 pub fn handler_pczt_transparent_input(
     comm: &mut Comm,
     ctx: &mut TxContext,
@@ -74,8 +99,7 @@ pub fn handler_pczt_transparent_input(
     last: bool,
 ) -> Result<(), AppSW> {
     if first {
-        info!("Reset TX context for PCZT transparent input parsing");
-        ctx.reset(ParserMode::Signature);
+        debug!("Start PCZT transparent input parsing");
     }
 
     let data = match comm.get_data() {

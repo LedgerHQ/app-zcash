@@ -93,11 +93,12 @@ class InsType(IntEnum):
     HASH_SIGN = 0x48
     GET_VK = 0x50
     GET_SHIELDED_ADDRESS = 0x51
-    PCZT_TRANSPARENT_INPUT = 0x52
-    PCZT_TRANSPARENT_OUTPUT = 0x53
-    PCZT_SIGN_TRANSPARENT = 0x54
-    PCZT_ORCHARD_ACTION = 0x55
-    PCZT_SIGN_ORCHARD = 0x56
+    PCZT_HEADER = 0x52
+    PCZT_TRANSPARENT_INPUT = 0x53
+    PCZT_TRANSPARENT_OUTPUT = 0x54
+    PCZT_SIGN_TRANSPARENT = 0x55
+    PCZT_ORCHARD_ACTION = 0x56
+    PCZT_SIGN_ORCHARD = 0x57
 
 class GetVkMode(IntEnum):
     UFVK = 0x00
@@ -501,13 +502,11 @@ class ZcashCommandSender:
 
     def _build_pczt_transparent_input_packets(
         self,
-        pczt_global: PcztGlobal,
         transparent_inputs: list[PcztTransparentInput],
     ) -> list[bytes]:
         packets = [
             self._checked_pczt_packet(
-                self._build_pczt_header_and_global_payload(pczt_global)
-                + write_varint(len(transparent_inputs)),
+                write_varint(len(transparent_inputs)),
                 "transparent inputs header",
             )
         ]
@@ -628,13 +627,23 @@ class ZcashCommandSender:
             return P2.P2_PCZT_FINISHED
         return P2.P2_NONE
 
-    def _send_pczt_transparent_inputs(
+    def _send_pczt_header(
         self,
         pczt_global: PcztGlobal,
+    ) -> None:
+        self.backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_HEADER,
+            p1=P1.P1_FIRST,
+            p2=P2.P2_NONE,
+            data=self._build_pczt_header_and_global_payload(pczt_global),
+        )
+
+    def _send_pczt_transparent_inputs(
+        self,
         transparent_inputs: list[PcztTransparentInput],
     ) -> None:
         packets = self._build_pczt_transparent_input_packets(
-            pczt_global,
             transparent_inputs,
         )
 
@@ -767,7 +776,8 @@ class ZcashCommandSender:
         self.pczt_transparent_inputs = transparent_inputs
         self.pczt_transparent_outputs = transparent_outputs
 
-        self._send_pczt_transparent_inputs(pczt_global, transparent_inputs)
+        self._send_pczt_header(pczt_global)
+        self._send_pczt_transparent_inputs(transparent_inputs)
         self._send_pczt_transparent_outputs_sync(
             self.pczt_transparent_outputs,
         )

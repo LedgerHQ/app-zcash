@@ -100,6 +100,7 @@ enum PcztOrchardField {
 enum PcztParserState {
     #[default]
     WaitHeaderAndGlobal,
+    WaitTransparentInputsCount,
     WaitTransparentInput,
     WaitTransparentInputScript,
     ProcessTransparentInputScript {
@@ -193,10 +194,10 @@ impl PcztParser {
     // This is a compact APDU subset whose field order mirrors the pczt crate structs
     // we consume. The APDU order is fixed: `Pczt` header and `common::Global`,
     // transparent inputs, transparent outputs, then Orchard actions. `Pczt` header
-    // and `common::Global` are sent exactly once at the beginning of
-    // `PCZT_TRANSPARENT_INPUT`; following bundle commands start from their own
-    // bundle fields. `PCZT_ORCHARD_ACTION` is still sent with action count 0 when no
-    // Orchard actions are present.
+    // and `common::Global` are sent exactly once in `PCZT_HEADER`; following bundle
+    // commands start from their own bundle fields. `PCZT_TRANSPARENT_INPUT`,
+    // `PCZT_TRANSPARENT_OUTPUT`, and `PCZT_ORCHARD_ACTION` are still sent with count
+    // 0 when the corresponding section is empty.
     //
     // Primitive encoding:
     //   u8/u32/u64        little-endian, except u8
@@ -396,6 +397,46 @@ impl PcztParser {
         self.pczt_finished && self.is_ready_to_sign()
     }
 
+    pub fn parse_header(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        data: &[u8],
+    ) -> Result<(), ParserError> {
+        let result = (|| {
+            if self.state != PcztParserState::WaitHeaderAndGlobal {
+                return Err(ParserError::from_sw(AppSW::BadState));
+            }
+
+            let mut reader = ByteReader::new(data);
+
+            *ctx.tx_info = TxInfo::default();
+
+            ok!(ctx.hashers.init_v5_tx_hashers());
+            ctx.tx_info.tx_version = Some(TxVersion::V5);
+            ctx.tx_info.total_amount = 0;
+
+            self.parse_pczt_header(&mut reader)?;
+            self.parse_global(ctx, &mut reader)?;
+
+            if reader.remaining_len() != 0 {
+                return Err(ParserError::from_str(
+                    "Unexpected PCZT header data after global fields",
+                ));
+            }
+
+            let prev_state = self.state;
+            self.state = PcztParserState::WaitTransparentInputsCount;
+            info!(
+                "PCZT parser state changed: {:?} -> {:?}",
+                prev_state, self.state
+            );
+
+            Ok(())
+        })();
+
+        self.reset_on_error(result)
+    }
+
     pub fn parse_transparent_inputs(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -408,7 +449,7 @@ impl PcztParser {
                 let prev_state = self.state;
 
                 match self.state {
-                    PcztParserState::WaitHeaderAndGlobal => {
+                    PcztParserState::WaitTransparentInputsCount => {
                         self.parse_transparent_inputs_start(ctx, &mut reader)?
                     }
                     PcztParserState::WaitTransparentInput => {
