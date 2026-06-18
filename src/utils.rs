@@ -174,7 +174,10 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const BIP44_ACCOUNT_OFFSET: usize = 2;
     const BIP44_CHANGE_OFFSET: usize = 3;
     const BIP44_ADDRESS_INDEX_OFFSET: usize = 4;
+    #[cfg(not(feature = "testnet"))]
     const BIP44_COIN_TYPE: u32 = 133;
+    #[cfg(feature = "testnet")]
+    const BIP44_COIN_TYPE: u32 = 1;
     const MAX_BIP44_ACCOUNT_RECOMMENDED: u32 = 100;
     const MAX_BIP44_ADDRESS_INDEX_RECOMMENDED: u32 = 50000;
 

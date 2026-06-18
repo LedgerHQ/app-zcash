@@ -60,6 +60,8 @@ debug = true
 [features]
 default = ["ledger_device_sdk/nano_nbgl", "legacy_path"]
 
+testnet = []
+
 # Enables debug logging
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
 
