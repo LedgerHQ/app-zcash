@@ -747,8 +747,13 @@ impl PcztParser {
             return Err(ParserError::from_sw(AppSW::BadState));
         }
 
-        if self.orchard_signing_records.get(action_index).is_none() {
-            return Err(ParserError::from_str("Bad PCZT orchard action index"));
+        let action = self
+            .orchard_signing_records
+            .get(action_index)
+            .ok_or_else(|| ParserError::from_str("Bad PCZT orchard action index"))?;
+
+        if action.signed {
+            return Err(ParserError::from_str("PCZT orchard action already signed"));
         }
 
         compute_shielded_signature_digest(
@@ -794,10 +799,6 @@ impl PcztParser {
             .orchard_signing_records
             .get_mut(action_index)
             .ok_or_else(|| ParserError::from_str("Bad PCZT orchard action index"))?;
-
-        if action.signed {
-            return Err(ParserError::from_str("PCZT orchard action already signed"));
-        }
 
         action.signed = true;
 
