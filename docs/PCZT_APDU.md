@@ -4,16 +4,17 @@ This document describes the APDU `data` framing used by the app-specific
 `PCZT_*` commands. Every APDU `data` payload MUST be at most 255 bytes.
 
 The byte order inside fields follows the compact PCZT subset parsed by the app:
-`Pczt` header and `common::Global` are sent once at the beginning of
-`PCZT_TRANSPARENT_INPUT`, followed by transparent or Orchard bundle fields in the
-same order as the `pczt` crate structs. Fields marked `SKIPPED` in the Rust parser
-are not sent.
+`Pczt` header and `common::Global` are sent once in `PCZT_HEADER`, followed by
+transparent or Orchard bundle fields in the same order as the `pczt` crate
+structs. Fields marked `SKIPPED` in the Rust parser are not sent.
 
 ## Common rules
 
 - The bundle command order is fixed:
-  `PCZT_TRANSPARENT_INPUT`, then `PCZT_TRANSPARENT_OUTPUT`, then
-  `PCZT_ORCHARD_ACTION`.
+  `PCZT_HEADER`, then `PCZT_TRANSPARENT_INPUT`, then
+  `PCZT_TRANSPARENT_OUTPUT`, then `PCZT_ORCHARD_ACTION`.
+- `PCZT_HEADER` is sent exactly once and contains only the `Pczt` header and
+  `common::Global` fields.
 - `PCZT_TRANSPARENT_INPUT` and `PCZT_TRANSPARENT_OUTPUT` are always sent. Use
   count `0` when either transparent section is empty.
 - `PCZT_ORCHARD_ACTION` is always sent. Use Orchard action count `0` when the
@@ -31,17 +32,29 @@ are not sent.
   bytes.
 - `bip32_derivation` and `zip32_derivation` fields MUST each fit in, and be sent
   as, one APDU packet.
-- The current app limits are: at most 10 transparent inputs, at most 8
+- The current app limits are: at most 10 transparent inputs, at most 10
   transparent outputs, and at most 10 Orchard actions.
+
+## PCZT_HEADER
+
+Single packet:
+
+- magic bytes `PCZT`
+- PCZT version `u32`
+- `common::Global`:
+  - `tx_version u32`
+  - `version_group_id u32`
+  - `consensus_branch_id u32`
+  - `fallback_lock_time Option<u32>`
+  - `expiry_height u32`
+  - `coin_type u32`
+  - `tx_modifiable u8`
 
 ## PCZT_TRANSPARENT_INPUT
 
 Packet sequence:
 
-1. Header packet:
-   - magic bytes `PCZT`
-   - PCZT version `u32`
-   - `common::Global`
+1. Count packet:
    - transparent input count as CompactSize
 
 2. For each `transparent::Input`, in order:

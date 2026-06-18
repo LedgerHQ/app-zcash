@@ -94,27 +94,38 @@ the first response chunk. User rejection returns `Deny` with an empty response.
 If P1 is `0x01` and the user rejects the address, the command returns `Deny`
 with an empty response.
 
-## INS_PCZT_TRANSPARENT_INPUT
+## INS_PCZT_HEADER
 
 - INS: `0x52`
+- P1: `0x00`
+- P2: `0x00`
+- Data: PCZT magic bytes, PCZT version, and `common::Global` fields.
+- Response: empty.
+
+This command resets the transaction context and starts a new PCZT payload. It
+must be sent exactly once before any PCZT bundle command. See
+[PCZT_APDU.md](./PCZT_APDU.md#pczt_header) for the exact payload layout.
+
+## INS_PCZT_TRANSPARENT_INPUT
+
+- INS: `0x53`
 - P1:
   - `0x00`: first APDU packet for this command
   - `0x80`: continuation APDU packet
   - `0x01`: last APDU packet for this command
 - P2:
   - `0x00`: PCZT data continues in later PCZT bundle commands
-- Data: PCZT header, global fields, and transparent input fields.
+- Data: transparent input fields.
 - Response: empty.
 
-This command resets the transaction context when P1 is `0x00`. It is always
-sent, even when the transparent input count is `0`; in that case the payload
-contains the PCZT header/global fields and CompactSize input count `0`. See
+This command is always sent, even when the transparent input count is `0`; in
+that case the payload contains only CompactSize input count `0`. See
 [PCZT_APDU.md](./PCZT_APDU.md#pczt_transparent_input) for the exact payload
 layout.
 
 ## INS_PCZT_TRANSPARENT_OUTPUT
 
-- INS: `0x53`
+- INS: `0x54`
 - P1:
   - `0x00`: first APDU packet for this command
   - `0x80`: continuation APDU packet
@@ -131,7 +142,7 @@ layout.
 
 ## INS_PCZT_ORCHARD_ACTION
 
-- INS: `0x55`
+- INS: `0x56`
 - P1:
   - `0x00`: first APDU packet for this command
   - `0x80`: continuation APDU packet
@@ -150,7 +161,7 @@ for the exact payload layout.
 
 ## INS_PCZT_SIGN_TRANSPARENT
 
-- INS: `0x54`
+- INS: `0x55`
 - P1: `0x00`
 - P2: transparent input index to sign.
 - Data: empty.
@@ -163,7 +174,7 @@ is accepted. Each transparent input can be signed only once.
 
 ## INS_PCZT_SIGN_ORCHARD
 
-- INS: `0x56`
+- INS: `0x57`
 - P1: `0x00`
 - P2: Orchard action index to sign.
 - Data: empty.
