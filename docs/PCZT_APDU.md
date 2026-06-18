@@ -8,6 +8,10 @@ The byte order inside fields follows the compact PCZT subset parsed by the app:
 transparent or Orchard bundle fields in the same order as the `pczt` crate
 structs. Fields marked `SKIPPED` in the Rust parser are not sent.
 
+PCZT `bip32_derivation` and `zip32_derivation` paths use the standard app
+`Bip32Path` encoding: `path_len u8` followed by that many big-endian `u32`
+components.
+
 ## Common rules
 
 - The bundle command order is fixed:
@@ -72,8 +76,7 @@ Packet sequence:
        - CompactSize entry count, currently exactly `1`
        - compressed public key `[u8; 33]`
        - seed fingerprint `[u8; 32]`
-       - derivation path component count as CompactSize
-       - derivation path components as little-endian `u32`
+       - derivation path as `Bip32Path`
 
 ## PCZT_TRANSPARENT_OUTPUT
 
@@ -92,8 +95,7 @@ Packet sequence:
      - CompactSize entry count, currently `0` or `1`
      - if present, compressed public key `[u8; 33]`
      - if present, seed fingerprint `[u8; 32]`
-     - if present, derivation path component count as CompactSize
-     - if present, derivation path components as little-endian `u32`
+     - if present, derivation path as `Bip32Path`
 
 ## PCZT_ORCHARD_ACTION
 
@@ -110,8 +112,7 @@ Packet sequence:
      - `alpha [u8; 32]`
    - `zip32_derivation` packet:
      - seed fingerprint `[u8; 32]`
-     - derivation path component count as CompactSize
-     - derivation path components as little-endian `u32`
+     - derivation path as `Bip32Path`
    - Output small fields packet:
      - `cmx [u8; 32]`
      - `ephemeral_key [u8; 32]`

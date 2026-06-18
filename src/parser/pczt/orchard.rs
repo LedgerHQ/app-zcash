@@ -23,16 +23,7 @@ impl PcztParser {
 
         self.pczt_finished = false;
 
-        self.orchard_action_count = action_count;
-        self.orchard_action_parsed_count = 0;
-        self.orchard_signing_records.clear();
-        self.orchard_signed_action_count = 0;
-        self.orchard_value_balance = 0;
-        self.orchard_decrypted_output_count = 0;
-        self.current_orchard_flags = 0;
-        self.current_orchard_value_sum_magnitude = 0;
-        self.reset_current_orchard_action();
-        self.orchard_field_bytes.clear();
+        self.reset_orchard_bundle_state(action_count);
 
         if action_count == 0 {
             self.finalize_orchard_actions(ctx)?;
@@ -50,103 +41,211 @@ impl PcztParser {
                 .tx_non_compact_hasher
                 .init_with_perso(ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION));
 
-            self.state = PcztParserState::ProcessOrchardField {
-                field: PcztOrchardField::CvNet,
-            };
+            self.state = PcztParserState::WaitOrchardAction;
         }
 
         Ok(())
     }
 
-    pub(super) fn parse_orchard_field(
+    pub(super) fn parse_orchard_action(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
         reader: &mut ByteReader<'_>,
-        field: PcztOrchardField,
     ) -> Result<(), ParserError> {
-        match field {
-            PcztOrchardField::EncCiphertextLen => {
-                let size: usize = ok!(CompactSize::read_t(&mut *reader));
+        ok!(reader.read_exact(&mut self.current_orchard_cv_net));
+        ok!(ctx
+            .hashers
+            .tx_non_compact_hasher
+            .update(&self.current_orchard_cv_net));
+        debug!(
+            "PCZT orchard action #{} cv_net: {}",
+            self.orchard_action_parsed_count,
+            HexSlice(&self.current_orchard_cv_net)
+        );
 
-                if size != ORCHARD_ENC_CIPHERTEXT_SIZE {
-                    return Err(ParserError::from_str(
-                        "Bad PCZT orchard enc_ciphertext size",
-                    ));
-                }
+        ok!(reader.read_exact(&mut self.current_orchard_nullifier));
+        ok!(ctx
+            .hashers
+            .tx_compact_hasher
+            .update(&self.current_orchard_nullifier));
+        debug!(
+            "PCZT orchard action #{} nullifier: {}",
+            self.orchard_action_parsed_count,
+            HexSlice(&self.current_orchard_nullifier)
+        );
 
-                debug!(
-                    "PCZT orchard action #{} enc_ciphertext size: {}",
-                    self.orchard_action_parsed_count, size
-                );
-                self.state = PcztParserState::ProcessOrchardField {
-                    field: PcztOrchardField::EncCiphertext,
-                };
-                if reader.remaining_len() == 0 {
-                    return Err(ParserError::from_str(
-                        "Missing PCZT orchard enc_ciphertext bytes",
-                    ));
-                }
-            }
-            PcztOrchardField::OutCiphertextLen => {
-                let size: usize = ok!(CompactSize::read_t(&mut *reader));
+        ok!(reader.read_exact(&mut self.current_orchard_rk));
+        ok!(ctx
+            .hashers
+            .tx_non_compact_hasher
+            .update(&self.current_orchard_rk));
+        debug!(
+            "PCZT orchard action #{} rk: {}",
+            self.orchard_action_parsed_count,
+            HexSlice(&self.current_orchard_rk)
+        );
 
-                if size != ORCHARD_OUT_CIPHERTEXT_SIZE {
-                    return Err(ParserError::from_str(
-                        "Bad PCZT orchard out_ciphertext size",
-                    ));
-                }
+        let mut alpha = [0u8; 32];
+        ok!(reader.read_exact(&mut alpha));
+        debug!(
+            "PCZT orchard action #{} alpha: {}",
+            self.orchard_action_parsed_count,
+            HexSlice(&alpha)
+        );
+        self.current_orchard_alpha = Some(alpha);
 
-                debug!(
-                    "PCZT orchard action #{} out_ciphertext size: {}",
-                    self.orchard_action_parsed_count, size
-                );
-                self.state = PcztParserState::ProcessOrchardField {
-                    field: PcztOrchardField::OutCiphertext,
-                };
-                if reader.remaining_len() == 0 {
-                    return Err(ParserError::from_str(
-                        "Missing PCZT orchard out_ciphertext bytes",
-                    ));
-                }
-            }
-            PcztOrchardField::Zip32Derivation { expected_size } => {
-                self.parse_orchard_zip32_derivation(ctx, reader, expected_size)?;
-            }
-            PcztOrchardField::EncCiphertext | PcztOrchardField::OutCiphertext => {
-                let size = Self::orchard_vec_field_size(field)?;
-                let Some(bytes) = self.read_large_orchard_vec(reader, size)? else {
-                    return Ok(());
-                };
+        Self::ensure_orchard_apdu_group_end(reader)?;
+        self.state = PcztParserState::WaitOrchardZip32Derivation;
 
-                self.finish_orchard_vec_field(ctx, field, bytes)?;
-            }
-            _ => {
-                self.finish_orchard_field(ctx, reader, field)?;
-            }
+        Ok(())
+    }
+
+    pub(super) fn parse_orchard_output(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        ok!(reader.read_exact(&mut self.current_orchard_cmx));
+        ok!(ctx
+            .hashers
+            .tx_compact_hasher
+            .update(&self.current_orchard_cmx));
+        debug!(
+            "PCZT orchard action #{} cmx: {}",
+            self.orchard_action_parsed_count,
+            HexSlice(&self.current_orchard_cmx)
+        );
+
+        ok!(reader.read_exact(&mut self.current_orchard_ephemeral_key));
+        ok!(ctx
+            .hashers
+            .tx_compact_hasher
+            .update(&self.current_orchard_ephemeral_key));
+        debug!(
+            "PCZT orchard action #{} ephemeral_key: {}",
+            self.orchard_action_parsed_count,
+            HexSlice(&self.current_orchard_ephemeral_key)
+        );
+
+        Self::ensure_orchard_apdu_group_end(reader)?;
+        self.state = PcztParserState::WaitOrchardEncCiphertextLen;
+
+        Ok(())
+    }
+
+    pub(super) fn parse_orchard_enc_ciphertext_len(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let size: usize = ok!(CompactSize::read_t(&mut *reader));
+
+        if size != ORCHARD_ENC_CIPHERTEXT_SIZE {
+            return Err(ParserError::from_str(
+                "Bad PCZT orchard enc_ciphertext size",
+            ));
         }
 
-        if matches!(
-            field,
-            PcztOrchardField::Alpha
-                | PcztOrchardField::EphemeralKey
-                | PcztOrchardField::EncCiphertext
-                | PcztOrchardField::OutCiphertext
-        ) && reader.remaining_len() != 0
-        {
+        debug!(
+            "PCZT orchard action #{} enc_ciphertext size: {}",
+            self.orchard_action_parsed_count, size
+        );
+
+        self.state = PcztParserState::ProcessOrchardEncCiphertext;
+        if reader.remaining_len() == 0 {
+            return Err(ParserError::from_str(
+                "Missing PCZT orchard enc_ciphertext bytes",
+            ));
+        }
+
+        self.parse_orchard_enc_ciphertext(ctx, reader)
+    }
+
+    pub(super) fn parse_orchard_enc_ciphertext(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let Some(bytes) = self.read_large_orchard_vec(reader, ORCHARD_ENC_CIPHERTEXT_SIZE)? else {
+            return Ok(());
+        };
+
+        self.finish_orchard_enc_ciphertext(ctx, bytes)?;
+        Self::ensure_orchard_apdu_group_end(reader)
+    }
+
+    pub(super) fn parse_orchard_out_ciphertext_len(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let size: usize = ok!(CompactSize::read_t(&mut *reader));
+
+        if size != ORCHARD_OUT_CIPHERTEXT_SIZE {
+            return Err(ParserError::from_str(
+                "Bad PCZT orchard out_ciphertext size",
+            ));
+        }
+
+        debug!(
+            "PCZT orchard action #{} out_ciphertext size: {}",
+            self.orchard_action_parsed_count, size
+        );
+
+        self.state = PcztParserState::ProcessOrchardOutCiphertext;
+        if reader.remaining_len() == 0 {
+            return Err(ParserError::from_str(
+                "Missing PCZT orchard out_ciphertext bytes",
+            ));
+        }
+
+        self.parse_orchard_out_ciphertext(ctx, reader)
+    }
+
+    pub(super) fn parse_orchard_out_ciphertext(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let Some(bytes) = self.read_large_orchard_vec(reader, ORCHARD_OUT_CIPHERTEXT_SIZE)? else {
+            return Ok(());
+        };
+
+        self.finish_orchard_out_ciphertext(ctx, bytes)?;
+        Self::ensure_orchard_apdu_group_end(reader)
+    }
+
+    pub(super) fn parse_orchard_trailer(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let flags = ok!(orchard_component::read_flags(&mut *reader));
+        self.current_orchard_flags = flags.to_byte();
+        debug!("PCZT orchard flags: {:02x}", self.current_orchard_flags);
+
+        self.current_orchard_value_sum_magnitude = ok!(reader.read_u64_le());
+        debug!(
+            "PCZT orchard value_sum magnitude: {}",
+            self.current_orchard_value_sum_magnitude
+        );
+
+        self.finish_orchard_value_sum_sign(ok!(reader.read_u8()))?;
+
+        let mut anchor = [0u8; 32];
+        ok!(reader.read_exact(&mut anchor));
+        Self::ensure_orchard_apdu_group_end(reader)?;
+        self.finish_orchard_anchor(ctx, &anchor)
+    }
+
+    fn ensure_orchard_apdu_group_end(reader: &ByteReader<'_>) -> Result<(), ParserError> {
+        if reader.remaining_len() != 0 {
             return Err(ParserError::from_str(
                 "Unexpected data after PCZT orchard APDU field group",
             ));
         }
 
         Ok(())
-    }
-
-    fn orchard_vec_field_size(field: PcztOrchardField) -> Result<usize, ParserError> {
-        match field {
-            PcztOrchardField::EncCiphertext => Ok(ORCHARD_ENC_CIPHERTEXT_SIZE),
-            PcztOrchardField::OutCiphertext => Ok(ORCHARD_OUT_CIPHERTEXT_SIZE),
-            _ => Err(ParserError::from_sw(AppSW::BadState)),
-        }
     }
 
     fn read_large_orchard_vec(
@@ -178,140 +277,6 @@ impl PcztParser {
         }
     }
 
-    fn finish_orchard_field(
-        &mut self,
-        ctx: &mut PcztParserCtx<'_>,
-        reader: &mut ByteReader<'_>,
-        field: PcztOrchardField,
-    ) -> Result<(), ParserError> {
-        match field {
-            PcztOrchardField::CvNet => {
-                ok!(reader.read_exact(&mut self.current_orchard_cv_net));
-                ok!(ctx
-                    .hashers
-                    .tx_non_compact_hasher
-                    .update(&self.current_orchard_cv_net));
-                debug!(
-                    "PCZT orchard action #{} cv_net: {}",
-                    self.orchard_action_parsed_count,
-                    HexSlice(&self.current_orchard_cv_net)
-                );
-                self.set_orchard_field(PcztOrchardField::Nullifier);
-            }
-            PcztOrchardField::Nullifier => {
-                ok!(reader.read_exact(&mut self.current_orchard_nullifier));
-                ok!(ctx
-                    .hashers
-                    .tx_compact_hasher
-                    .update(&self.current_orchard_nullifier));
-                debug!(
-                    "PCZT orchard action #{} nullifier: {}",
-                    self.orchard_action_parsed_count,
-                    HexSlice(&self.current_orchard_nullifier)
-                );
-                self.set_orchard_field(PcztOrchardField::Rk);
-            }
-            PcztOrchardField::Rk => {
-                ok!(reader.read_exact(&mut self.current_orchard_rk));
-                ok!(ctx
-                    .hashers
-                    .tx_non_compact_hasher
-                    .update(&self.current_orchard_rk));
-                debug!(
-                    "PCZT orchard action #{} rk: {}",
-                    self.orchard_action_parsed_count,
-                    HexSlice(&self.current_orchard_rk)
-                );
-                self.set_orchard_field(PcztOrchardField::Alpha);
-            }
-            PcztOrchardField::Alpha => {
-                let mut alpha = [0u8; 32];
-                ok!(reader.read_exact(&mut alpha));
-                debug!(
-                    "PCZT orchard action #{} alpha: {}",
-                    self.orchard_action_parsed_count,
-                    HexSlice(&alpha)
-                );
-                self.current_orchard_alpha = Some(alpha);
-                self.orchard_field_bytes.clear();
-                self.set_orchard_field(PcztOrchardField::Zip32Derivation {
-                    expected_size: None,
-                });
-            }
-            PcztOrchardField::Cmx => {
-                ok!(reader.read_exact(&mut self.current_orchard_cmx));
-                ok!(ctx
-                    .hashers
-                    .tx_compact_hasher
-                    .update(&self.current_orchard_cmx));
-                debug!(
-                    "PCZT orchard action #{} cmx: {}",
-                    self.orchard_action_parsed_count,
-                    HexSlice(&self.current_orchard_cmx)
-                );
-                self.set_orchard_field(PcztOrchardField::EphemeralKey);
-            }
-            PcztOrchardField::EphemeralKey => {
-                ok!(reader.read_exact(&mut self.current_orchard_ephemeral_key));
-                ok!(ctx
-                    .hashers
-                    .tx_compact_hasher
-                    .update(&self.current_orchard_ephemeral_key));
-                debug!(
-                    "PCZT orchard action #{} ephemeral_key: {}",
-                    self.orchard_action_parsed_count,
-                    HexSlice(&self.current_orchard_ephemeral_key)
-                );
-                self.set_orchard_field(PcztOrchardField::EncCiphertextLen);
-            }
-            PcztOrchardField::Flags => {
-                let flags = ok!(orchard_component::read_flags(&mut *reader));
-                self.current_orchard_flags = flags.to_byte();
-                debug!("PCZT orchard flags: {:02x}", self.current_orchard_flags);
-                self.set_orchard_field(PcztOrchardField::ValueSumMagnitude);
-            }
-            PcztOrchardField::ValueSumMagnitude => {
-                self.current_orchard_value_sum_magnitude = ok!(reader.read_u64_le());
-                debug!(
-                    "PCZT orchard value_sum magnitude: {}",
-                    self.current_orchard_value_sum_magnitude
-                );
-                self.set_orchard_field(PcztOrchardField::ValueSumSign);
-            }
-            PcztOrchardField::ValueSumSign => {
-                self.finish_orchard_value_sum_sign(ok!(reader.read_u8()))?;
-                self.set_orchard_field(PcztOrchardField::Anchor);
-            }
-            PcztOrchardField::Anchor => {
-                let mut anchor = [0u8; 32];
-                ok!(reader.read_exact(&mut anchor));
-                self.finish_orchard_anchor(ctx, &anchor)?;
-            }
-            _ => {
-                return Err(ParserError::from_sw(AppSW::BadState));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn finish_orchard_vec_field(
-        &mut self,
-        ctx: &mut PcztParserCtx<'_>,
-        field: PcztOrchardField,
-        bytes: Vec<u8>,
-    ) -> Result<(), ParserError> {
-        match field {
-            PcztOrchardField::EncCiphertext => self.finish_orchard_enc_ciphertext(ctx, bytes),
-            PcztOrchardField::OutCiphertext => self.finish_orchard_out_ciphertext(ctx, bytes),
-            _ => Err(ParserError::from_sw(AppSW::BadState)),
-        }
-    }
-
-    fn set_orchard_field(&mut self, field: PcztOrchardField) {
-        self.state = PcztParserState::ProcessOrchardField { field };
-    }
-
     pub(super) fn reset_current_orchard_action(&mut self) {
         self.current_orchard_cv_net = [0; 32];
         self.current_orchard_nullifier = [0; 32];
@@ -321,6 +286,19 @@ impl PcztParser {
         self.current_orchard_enc_ciphertext.clear();
         self.current_orchard_alpha = None;
         self.current_orchard_path = None;
+    }
+
+    pub(super) fn reset_orchard_bundle_state(&mut self, action_count: usize) {
+        self.orchard_action_count = action_count;
+        self.orchard_action_parsed_count = 0;
+        self.orchard_signing_records.clear();
+        self.orchard_signed_action_count = 0;
+        self.orchard_signature_digest = None;
+        self.orchard_value_balance = 0;
+        self.current_orchard_flags = 0;
+        self.current_orchard_value_sum_magnitude = 0;
+        self.reset_current_orchard_action();
+        self.orchard_field_bytes.clear();
     }
 
     fn finish_orchard_enc_ciphertext(
@@ -353,7 +331,7 @@ impl PcztParser {
         );
 
         self.current_orchard_enc_ciphertext = enc_ciphertext;
-        self.set_orchard_field(PcztOrchardField::OutCiphertextLen);
+        self.state = PcztParserState::WaitOrchardOutCiphertextLen;
 
         Ok(())
     }
@@ -405,9 +383,9 @@ impl PcztParser {
         self.orchard_action_parsed_count = self.orchard_action_parsed_count.saturating_add(1);
 
         if self.orchard_action_parsed_count == self.orchard_action_count {
-            self.set_orchard_field(PcztOrchardField::Flags);
+            self.state = PcztParserState::WaitOrchardTrailer;
         } else {
-            self.set_orchard_field(PcztOrchardField::CvNet);
+            self.state = PcztParserState::WaitOrchardAction;
         }
 
         Ok(())
@@ -423,15 +401,17 @@ impl PcztParser {
             ));
         }
 
-        let mut raw_ciphertext =
-            [0u8; 32 + ORCHARD_ENC_CIPHERTEXT_SIZE + ORCHARD_OUT_CIPHERTEXT_SIZE];
-        raw_ciphertext[..32].copy_from_slice(&self.current_orchard_ephemeral_key);
-        raw_ciphertext[32..32 + ORCHARD_ENC_CIPHERTEXT_SIZE]
-            .copy_from_slice(&self.current_orchard_enc_ciphertext);
-        raw_ciphertext[32 + ORCHARD_ENC_CIPHERTEXT_SIZE..].copy_from_slice(&out_ciphertext);
+        let enc_ciphertext: [u8; ORCHARD_ENC_CIPHERTEXT_SIZE] = self
+            .current_orchard_enc_ciphertext
+            .as_slice()
+            .try_into()
+            .map_err(|_| ParserError::from_str("Bad PCZT orchard enc_ciphertext length"))?;
 
-        let mut reader = ByteReader::new(&raw_ciphertext);
-        Ok(ok!(orchard_component::read_note_ciphertext(&mut reader)))
+        Ok(TransmittedNoteCiphertext {
+            epk_bytes: self.current_orchard_ephemeral_key,
+            enc_ciphertext,
+            out_ciphertext,
+        })
     }
 
     fn current_orchard_compact_action(
@@ -522,8 +502,6 @@ impl PcztParser {
             ctx.tx_info.is_change_found = true;
         }
 
-        self.orchard_decrypted_output_count = self.orchard_decrypted_output_count.saturating_add(1);
-
         Ok(())
     }
 
@@ -613,98 +591,43 @@ impl PcztParser {
         self.finalize_orchard_actions(ctx)
     }
 
-    fn parse_orchard_zip32_derivation(
+    pub(super) fn parse_orchard_zip32_derivation(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
         reader: &mut ByteReader<'_>,
-        mut expected_size: Option<usize>,
     ) -> Result<(), ParserError> {
-        loop {
-            let (target_size, is_header_target) = if let Some(size) = expected_size {
-                (size, false)
-            } else {
-                match Self::parse_derivation_path_count(
-                    &self.orchard_field_bytes,
-                    ZIP32_SEED_FINGERPRINT_SIZE,
-                    "Bad PCZT orchard zip32 derivation path length",
-                )? {
-                    PathCountParse::NeedMore(size) => (size, true),
-                    PathCountParse::Ready {
-                        path_count,
-                        path_offset,
-                    } => {
-                        let size = path_offset + path_count * 4;
-                        debug!(
-                            "PCZT orchard action #{} zip32 derivation path len: {}",
-                            self.orchard_action_parsed_count, path_count
-                        );
-                        (size, false)
-                    }
-                }
-            };
-
-            let missing = target_size.saturating_sub(self.orchard_field_bytes.len());
-
-            if missing > 0 {
-                let to_read = cmp::min(missing, reader.remaining_len());
-                if to_read == 0 {
-                    return Err(ParserError::from_str(
-                        "Incomplete PCZT orchard zip32 derivation APDU",
-                    ));
-                }
-
-                let offset = self.orchard_field_bytes.len();
-                self.orchard_field_bytes.resize(offset + to_read, 0);
-                ok!(reader.read_exact(&mut self.orchard_field_bytes[offset..]));
+        let derivation_len = {
+            let derivation = reader.remaining_slice();
+            if derivation.is_empty() {
+                return Err(ParserError::from_str(
+                    "Missing PCZT orchard zip32 derivation bytes",
+                ));
             }
 
-            if self.orchard_field_bytes.len() == target_size {
-                if is_header_target {
-                    expected_size = None;
-                    continue;
-                }
+            let derivation_len = derivation.len();
+            self.finish_orchard_zip32_derivation(ctx, derivation)?;
+            derivation_len
+        };
+        ok!(reader.advance(derivation_len));
 
-                self.finish_orchard_zip32_derivation(ctx)?;
-
-                if reader.remaining_len() != 0 {
-                    return Err(ParserError::from_str(
-                        "Unexpected data after PCZT orchard zip32 derivation",
-                    ));
-                }
-
-                return Ok(());
-            }
+        if reader.remaining_len() != 0 {
+            return Err(ParserError::from_str(
+                "Unexpected data after PCZT orchard zip32 derivation",
+            ));
         }
+
+        Ok(())
     }
 
     fn finish_orchard_zip32_derivation(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
+        derivation: &[u8],
     ) -> Result<(), ParserError> {
-        let derivation = mem::take(&mut self.orchard_field_bytes);
+        let path =
+            Bip32Path::try_from(derivation.get(ZIP32_SEED_FINGERPRINT_SIZE..).unwrap_or(&[]))
+                .map_err(|_| ParserError::from_str("Bad PCZT orchard zip32 derivation path"))?;
         let seed_fingerprint = &derivation[..ZIP32_SEED_FINGERPRINT_SIZE];
-        let (path_count, path_offset) = match Self::parse_derivation_path_count(
-            &derivation,
-            ZIP32_SEED_FINGERPRINT_SIZE,
-            "Bad PCZT orchard zip32 derivation path length",
-        )? {
-            PathCountParse::Ready {
-                path_count,
-                path_offset,
-            } => (path_count, path_offset),
-            PathCountParse::NeedMore(_) => {
-                return Err(ParserError::from_str(
-                    "Incomplete PCZT orchard zip32 derivation",
-                ));
-            }
-        };
-
-        let mut derivation_path = Vec::new();
-        for chunk in derivation[path_offset..path_offset + path_count * 4].chunks_exact(4) {
-            derivation_path.push(u32::from_le_bytes(chunk.try_into().unwrap()));
-        }
-
-        let path = ok!(Bip32Path::try_from(derivation_path.as_slice()));
 
         if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
             return Err(ParserError::from_str(
@@ -733,7 +656,7 @@ impl PcztParser {
         );
 
         self.current_orchard_path = Some(path);
-        self.set_orchard_field(PcztOrchardField::Cmx);
+        self.state = PcztParserState::WaitOrchardOutput;
 
         Ok(())
     }
@@ -756,11 +679,16 @@ impl PcztParser {
             return Err(ParserError::from_str("PCZT orchard action already signed"));
         }
 
-        compute_shielded_signature_digest(
-            tx_info,
-            self.transparent_input_count,
-            self.transparent_output_count,
-        )?;
+        if let Some(signature_digest) = self.orchard_signature_digest {
+            tx_info.signature_digest = signature_digest;
+        } else {
+            compute_shielded_signature_digest(
+                tx_info,
+                self.transparent_input_count,
+                self.transparent_output_count,
+            )?;
+            self.orchard_signature_digest = Some(tx_info.signature_digest);
+        }
 
         debug!(
             "Computed PCZT shielded signature digest for Orchard action #{} signing: {}",

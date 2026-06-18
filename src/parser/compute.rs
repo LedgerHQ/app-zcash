@@ -3,9 +3,10 @@ use crate::parser::personalization::{
     ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
     ZCASH_TX_PERSONALIZATION_PREFIX,
 };
+use corez::io::Write;
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
 use ledger_device_sdk::log::{debug, info};
-use zcash_transparent::address::Script;
+use zcash_encoding::CompactSize;
 
 use crate::{
     consts::SIGHASH_ALL,
@@ -207,10 +208,20 @@ pub fn compute_transparent_input_signature_digest(
     )
 }
 
+pub fn write_transparent_script<W: Write>(
+    mut writer: W,
+    script_pubkey: &[u8],
+) -> Result<(), ParserError> {
+    ok!(CompactSize::write(&mut writer, script_pubkey.len()));
+    ok!(writer.write_all(script_pubkey));
+
+    Ok(())
+}
+
 pub fn transparent_input_txin_signature_digest(
     prevout: &[u8],
     amount: &[u8; 8],
-    script_pubkey: &Script,
+    script_pubkey: &[u8],
     sequence: u32,
 ) -> Result<[u8; 32], ParserError> {
     let mut txin_sig_digest = [0u8; 32];
@@ -218,7 +229,7 @@ pub fn transparent_input_txin_signature_digest(
     ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
     ok!(hasher.update(prevout));
     ok!(hasher.update(amount));
-    ok!(script_pubkey.write(hasher.as_writer()));
+    write_transparent_script(hasher.as_writer(), script_pubkey)?;
     ok!(hasher.update(&sequence.to_le_bytes()));
     ok!(hasher.finalize(&mut txin_sig_digest));
 

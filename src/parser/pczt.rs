@@ -19,7 +19,6 @@ use zcash_primitives::transaction::components::orchard as orchard_component;
 use zcash_protocol::consensus::{BranchId, NetworkType};
 use zcash_protocol::constants::{V5_TX_VERSION, V5_VERSION_GROUP_ID};
 use zcash_protocol::value::Zatoshis;
-use zcash_transparent::address::Script;
 use zcash_transparent::bundle::OutPoint;
 
 use crate::AppSW;
@@ -30,7 +29,7 @@ use crate::consts::{
 };
 use crate::parser::compute::{
     compute_shielded_signature_digest, compute_transparent_input_signature_digest,
-    transparent_input_txin_signature_digest,
+    transparent_input_txin_signature_digest, write_transparent_script,
 };
 use crate::parser::orchard::ORCHARD_MEMO_SIZE;
 use crate::parser::orchard_decipher::{
@@ -45,7 +44,7 @@ use crate::utils::check_output_displayable;
 use crate::utils::{
     Bip44CheckMode, CheckDispOutput, HexSlice,
     base58_address::{Base58Address, ToBase58Address},
-    bip32_path::{Bip32Path, MAX_ZCASH_BIP32_PATH},
+    bip32_path::Bip32Path,
     check_bip44_compliance,
     extended_public_key::ExtendedPublicKey,
     hashers::ToHash160,
@@ -70,33 +69,6 @@ const ZIP32_DERIVATION_PATH_COUNT_OFFSET: usize =
 const ORCHARD_ENC_CIPHERTEXT_TAG_OFFSET: usize =
     ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE + ORCHARD_MEMO_SIZE;
 
-enum PathCountParse {
-    NeedMore(usize),
-    Ready {
-        path_count: usize,
-        path_offset: usize,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum PcztOrchardField {
-    CvNet,
-    Nullifier,
-    Rk,
-    Alpha,
-    Zip32Derivation { expected_size: Option<usize> },
-    Cmx,
-    EphemeralKey,
-    EncCiphertextLen,
-    EncCiphertext,
-    OutCiphertextLen,
-    OutCiphertext,
-    Flags,
-    ValueSumMagnitude,
-    ValueSumSign,
-    Anchor,
-}
-
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 enum PcztParserState {
     #[default]
@@ -110,9 +82,6 @@ enum PcztParserState {
     },
     WaitTransparentInputSighashType,
     WaitTransparentInputBip32Derivation,
-    ProcessTransparentInputBip32Derivation {
-        expected_size: Option<usize>,
-    },
     TransparentInputsDone,
     WaitTransparentOutput,
     WaitTransparentOutputScript,
@@ -121,14 +90,33 @@ enum PcztParserState {
         remaining_size: usize,
     },
     WaitTransparentOutputBip32Derivation,
-    ProcessTransparentOutputBip32Derivation {
-        expected_size: Option<usize>,
-    },
     TransparentOutputsDone,
-    ProcessOrchardField {
-        field: PcztOrchardField,
-    },
+    WaitOrchardAction,
+    WaitOrchardZip32Derivation,
+    WaitOrchardOutput,
+    WaitOrchardEncCiphertextLen,
+    ProcessOrchardEncCiphertext,
+    WaitOrchardOutCiphertextLen,
+    ProcessOrchardOutCiphertext,
+    WaitOrchardTrailer,
     OrchardActionsDone,
+}
+
+impl PcztParserState {
+    fn is_orchard_state(self) -> bool {
+        matches!(
+            self,
+            PcztParserState::WaitOrchardAction
+                | PcztParserState::WaitOrchardZip32Derivation
+                | PcztParserState::WaitOrchardOutput
+                | PcztParserState::WaitOrchardEncCiphertextLen
+                | PcztParserState::ProcessOrchardEncCiphertext
+                | PcztParserState::WaitOrchardOutCiphertextLen
+                | PcztParserState::ProcessOrchardOutCiphertext
+                | PcztParserState::WaitOrchardTrailer
+                | PcztParserState::OrchardActionsDone
+        )
+    }
 }
 
 struct PcztTransparentInputRecord {
@@ -172,8 +160,8 @@ pub struct PcztParser {
     orchard_action_parsed_count: usize,
     orchard_signing_records: Vec<PcztOrchardActionSigningRecord>,
     orchard_signed_action_count: usize,
+    orchard_signature_digest: Option<[u8; 32]>,
     orchard_value_balance: i64,
-    orchard_decrypted_output_count: usize,
     current_orchard_flags: u8,
     current_orchard_value_sum_magnitude: u64,
     current_orchard_cv_net: [u8; 32],
@@ -185,26 +173,28 @@ pub struct PcztParser {
     current_orchard_alpha: Option<[u8; 32]>,
     current_orchard_path: Option<Bip32Path>,
     script_bytes: Vec<u8>,
-    bip32_derivation_bytes: Vec<u8>,
     orchard_field_bytes: Vec<u8>,
 }
 
 impl PcztParser {
     // APDU payload formats for this PCZT parser.
     //
-    // This is a compact APDU subset whose field order mirrors the pczt crate structs
-    // we consume. The APDU order is fixed: `Pczt` header and `common::Global`,
-    // transparent inputs, transparent outputs, then Orchard actions. `Pczt` header
-    // and `common::Global` are sent exactly once in `PCZT_HEADER`; following bundle
-    // commands start from their own bundle fields. `PCZT_TRANSPARENT_INPUT`,
-    // `PCZT_TRANSPARENT_OUTPUT`, and `PCZT_ORCHARD_ACTION` are still sent with count
-    // 0 when the corresponding section is empty.
+    // This is a compact Ledger APDU subset, not the canonical `pczt::Pczt`
+    // postcard encoding. Its field order mirrors the pczt crate structs where
+    // useful. The APDU order is fixed: `Pczt` header and `common::Global`,
+    // transparent inputs, transparent outputs, then Orchard actions. `Pczt`
+    // header and `common::Global` are sent exactly once in `PCZT_HEADER`;
+    // following bundle commands start from their own bundle fields.
+    // `PCZT_TRANSPARENT_INPUT`, `PCZT_TRANSPARENT_OUTPUT`, and
+    // `PCZT_ORCHARD_ACTION` are still sent with count 0 when the corresponding
+    // section is empty.
     //
     // Primitive encoding:
     //   u8/u32/u64        little-endian, except u8
     //   bool              0x00 for false, 0x01 for true
     //   Option<T>         0x00 for None, 0x01 followed by T for Some
-    //   Vec<T>            CompactSize byte count, followed by bytes
+    //   Vec<u8>           CompactSize byte count, followed by bytes
+    //   Bip32Path         u8 component count, followed by BE u32 path segments
     //
     // PCZT header fields:
     //   magic                  "PCZT"
@@ -240,8 +230,7 @@ impl PcztParser {
     //                            CompactSize entry count, followed by entries:
     //                              key compressed_pubkey [u8; 33]
     //                              seed_fingerprint [u8; 32]
-    //                              derivation_path Vec<u32> as CompactSize count
-    //                                followed by LE u32 path segments
+    //                              derivation_path as Bip32Path
     //                            exactly one entry is currently used
     //   ripemd160_preimages    SKIPPED
     //   sha256_preimages       SKIPPED
@@ -257,8 +246,7 @@ impl PcztParser {
     //                            CompactSize entry count, followed by entries:
     //                              key compressed_pubkey [u8; 33]
     //                              seed_fingerprint [u8; 32]
-    //                              derivation_path Vec<u32> as CompactSize count
-    //                                followed by LE u32 path segments
+    //                              derivation_path as Bip32Path
     //                            at most one entry is currently used for change
     //   user_address           SKIPPED
     //   proprietary            SKIPPED
@@ -294,8 +282,7 @@ impl PcztParser {
     //                            REQUIRED by this parser for every action; unlike
     //                            the pczt crate Option field, no option tag is sent.
     //                            seed_fingerprint [u8; 32]
-    //                            derivation_path Vec<u32> as CompactSize count
-    //                              followed by LE u32 path segments
+    //                            derivation_path as Bip32Path
     //   dummy_sk               SKIPPED
     //   proprietary            SKIPPED
     //
@@ -332,8 +319,8 @@ impl PcztParser {
             orchard_action_parsed_count: 0,
             orchard_signing_records: Vec::new(),
             orchard_signed_action_count: 0,
+            orchard_signature_digest: None,
             orchard_value_balance: 0,
-            orchard_decrypted_output_count: 0,
             current_orchard_flags: 0,
             current_orchard_value_sum_magnitude: 0,
             current_orchard_cv_net: [0; 32],
@@ -345,7 +332,6 @@ impl PcztParser {
             current_orchard_alpha: None,
             current_orchard_path: None,
             script_bytes: Vec::new(),
-            bip32_derivation_bytes: Vec::new(),
             orchard_field_bytes: Vec::new(),
         }
     }
@@ -370,20 +356,13 @@ impl PcztParser {
                 | PcztParserState::WaitTransparentOutput
                 | PcztParserState::ProcessTransparentOutputScript { .. }
                 | PcztParserState::WaitTransparentOutputBip32Derivation
-                | PcztParserState::ProcessTransparentOutputBip32Derivation { .. }
                 | PcztParserState::TransparentOutputsDone
-                | PcztParserState::ProcessOrchardField { .. }
-                | PcztParserState::OrchardActionsDone
-        )
+        ) || self.state.is_orchard_state()
     }
 
     pub fn is_transparent_outputs_finished(&self) -> bool {
-        matches!(
-            self.state,
-            PcztParserState::TransparentOutputsDone
-                | PcztParserState::ProcessOrchardField { .. }
-                | PcztParserState::OrchardActionsDone
-        )
+        matches!(self.state, PcztParserState::TransparentOutputsDone)
+            || self.state.is_orchard_state()
     }
 
     pub fn is_orchard_actions_finished(&self) -> bool {
@@ -471,13 +450,6 @@ impl PcztParser {
                     PcztParserState::WaitTransparentInputBip32Derivation => {
                         self.parse_transparent_input_bip32_derivation(ctx, &mut reader)?
                     }
-                    PcztParserState::ProcessTransparentInputBip32Derivation { expected_size } => {
-                        self.parse_transparent_input_bip32_derivation_bytes(
-                            ctx,
-                            &mut reader,
-                            expected_size,
-                        )?
-                    }
                     _ => {
                         return Err(ParserError::from_sw(AppSW::BadState));
                     }
@@ -530,13 +502,6 @@ impl PcztParser {
                     PcztParserState::WaitTransparentOutputBip32Derivation => {
                         self.parse_transparent_output_bip32_derivation(ctx, &mut reader)?
                     }
-                    PcztParserState::ProcessTransparentOutputBip32Derivation { expected_size } => {
-                        self.parse_transparent_output_bip32_derivation_bytes(
-                            ctx,
-                            &mut reader,
-                            expected_size,
-                        )?
-                    }
                     _ => {
                         return Err(ParserError::from_sw(AppSW::BadState));
                     }
@@ -571,8 +536,29 @@ impl PcztParser {
                     PcztParserState::TransparentOutputsDone => {
                         self.parse_orchard_actions_start(ctx, &mut reader)?
                     }
-                    PcztParserState::ProcessOrchardField { field } => {
-                        self.parse_orchard_field(ctx, &mut reader, field)?
+                    PcztParserState::WaitOrchardAction => {
+                        self.parse_orchard_action(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitOrchardZip32Derivation => {
+                        self.parse_orchard_zip32_derivation(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitOrchardOutput => {
+                        self.parse_orchard_output(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitOrchardEncCiphertextLen => {
+                        self.parse_orchard_enc_ciphertext_len(ctx, &mut reader)?
+                    }
+                    PcztParserState::ProcessOrchardEncCiphertext => {
+                        self.parse_orchard_enc_ciphertext(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitOrchardOutCiphertextLen => {
+                        self.parse_orchard_out_ciphertext_len(ctx, &mut reader)?
+                    }
+                    PcztParserState::ProcessOrchardOutCiphertext => {
+                        self.parse_orchard_out_ciphertext(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitOrchardTrailer => {
+                        self.parse_orchard_trailer(ctx, &mut reader)?
                     }
                     _ => {
                         return Err(ParserError::from_sw(AppSW::BadState));

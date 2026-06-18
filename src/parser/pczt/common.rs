@@ -65,42 +65,6 @@ impl PcztParser {
         Ok(())
     }
 
-    pub(super) fn parse_derivation_path_count(
-        data: &[u8],
-        count_offset: usize,
-        label: &'static str,
-    ) -> Result<PathCountParse, ParserError> {
-        let min_size = count_offset + 1;
-        if data.len() < min_size {
-            return Ok(PathCountParse::NeedMore(min_size));
-        }
-
-        let mut reader = ByteReader::new(&data[count_offset..]);
-        let path_count: usize = match CompactSize::read_t(&mut reader) {
-            Ok(path_count) => path_count,
-            Err(err) if err.kind() == corez::io::ErrorKind::UnexpectedEof => {
-                return Ok(PathCountParse::NeedMore(data.len() + 1));
-            }
-            Err(err) => {
-                return Err(ParserError {
-                    source: err.into(),
-                    file: file!(),
-                    line: line!(),
-                });
-            }
-        };
-        let compact_size_len = data[count_offset..].len() - reader.remaining_len();
-
-        if path_count > MAX_ZCASH_BIP32_PATH {
-            return Err(ParserError::from_str(label));
-        }
-
-        Ok(PathCountParse::Ready {
-            path_count,
-            path_offset: count_offset + compact_size_len,
-        })
-    }
-
     pub(super) fn read_optional_u32(
         &mut self,
         reader: &mut ByteReader<'_>,

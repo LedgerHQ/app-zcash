@@ -440,18 +440,6 @@ class ZcashCommandSender:
         prefix = b"\x02" if pubkey[64] % 2 == 0 else b"\x03"
         return prefix + pubkey[1:33]
 
-    def _path_components_from_path(self, path: str) -> list[int]:
-        packed_path = pack_derivation_path(path)
-        path_len = packed_path[0]
-
-        if len(packed_path) != 1 + path_len * 4:
-            raise ValueError("Unexpected derivation path encoding")
-
-        return [
-            int.from_bytes(packed_path[1 + idx * 4:1 + (idx + 1) * 4], byteorder="big")
-            for idx in range(path_len)
-        ]
-
     def _build_pczt_header_and_global_payload(
         self,
         pczt_global: PcztGlobal,
@@ -494,19 +482,13 @@ class ZcashCommandSender:
                 raise ValueError("Unexpected compressed public key length")
             payload.extend(pubkey)
             payload.extend(PCZT_DEFAULT_SEED_FINGERPRINT)
-            path_components = self._path_components_from_path(signing_path)
-            payload.extend(write_varint(len(path_components)))
-            for component in path_components:
-                payload.extend(component.to_bytes(4, byteorder="little"))
+            payload.extend(pack_derivation_path(signing_path))
 
         return self._checked_pczt_packet(bytes(payload), "bip32_derivation")
 
     def _build_pczt_zip32_derivation_packet(self, signing_path: str) -> bytes:
         payload = bytearray(PCZT_DEFAULT_SEED_FINGERPRINT)
-        path_components = self._path_components_from_path(signing_path)
-        payload.extend(write_varint(len(path_components)))
-        for component in path_components:
-            payload.extend(component.to_bytes(4, byteorder="little"))
+        payload.extend(pack_derivation_path(signing_path))
 
         return self._checked_pczt_packet(bytes(payload), "zip32_derivation")
 
