@@ -306,7 +306,7 @@ def test_pczt_sign_tx_v5_change_hash_not_sticky(
     # parser's change_pk_hash to H while output #0 itself is correctly shown as a payment
     # to A. Output #1 pays address H and has *no* derivation of its own. Before the fix
     # the stale change_pk_hash (H) caused output #1 to be classified as change and hidden
-    # from the user. After the fix change_pk_hash is cleared at the start of every output,
+    # from the user. After the fix change_pk_hash is unset at the start of every output,
     # so output #1 (no derivation) is shown as a normal payment. The golden snapshots
     # capture that BOTH outputs are displayed.
     PCZT_GLOBAL = PcztGlobal()

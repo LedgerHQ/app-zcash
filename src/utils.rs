@@ -127,7 +127,7 @@ pub enum CheckDispOutput {
 pub fn check_output_displayable(
     script_pubkey: &[u8],
     amount: u64,
-    change_address: &[u8; 20],
+    change_address: Option<&[u8; 20]>,
 ) -> CheckDispOutput {
     debug!("Check output displayable");
     debug!("ScriptPubKey: {:02X?}", script_pubkey);
@@ -149,9 +149,10 @@ pub fn check_output_displayable(
         return CheckDispOutput::None;
     }
 
-    if &script_pubkey[TRANSPARENT_ADDRESS_OFFSET..][..TRANSPARENT_ADDRESS_HASH_LEN]
-        == change_address
-    {
+    if change_address.is_some_and(|change_address| {
+        &script_pubkey[TRANSPARENT_ADDRESS_OFFSET..][..TRANSPARENT_ADDRESS_HASH_LEN]
+            == change_address
+    }) {
         debug!("Change output detected");
         return CheckDispOutput::Change;
     }

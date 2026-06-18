@@ -79,7 +79,7 @@ pub struct TxInfo {
 
     pub outputs: Vec<TxOutput>,
     pub is_change_found: bool,
-    pub change_pk_hash: [u8; 20],
+    pub change_pk_hash: Option<[u8; 20]>,
 
     pub prevouts_hash: [u8; 32],
     pub sequence_hash: [u8; 32],

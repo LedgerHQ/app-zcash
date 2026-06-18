@@ -457,7 +457,7 @@ impl PcztParser {
         // bip32_derivation. Clear any hash carried over from a previous output so an
         // output without its own derivation can never be matched against a stale
         // change hash and silently classified as change (and hidden from the user).
-        ctx.tx_info.change_pk_hash = [0u8; 20];
+        ctx.tx_info.change_pk_hash = None;
 
         let script_size: usize = ok!(CompactSize::read_t(&mut *reader));
         if script_size > MAX_SCRIPT_SIZE {
@@ -801,7 +801,8 @@ impl PcztParser {
         }
 
         let public_key_with_cc = ok!(ExtendedPublicKey::try_from(&path));
-        ctx.tx_info.change_pk_hash = ok!(public_key_with_cc.compressed_public_key_hash160());
+        let change_pk_hash = ok!(public_key_with_cc.compressed_public_key_hash160());
+        ctx.tx_info.change_pk_hash = Some(change_pk_hash);
 
         debug!(
             "PCZT transparent output #{} bip32 derivation pubkey: {}",
@@ -815,7 +816,7 @@ impl PcztParser {
         debug!(
             "PCZT transparent output #{} change pk hash: {}",
             self.transparent_output_parsed_count,
-            HexSlice(&ctx.tx_info.change_pk_hash)
+            HexSlice(&change_pk_hash)
         );
 
         self.finish_transparent_output(ctx)
@@ -829,7 +830,7 @@ impl PcztParser {
             check_output_displayable(
                 &self.script_bytes,
                 self.current_output_amount,
-                &ctx.tx_info.change_pk_hash,
+                ctx.tx_info.change_pk_hash.as_ref(),
             )
         {
             let is_change = output == CheckDispOutput::Change;

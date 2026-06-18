@@ -170,9 +170,10 @@ pub fn handler_hash_input_finalize_full(
 
         let public_key_with_cc = ExtendedPublicKey::try_from(&path)?;
 
-        ctx.tx_info.change_pk_hash = public_key_with_cc.compressed_public_key_hash160()?;
+        let change_pk_hash = public_key_with_cc.compressed_public_key_hash160()?;
+        ctx.tx_info.change_pk_hash = Some(change_pk_hash);
 
-        info!("Change pk hash: {}", HexSlice(&ctx.tx_info.change_pk_hash));
+        info!("Change pk hash: {}", HexSlice(&change_pk_hash));
 
         if !check_bip44_compliance(
             &path,
