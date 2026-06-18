@@ -476,13 +476,23 @@ class ZcashCommandSender:
     def _split_pczt_field_packet(self, payload: bytes) -> list[bytes]:
         return split_message(payload, MAX_APDU_LEN)
 
-    def _build_pczt_bip32_derivation_packet(self, signing_path: str | None) -> bytes:
+    def _build_pczt_bip32_derivation_packet(
+        self,
+        signing_path: str | None,
+        pubkey: bytes | None = None,
+    ) -> bytes:
         payload = bytearray()
         if signing_path is None:
+            if pubkey is not None:
+                raise ValueError("bip32_derivation pubkey requires a signing path")
             payload.extend(write_varint(0))
         else:
             payload.extend(write_varint(1))
-            payload.extend(self._compressed_pubkey_from_path(signing_path))
+            if pubkey is None:
+                pubkey = self._compressed_pubkey_from_path(signing_path)
+            if len(pubkey) != 33:
+                raise ValueError("Unexpected compressed public key length")
+            payload.extend(pubkey)
             payload.extend(PCZT_DEFAULT_SEED_FINGERPRINT)
             path_components = self._path_components_from_path(signing_path)
             payload.extend(write_varint(len(path_components)))
@@ -559,7 +569,12 @@ class ZcashCommandSender:
                     write_varint(len(out.script_pubkey)) + out.script_pubkey
                 )
             )
-            packets.append(self._build_pczt_bip32_derivation_packet(out.signing_path))
+            packets.append(
+                self._build_pczt_bip32_derivation_packet(
+                    out.signing_path,
+                    out.bip32_derivation_pubkey,
+                )
+            )
 
         return packets
 

@@ -800,8 +800,15 @@ impl PcztParser {
             ));
         }
 
-        let public_key_with_cc = ok!(ExtendedPublicKey::try_from(&path));
-        let change_pk_hash = ok!(public_key_with_cc.compressed_public_key_hash160());
+        let expected_public_key =
+            ok!(ok!(ExtendedPublicKey::try_from(&path)).compressed_public_key());
+        if pubkey != expected_public_key.as_slice() {
+            return Err(ParserError::from_str(
+                "PCZT output bip32 derivation pubkey mismatch",
+            ));
+        }
+
+        let change_pk_hash: [u8; 20] = ok!(pubkey.hash160());
         ctx.tx_info.change_pk_hash = Some(change_pk_hash);
 
         debug!(

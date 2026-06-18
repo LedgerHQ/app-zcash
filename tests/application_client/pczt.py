@@ -46,6 +46,7 @@ class PcztTransparentOutput:
     value: int
     script_pubkey: bytes
     signing_path: str | None = None
+    bip32_derivation_pubkey: bytes | None = None
 
 
 class PcztOrchardAction(NamedTuple):

@@ -48,6 +48,7 @@ use crate::utils::{
     bip32_path::{Bip32Path, MAX_ZCASH_BIP32_PATH},
     check_bip44_compliance,
     extended_public_key::ExtendedPublicKey,
+    hashers::ToHash160,
 };
 use crate::zip32::{derive_orchard_ask, derive_orchard_fvk, orchard_network};
 

@@ -377,6 +377,28 @@ def test_pczt_sign_tx_v5_change_hash_not_sticky(
     )
 
 
+def test_pczt_rejects_transparent_output_derivation_pubkey_path_mismatch(
+    backend,
+):
+    client = ZcashCommandSender(backend)
+
+    OUTPUT = PcztTransparentOutput(
+        value=41628565,
+        script_pubkey=bytes.fromhex("76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"),
+        signing_path="m/44'/133'/0'/1/0",
+        bip32_derivation_pubkey=client._compressed_pubkey_from_path("m/44'/133'/0'/0/0"),
+    )
+
+    client._send_pczt_header(PcztGlobal())
+    client._send_pczt_transparent_inputs([])
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client._send_pczt_transparent_outputs_sync([OUTPUT])
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert len(e.value.data) == 0
+
+
 def test_pczt_sign_tx_refuse(
     backend,
     scenario_navigator: NavigateWithScenario,
