@@ -12,6 +12,10 @@ pub const SIGHASH_ALL: u8 = 0x01;
 pub const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
 pub const ZIP32_PATH_LEN: usize = 3;
 pub const ZIP32_PURPOSE: u32 = 32;
+#[cfg(not(feature = "testnet"))]
+pub const ZCASH_BIP44_COIN_TYPE: u32 = 133;
+#[cfg(feature = "testnet")]
+pub const ZCASH_BIP44_COIN_TYPE: u32 = 1;
 
 // Limit the number of PCZT transparent inputs due to device memory constraints.
 pub const MAX_PCZT_TRANSPARENT_INPUTS_NUMBER: usize = 10;

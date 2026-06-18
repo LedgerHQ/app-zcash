@@ -1,4 +1,4 @@
-use crate::consts::{UNHARDENED_MASK, ZIP32_PATH_LEN, ZIP32_PURPOSE};
+use crate::consts::{UNHARDENED_MASK, ZCASH_BIP44_COIN_TYPE, ZIP32_PATH_LEN, ZIP32_PURPOSE};
 use crate::utils::bip32_path::Bip32Path;
 use alloc::vec::Vec;
 use ledger_device_sdk::log::{debug, error};
@@ -175,10 +175,6 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const BIP44_ACCOUNT_OFFSET: usize = 2;
     const BIP44_CHANGE_OFFSET: usize = 3;
     const BIP44_ADDRESS_INDEX_OFFSET: usize = 4;
-    #[cfg(not(feature = "testnet"))]
-    const BIP44_COIN_TYPE: u32 = 133;
-    #[cfg(feature = "testnet")]
-    const BIP44_COIN_TYPE: u32 = 1;
     const MAX_BIP44_ACCOUNT_RECOMMENDED: u32 = 100;
     const MAX_BIP44_ADDRESS_INDEX_RECOMMENDED: u32 = 50000;
 
@@ -196,7 +192,7 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
             return false;
         }
 
-        if path[BIP44_COIN_TYPE_OFFSET] != (BIP44_COIN_TYPE | HARDENED) {
+        if path[BIP44_COIN_TYPE_OFFSET] != (ZCASH_BIP44_COIN_TYPE | HARDENED) {
             error!("Bad ZIP32 coin type");
             return false;
         }
@@ -220,7 +216,7 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
         }
 
         let coin_type = path[BIP44_COIN_TYPE_OFFSET] & UNHARDENED_MASK;
-        if coin_type != BIP44_COIN_TYPE {
+        if coin_type != ZCASH_BIP44_COIN_TYPE {
             error!("Bad Bip44 coin type");
             return false;
         }

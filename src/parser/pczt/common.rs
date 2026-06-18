@@ -42,6 +42,10 @@ impl PcztParser {
         let coin_type = ok!(reader.read_u32_le());
         let tx_modifiable = ok!(reader.read_u8());
 
+        if coin_type != ZCASH_BIP44_COIN_TYPE {
+            return Err(ParserError::from_str("Unsupported PCZT coin_type"));
+        }
+
         debug!(
             "PCZT global: version {}, version_group_id {:08x}, branch {:?}, fallback_lock_time {:?}, expiry_height {}, coin_type {}, tx_modifiable {:02x}",
             tx_version,

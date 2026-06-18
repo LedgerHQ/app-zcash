@@ -168,6 +168,23 @@ def _assert_pczt_orchard_sign_digest(
     )
 
 
+def test_pczt_rejects_wrong_coin_type(
+    backend,
+):
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(coin_type=0),
+            transparent_inputs=[],
+            transparent_outputs=[],
+        ):
+            pass
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert len(e.value.data) == 0
+
+
 def test_pczt_sign_tx_v5_simple(
     backend,
     scenario_navigator: NavigateWithScenario,

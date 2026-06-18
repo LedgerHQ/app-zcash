@@ -26,7 +26,7 @@ use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
 use crate::consts::{
     MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
-    MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, SIGHASH_ALL,
+    MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
 };
 use crate::parser::compute::{
     compute_shielded_signature_digest, compute_transparent_input_signature_digest,
