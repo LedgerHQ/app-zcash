@@ -85,6 +85,16 @@ impl PcztParser {
             HexSlice(&self.current_orchard_rk)
         );
 
+        self.current_orchard_spend_value = self.read_orchard_value(
+            reader,
+            "Bad PCZT orchard spend value",
+            "PCZT orchard spend value out of range",
+        )?;
+        debug!(
+            "PCZT orchard action #{} spend value: {}",
+            self.orchard_action_parsed_count, self.current_orchard_spend_value
+        );
+
         let mut alpha = [0u8; 32];
         ok!(reader.read_exact(&mut alpha));
         debug!(
@@ -125,6 +135,23 @@ impl PcztParser {
             "PCZT orchard action #{} ephemeral_key: {}",
             self.orchard_action_parsed_count,
             HexSlice(&self.current_orchard_ephemeral_key)
+        );
+
+        ok!(reader.read_exact(&mut self.current_orchard_output_recipient));
+        debug!(
+            "PCZT orchard action #{} recipient: {}",
+            self.orchard_action_parsed_count,
+            HexSlice(&self.current_orchard_output_recipient)
+        );
+
+        self.current_orchard_output_value = self.read_orchard_value(
+            reader,
+            "Bad PCZT orchard output value",
+            "PCZT orchard output value out of range",
+        )?;
+        debug!(
+            "PCZT orchard action #{} output value: {}",
+            self.orchard_action_parsed_count, self.current_orchard_output_value
         );
 
         Self::ensure_orchard_apdu_group_end(reader)?;
@@ -248,6 +275,21 @@ impl PcztParser {
         Ok(())
     }
 
+    fn read_orchard_value(
+        &self,
+        reader: &mut ByteReader<'_>,
+        read_error: &'static str,
+        range_error: &'static str,
+    ) -> Result<u64, ParserError> {
+        let mut value_bytes = [0u8; 8];
+        reader
+            .read_exact(&mut value_bytes)
+            .map_err(|_| ParserError::from_str(read_error))?;
+        let value = Zatoshis::from_nonnegative_i64_le_bytes(value_bytes)
+            .map_err(|_| ParserError::from_str(range_error))?;
+        Ok(value.into_u64())
+    }
+
     fn read_large_orchard_vec(
         &mut self,
         reader: &mut ByteReader<'_>,
@@ -281,8 +323,11 @@ impl PcztParser {
         self.current_orchard_cv_net = [0; 32];
         self.current_orchard_nullifier = [0; 32];
         self.current_orchard_rk = [0; 32];
+        self.current_orchard_spend_value = 0;
         self.current_orchard_cmx = [0; 32];
         self.current_orchard_ephemeral_key = [0; 32];
+        self.current_orchard_output_recipient = [0; ORCHARD_RAW_ADDRESS_SIZE];
+        self.current_orchard_output_value = 0;
         self.current_orchard_enc_ciphertext.clear();
         self.current_orchard_alpha = None;
         self.current_orchard_path = None;
@@ -295,6 +340,8 @@ impl PcztParser {
         self.orchard_signed_action_count = 0;
         self.orchard_signature_digest = None;
         self.orchard_value_balance = 0;
+        self.orchard_spend_value_sum = 0;
+        self.orchard_output_value_sum = 0;
         self.current_orchard_flags = 0;
         self.current_orchard_value_sum_magnitude = 0;
         self.reset_current_orchard_action();
@@ -357,7 +404,16 @@ impl PcztParser {
             .hashers
             .tx_non_compact_hasher
             .update(&note_ciphertext.out_ciphertext));
-        self.try_decipher_current_orchard_output(ctx, &note_ciphertext)?;
+        self.validate_current_orchard_output(ctx, &note_ciphertext)?;
+
+        self.orchard_spend_value_sum = self
+            .orchard_spend_value_sum
+            .checked_add(self.current_orchard_spend_value)
+            .ok_or_else(|| ParserError::from_str("PCZT orchard spend value sum overflow"))?;
+        self.orchard_output_value_sum = self
+            .orchard_output_value_sum
+            .checked_add(self.current_orchard_output_value)
+            .ok_or_else(|| ParserError::from_str("PCZT orchard output value sum overflow"))?;
 
         debug!(
             "PCZT orchard action #{} non-compact data hashed",
@@ -434,10 +490,10 @@ impl PcztParser {
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
         note_ciphertext: &TransmittedNoteCiphertext,
-    ) -> Result<(), ParserError> {
+    ) -> Result<bool, ParserError> {
         let Some(keys) = ctx.tx_info.orchard_decipher_keys.as_ref() else {
             debug!("No PCZT orchard decipher keys available");
-            return Ok(());
+            return Ok(false);
         };
 
         let compact = self.current_orchard_compact_action(note_ciphertext);
@@ -445,8 +501,9 @@ impl PcztParser {
 
         match decipher_compact_value(&keys.internal_ivk, &compact) {
             Ok(Some(output)) => {
+                self.validate_deciphered_orchard_output(&output)?;
                 self.push_deciphered_orchard_output(ctx, output, network, true)?;
-                return Ok(());
+                return Ok(true);
             }
             Ok(None) => debug!("PCZT orchard internal IVK decryption did not match"),
             Err(err) => debug!("PCZT orchard compact decryption failed: {:?}", err),
@@ -462,10 +519,49 @@ impl PcztParser {
 
         match decipher_value_with_ovk(&keys.external_ovk, &action) {
             Ok(Some(output)) => {
+                self.validate_deciphered_orchard_output(&output)?;
                 self.push_deciphered_orchard_output(ctx, output, network, false)?;
+                return Ok(true);
             }
             Ok(None) => debug!("PCZT orchard external OVK recovery did not match"),
             Err(err) => debug!("PCZT orchard OVK recovery failed: {:?}", err),
+        }
+
+        Ok(false)
+    }
+
+    fn validate_current_orchard_output(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        note_ciphertext: &TransmittedNoteCiphertext,
+    ) -> Result<(), ParserError> {
+        let deciphered = self.try_decipher_current_orchard_output(ctx, note_ciphertext)?;
+        if deciphered || self.current_orchard_output_value == 0 {
+            Ok(())
+        } else {
+            Err(ParserError::from_str(
+                "PCZT orchard output could not be decrypted",
+            ))
+        }
+    }
+
+    fn validate_deciphered_orchard_output(
+        &self,
+        output: &DecipheredOrchardOutput,
+    ) -> Result<(), ParserError> {
+        if output.value != self.current_orchard_output_value {
+            return Err(ParserError::from_str("PCZT orchard output value mismatch"));
+        }
+
+        if output.raw_address != self.current_orchard_output_recipient {
+            debug!(
+                "PCZT orchard output recipient mismatch: expected {}, decrypted {}",
+                HexSlice(&self.current_orchard_output_recipient),
+                HexSlice(&output.raw_address)
+            );
+            return Err(ParserError::from_str(
+                "PCZT orchard output recipient mismatch",
+            ));
         }
 
         Ok(())
@@ -516,6 +612,18 @@ impl PcztParser {
         };
 
         debug!("PCZT orchard value balance: {}", self.orchard_value_balance);
+
+        let expected_value_balance =
+            i128::from(self.orchard_spend_value_sum) - i128::from(self.orchard_output_value_sum);
+        if expected_value_balance != i128::from(self.orchard_value_balance) {
+            debug!(
+                "PCZT orchard value balance mismatch: spend_sum={}, output_sum={}, value_balance={}",
+                self.orchard_spend_value_sum,
+                self.orchard_output_value_sum,
+                self.orchard_value_balance
+            );
+            return Err(ParserError::from_str("PCZT orchard value_sum mismatch"));
+        }
 
         Ok(())
     }

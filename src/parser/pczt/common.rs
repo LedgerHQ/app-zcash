@@ -102,13 +102,7 @@ impl PcztParser {
             fees, ctx.tx_info.total_amount, self.total_output_amount, self.orchard_value_balance
         );
 
-        if let Some(swap_params) = ctx.swap_params {
-            ok!(swap::check_swap_params(
-                swap_params,
-                &ctx.tx_info.outputs,
-                fees
-            ));
-        } else if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees)) {
+        if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees)) {
             return Err(ParserError::user());
         }
 

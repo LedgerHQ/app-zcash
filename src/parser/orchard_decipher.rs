@@ -5,8 +5,8 @@ use crate::{AppSW, zip32::map_ledger_crypto_error};
 
 pub(crate) use ledger_zcash_crypto::orchard::{
     DecipheredOrchardOutput, ORCHARD_ENC_CIPHERTEXT_SIZE, ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE,
-    ORCHARD_OUT_CIPHERTEXT_SIZE, OrchardActionCiphertext, OrchardCompactAction,
-    decipher_compact_value, decipher_value_with_ovk,
+    ORCHARD_OUT_CIPHERTEXT_SIZE, ORCHARD_RAW_ADDRESS_SIZE, OrchardActionCiphertext,
+    OrchardCompactAction, decipher_compact_value, decipher_value_with_ovk,
 };
 
 pub(crate) struct OrchardDecipherKeys {

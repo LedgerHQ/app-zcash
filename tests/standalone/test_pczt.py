@@ -24,6 +24,12 @@ from application_client.zcash_verify_sign import (
 PCZT_ORCHARD_RK_ALPHA_1 = bytes.fromhex(
     "e95982b73ab0c2137ec354cce448a75ef39ec0cbdf6907be6df3495297834f89"
 )
+PCZT_ORCHARD_EXTERNAL_RECIPIENT = bytes.fromhex(
+    "4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d"
+)
+PCZT_ORCHARD_INTERNAL_RECIPIENT = bytes.fromhex(
+    "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a"
+)
 
 
 def _review_approve(
@@ -741,6 +747,8 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
                 out_ciphertext=bytes.fromhex("242d4c6ccbc830c2c8a23444b273723a0f83d07519cc818d0e2b3e563c7a14e0ca5ddccb095d2a0a4303731b403d83da0643377426365a7639f770c5cd49fd95fa982e6017a4da75050c85f0503b7f15"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                value=90000,
+                recipient=PCZT_ORCHARD_EXTERNAL_RECIPIENT,
             ),
         ],
         flags=2,
@@ -790,6 +798,8 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
                 out_ciphertext=bytes.fromhex("34c277dc90fe4434b091e8125187ded0dbb32b6f92127b23910169aab39f405f522f452174cb4269ccf1ea910b9b35c8fad645e72705cc1ceaf136ea8222615a7cf3c4dcb8d2b0556558ce82968ad72c"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                value=90000,
+                recipient=PCZT_ORCHARD_EXTERNAL_RECIPIENT,
             ),
             PcztOrchardAction(
                 cv_net=bytes.fromhex("26805b9bd3edd1e1a56cab175ab20f2d9e70cb5bbca060ea594e13cdb7007627"),
@@ -801,6 +811,8 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
                 out_ciphertext=bytes.fromhex("90afa9ddb93e03002dbd3ac38d745ce2d3968478b2bb2784af3f91c7d25b3d687871f8338247dc65b1653f5dac66dd95c5775383a36beeab079ed29df204ecb5b534c1da9c05b203557ee9540ea5532f"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                value=5000,
+                recipient=PCZT_ORCHARD_INTERNAL_RECIPIENT,
             ),
         ],
         flags=2,
@@ -846,6 +858,7 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_simple(
                 out_ciphertext=bytes.fromhex("40b85ce64c4191976c2db2b671518d0155a81d57beaf402f31e4775e2ec60e2d473fee77e126e541c7d40d7b6442b2655933efc835a1d976aa90b3b03217673049af5d867d8980265f1bf10a7ecf5b5d"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                spend_value=100000,
             ),
             PcztOrchardAction(
                 cv_net=bytes.fromhex("08b228c0e51ed7061c103f06582d6303fc20689de1dedffc26460f469602b982"),
@@ -857,6 +870,7 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_simple(
                 out_ciphertext=bytes.fromhex("eb750713d45b7caa405813743e6e145a48fc7d6b89933a39a56fe9c7d29accc793f8c8c30e217e69e897bc157278f341042b3d8b1b92c9134b96c36901b28157ab2de75219edd12bd522a34eabf1fab2"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                spend_value=200000,
             ),
         ],
         flags=1,
@@ -900,6 +914,7 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_change(
                 out_ciphertext=bytes.fromhex("9bdd58eda5ad9518dc15cea267120236d9eb964c6ed3b197ca532d3a9581c77bf27c359f3f3b1666e3ac3504c17e2473fe1431e8c761680da3a6c7386815cc717ae741604fa5d5a5fe79cb3879aa7af6"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                spend_value=100000,
             ),
             PcztOrchardAction(
                 cv_net=bytes.fromhex("a33ef5236a0bbf46dee6b44320fc293f5ee3238fbbcca7d7a6c9b20ac2da6138"),
@@ -911,6 +926,9 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_change(
                 out_ciphertext=bytes.fromhex("2c67f43c51278361143bcb44e4b7344bb1159eca9482e81ccdbec33e372dc5930073e0c5721afd2b37a2a19bc8d00074e7d37de2ef118a1aa39602c1a15e4a784b2b137917be051e62ea4c42af7c34e1"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                spend_value=200000,
+                value=5000,
+                recipient=PCZT_ORCHARD_INTERNAL_RECIPIENT,
             ),
         ],
         flags=3,
@@ -959,6 +977,7 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_transparent_change(
                 out_ciphertext=bytes.fromhex("40b85ce64c4191976c2db2b671518d0155a81d57beaf402f31e4775e2ec60e2d473fee77e126e541c7d40d7b6442b2655933efc835a1d976aa90b3b03217673049af5d867d8980265f1bf10a7ecf5b5d"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                spend_value=100000,
             ),
             PcztOrchardAction(
                 cv_net=bytes.fromhex("08b228c0e51ed7061c103f06582d6303fc20689de1dedffc26460f469602b982"),
@@ -970,6 +989,7 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_transparent_change(
                 out_ciphertext=bytes.fromhex("eb750713d45b7caa405813743e6e145a48fc7d6b89933a39a56fe9c7d29accc793f8c8c30e217e69e897bc157278f341042b3d8b1b92c9134b96c36901b28157ab2de75219edd12bd522a34eabf1fab2"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                spend_value=200000,
             ),
         ],
         flags=1,
@@ -989,9 +1009,8 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_transparent_change(
         ORCHARD_BUNDLE,
     )
 
-def test_pczt_sign_tx_v5_orchard_to_orchard_simple(
+def test_pczt_sign_tx_v5_orchard_to_orchard_unrecoverable_output_rejected(
     backend,
-    scenario_navigator: NavigateWithScenario,
 ):
     ORCHARD_SIGNING_PATH = "m/32'/133'/0'"
     ORCHARD_ALPHA = (1).to_bytes(32, byteorder="little")
@@ -1008,6 +1027,9 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_simple(
                 out_ciphertext=bytes.fromhex("f3795cfffb3ae4fd4c5e28ad5034e2565e4ad326e72458a799cc34f11226fa19ae7b68f1aaf0e1495a6f9b8b41ef2d6b2af71372725172043233b519c1363d0648dda6fc5154a882cc717524d93e7c3c"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                spend_value=100000,
+                value=180000,
+                recipient=PCZT_ORCHARD_EXTERNAL_RECIPIENT,
             ),
             PcztOrchardAction(
                 cv_net=bytes.fromhex("1a88eb3f897cda9bf68454c33f627e0150f974f22af9cd961d04ebc9036bc895"),
@@ -1019,6 +1041,9 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_simple(
                 out_ciphertext=bytes.fromhex("1b301923172c05ed37d0ce897cd69922ac249175c1e5e0e718ba94390a7fbe9d74dc128f391595899a3553339b9fe083b7e298091fb0c6d8a813b748f92ecd4d0767efb694d6a230181801226d7351b2"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                spend_value=200000,
+                value=100000,
+                recipient=PCZT_ORCHARD_INTERNAL_RECIPIENT,
             ),
         ],
         flags=3,
@@ -1026,17 +1051,18 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_simple(
         anchor=bytes.fromhex("c5e1408579e67cf16b5d19479408fa035a7db4fe3060123d139eba8523bc9633"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("AF5B24CDFC02F69C61C692D21D4872DF709AEE4DBFFB07C9ECF6656A69893E0C316C1354EFF6F649F2DE374DD60A9BEF067ABF4D098B7C1C6E21A0F17D0B873A")
 
-    _assert_pczt_orchard_sign_digest(
-        backend,
-        scenario_navigator,
-        "test_sign_tx_v5_orchard_to_orchard_simple",
-        PCZT_GLOBAL,
-        EXPECTED_AUTH_SIG,
-        TRANSPARENT_OUTPUTS,
-        ORCHARD_BUNDLE,
-    )
+    client = ZcashCommandSender(backend)
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=TRANSPARENT_OUTPUTS,
+            orchard_bundle=ORCHARD_BUNDLE,
+        ):
+            pass
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
     backend,
@@ -1057,6 +1083,9 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
                 out_ciphertext=bytes.fromhex("dbdf7cc4e1b5e89044eca85547ed7adea0e88738fcab767b03993ede592eb18c2dec1e20c9fd22fed35be298d2621734ddf17176aa51b836e5cd43ff1220854bca515559ddb184b318f65198e890a880"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                spend_value=200000,
+                value=180000,
+                recipient=PCZT_ORCHARD_EXTERNAL_RECIPIENT,
             ),
             PcztOrchardAction(
                 cv_net=bytes.fromhex("7b19b7ceb6a1d588209a62d08e1c13f309e61381f767a59328ff91e4191d98a3"),
@@ -1068,6 +1097,8 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
                 out_ciphertext=bytes.fromhex("08abc376d9c33581d1a74aba93b503b2911846ab7d77e8ed96f0210c4ffabb09e81a728fff021f90784cbb2c8b3dd3b7f62491e02618c25a3f819836aed45fcf707a379e4b11b65aaf7f6283c250fcd6"),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
+                value=10000,
+                recipient=PCZT_ORCHARD_INTERNAL_RECIPIENT,
             ),
         ],
         flags=3,

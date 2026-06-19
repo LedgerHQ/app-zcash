@@ -10,7 +10,6 @@ use ::orchard::note::TransmittedNoteCiphertext;
 use ::orchard::primitives::redpallas::{SpendAuth, VerificationKey as RedpallasVerificationKey};
 use corez::io::Read;
 use ledger_device_sdk::hash::HashInit as _;
-use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::log::{debug, info};
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
 use zcash_encoding::CompactSize;
@@ -34,10 +33,9 @@ use crate::parser::compute::{
 use crate::parser::orchard::ORCHARD_MEMO_SIZE;
 use crate::parser::orchard_decipher::{
     DecipheredOrchardOutput, ORCHARD_ENC_CIPHERTEXT_SIZE, ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE,
-    ORCHARD_OUT_CIPHERTEXT_SIZE, OrchardActionCiphertext, OrchardCompactAction,
-    OrchardDecipherKeys, decipher_compact_value, decipher_value_with_ovk,
+    ORCHARD_OUT_CIPHERTEXT_SIZE, ORCHARD_RAW_ADDRESS_SIZE, OrchardActionCiphertext,
+    OrchardCompactAction, OrchardDecipherKeys, decipher_compact_value, decipher_value_with_ovk,
 };
-use crate::swap;
 use crate::tx::{Hashers, TxInfo, TxOutput, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _};
 use crate::utils::check_output_displayable;
@@ -138,7 +136,6 @@ pub struct PcztParserCtx<'ctx> {
     pub tx_state: &'ctx mut TxSigningState,
     pub tx_info: &'ctx mut TxInfo,
     pub hashers: &'ctx mut Hashers,
-    pub swap_params: Option<&'ctx CreateTxParams>,
 }
 
 pub struct PcztParser {
@@ -162,13 +159,18 @@ pub struct PcztParser {
     orchard_signed_action_count: usize,
     orchard_signature_digest: Option<[u8; 32]>,
     orchard_value_balance: i64,
+    orchard_spend_value_sum: u64,
+    orchard_output_value_sum: u64,
     current_orchard_flags: u8,
     current_orchard_value_sum_magnitude: u64,
     current_orchard_cv_net: [u8; 32],
     current_orchard_nullifier: [u8; 32],
     current_orchard_rk: [u8; 32],
+    current_orchard_spend_value: u64,
     current_orchard_cmx: [u8; 32],
     current_orchard_ephemeral_key: [u8; 32],
+    current_orchard_output_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
+    current_orchard_output_value: u64,
     current_orchard_enc_ciphertext: Vec<u8>,
     current_orchard_alpha: Option<[u8; 32]>,
     current_orchard_path: Option<Bip32Path>,
@@ -270,7 +272,7 @@ impl PcztParser {
     //   rk                     [u8; 32]
     //   spend_auth_sig         SKIPPED
     //   recipient              SKIPPED
-    //   value                  SKIPPED
+    //   value                  u64
     //   rho                    SKIPPED
     //   rseed                  SKIPPED
     //   fvk                    SKIPPED
@@ -289,10 +291,10 @@ impl PcztParser {
     // orchard::Output fields, in order:
     //   cmx                    [u8; 32]
     //   ephemeral_key          [u8; 32]
+    //   recipient              [u8; 43], raw Orchard payment address
+    //   value                  u64
     //   enc_ciphertext         Vec<u8>, currently must be 580 bytes
     //   out_ciphertext         Vec<u8>, currently must be 80 bytes
-    //   recipient              SKIPPED
-    //   value                  SKIPPED
     //   rseed                  SKIPPED
     //   ock                    SKIPPED
     //   zip32_derivation       SKIPPED
@@ -321,13 +323,18 @@ impl PcztParser {
             orchard_signed_action_count: 0,
             orchard_signature_digest: None,
             orchard_value_balance: 0,
+            orchard_spend_value_sum: 0,
+            orchard_output_value_sum: 0,
             current_orchard_flags: 0,
             current_orchard_value_sum_magnitude: 0,
             current_orchard_cv_net: [0; 32],
             current_orchard_nullifier: [0; 32],
             current_orchard_rk: [0; 32],
+            current_orchard_spend_value: 0,
             current_orchard_cmx: [0; 32],
             current_orchard_ephemeral_key: [0; 32],
+            current_orchard_output_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
+            current_orchard_output_value: 0,
             current_orchard_enc_ciphertext: Vec::new(),
             current_orchard_alpha: None,
             current_orchard_path: None,

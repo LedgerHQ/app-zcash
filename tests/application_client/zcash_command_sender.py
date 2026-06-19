@@ -577,17 +577,30 @@ class ZcashCommandSender:
         for action in orchard_bundle.actions:
             if len(action.alpha) != 32:
                 raise ValueError("Orchard alpha must be 32 bytes")
+            if len(action.recipient) != 43:
+                raise ValueError("Orchard recipient must be 43 bytes")
+            if not 0 <= action.spend_value <= 0x7FFF_FFFF_FFFF_FFFF:
+                raise ValueError("Orchard spend value out of range")
+            if not 0 <= action.value <= 0x7FFF_FFFF_FFFF_FFFF:
+                raise ValueError("Orchard output value out of range")
 
             packets.append(
                 self._checked_pczt_packet(
-                    action.cv_net + action.nullifier + action.rk + action.alpha,
+                    action.cv_net
+                    + action.nullifier
+                    + action.rk
+                    + action.spend_value.to_bytes(8, byteorder="little")
+                    + action.alpha,
                     "orchard action spend small fields",
                 )
             )
             packets.append(self._build_pczt_zip32_derivation_packet(action.signing_path))
             packets.append(
                 self._checked_pczt_packet(
-                    action.cmx + action.ephemeral_key,
+                    action.cmx
+                    + action.ephemeral_key
+                    + action.recipient
+                    + action.value.to_bytes(8, byteorder="little"),
                     "orchard action output small fields",
                 )
             )

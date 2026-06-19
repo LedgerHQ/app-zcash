@@ -1,11 +1,11 @@
 from dataclasses import dataclass
-from typing import NamedTuple
 
 from application_client.zcash_utils import read_compactsize
 
 PCZT_DEFAULT_SEED_FINGERPRINT: bytes = bytes(32)
 
 ORCHARD_FIELD_SIZE: int = 32
+ORCHARD_RAW_ADDRESS_SIZE: int = 43
 ORCHARD_ENC_CIPHERTEXT_SIZE: int = 580
 ORCHARD_OUT_CIPHERTEXT_SIZE: int = 80
 
@@ -49,7 +49,8 @@ class PcztTransparentOutput:
     bip32_derivation_pubkey: bytes | None = None
 
 
-class PcztOrchardAction(NamedTuple):
+@dataclass
+class PcztOrchardAction:
     cv_net: bytes
     nullifier: bytes
     rk: bytes
@@ -59,6 +60,9 @@ class PcztOrchardAction(NamedTuple):
     ephemeral_key: bytes
     enc_ciphertext: bytes
     out_ciphertext: bytes
+    spend_value: int = 0
+    value: int = 0
+    recipient: bytes = bytes(ORCHARD_RAW_ADDRESS_SIZE)
 
 
 @dataclass
