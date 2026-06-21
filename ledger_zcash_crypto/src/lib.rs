@@ -4,6 +4,8 @@ mod bytes;
 mod hashtocurve;
 mod montgomery;
 pub mod orchard;
+mod poseidon;
+mod poseidon_fp;
 pub mod redpallas;
 mod sinsemilla;
 
@@ -43,6 +45,14 @@ const ORCHARD_ESK_DOMAIN_SEPARATOR: u8 = 0x04;
 const ORCHARD_RCM_DOMAIN_SEPARATOR: u8 = 0x05;
 const ORCHARD_PSI_DOMAIN_SEPARATOR: u8 = 0x09;
 const PRF_EXPAND_BYTES: usize = 64;
+const ORCHARD_VALUE_COMMITMENT_VALUE_BASEPOINT_BYTES: [u8; 32] = [
+    0x67, 0x43, 0xf9, 0x3a, 0x6e, 0xbd, 0xa7, 0x2a, 0x8c, 0x7c, 0x5a, 0x2b, 0x7f, 0xa3, 0x04, 0xfe,
+    0x32, 0xb2, 0x9b, 0x4f, 0x70, 0x6a, 0xa8, 0xf7, 0x42, 0x0f, 0x3d, 0x8e, 0x7a, 0x59, 0x70, 0x2f,
+];
+const ORCHARD_VALUE_COMMITMENT_RANDOMNESS_BASEPOINT_BYTES: [u8; 32] = [
+    0x91, 0x5a, 0x3c, 0x88, 0x68, 0xc6, 0xc3, 0x0e, 0x2f, 0x80, 0x90, 0xee, 0x45, 0xd7, 0x6e, 0x40,
+    0x48, 0x20, 0x8d, 0xea, 0x5b, 0x23, 0x66, 0x4f, 0xbb, 0x09, 0xa4, 0x0f, 0x55, 0x44, 0xf4, 0x07,
+];
 
 pub fn _debug_print(str: &str) {
     debug!("{}", str);
@@ -167,6 +177,51 @@ pub fn orchard_pk_d(ivk: &[u8; 32], g_d: &[u8; 32]) -> Result<[u8; 32], Error> {
     let mut pk_d = pallas_point_from_bytes(g_d)?;
     pk_d.rnd_scalarmul(&canonical_scalar_bytes_be(&ivk.to_repr())?)?;
     pallas_point_to_bytes(&pk_d)
+}
+
+/// Computes `ValueCommit^Orchard(value, rcv)` using precomputed Orchard value
+/// commitment basepoints.
+///
+/// `value` is the signed net action value, `spend.value - output.value`.
+/// `rcv` must be a canonical little-endian Pallas scalar encoding.
+pub fn orchard_value_commitment_bytes(value: i64, rcv: &[u8; 32]) -> Result<[u8; 32], Error> {
+    let mut sum = value_commitment_value_term(value)?;
+
+    if *rcv != [0; 32] {
+        let rcv_be = canonical_scalar_bytes_be(rcv)?;
+        let rcv_term = pallas_basepoint_mul(
+            &ORCHARD_VALUE_COMMITMENT_RANDOMNESS_BASEPOINT_BYTES,
+            &rcv_be,
+        )?;
+        sum = match sum {
+            Some(value_term) => Some(pallas_point_add(&value_term, &rcv_term)?),
+            None => Some(rcv_term),
+        };
+    }
+
+    match sum {
+        Some(point) => pallas_point_to_bytes(&point),
+        None => Ok([0; 32]),
+    }
+}
+
+pub fn orchard_spend_nullifier_bytes(
+    nk: &[u8; 32],
+    raw_address: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    rho: &[u8; 32],
+    rseed: &[u8; 32],
+) -> Result<[u8; 32], Error> {
+    orchard::spend_nullifier_bytes(nk, raw_address, value, rho, rseed)
+}
+
+pub fn orchard_note_commitment_bytes(
+    raw_address: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    rho: &[u8; 32],
+    rseed: &[u8; 32],
+) -> Result<[u8; 32], Error> {
+    orchard::note_commitment_bytes(raw_address, value, rho, rseed)
 }
 
 /// Parses a compressed Pallas point encoding and rejects the identity.
@@ -405,6 +460,39 @@ fn canonical_scalar_bytes_be(bytes_le: &[u8; 32]) -> Result<[u8; 32], Error> {
         CurveDomainParam::Order,
         Error::MalformedPallasScalar,
     )
+}
+
+fn value_commitment_value_term(value: i64) -> Result<Option<EcPoint>, Error> {
+    if value == 0 {
+        return Ok(None);
+    }
+
+    let mut scalar_be = [0u8; 32];
+    scalar_be[24..].copy_from_slice(&value.unsigned_abs().to_be_bytes());
+    let term = pallas_basepoint_mul(&ORCHARD_VALUE_COMMITMENT_VALUE_BASEPOINT_BYTES, &scalar_be)?;
+
+    if value.is_negative() {
+        let mut negated = pallas_point_to_bytes(&term)?;
+        negated[31] ^= 0x80;
+        Ok(Some(pallas_point_from_bytes(&negated)?))
+    } else {
+        Ok(Some(term))
+    }
+}
+
+fn pallas_basepoint_mul(
+    basepoint_bytes: &[u8; 32],
+    scalar_bytes_be: &[u8; 32],
+) -> Result<EcPoint, Error> {
+    let mut point = pallas_point_from_bytes(basepoint_bytes)?;
+    point.rnd_scalarmul(scalar_bytes_be)?;
+    Ok(point)
+}
+
+fn pallas_point_add(lhs: &EcPoint, rhs: &EcPoint) -> Result<EcPoint, Error> {
+    let mut sum = EcPoint::new(CurvesId::Pallas)?;
+    sum.add(lhs, rhs)?;
+    Ok(sum)
 }
 
 fn reduce_uniform_le_bytes_mod_pallas(

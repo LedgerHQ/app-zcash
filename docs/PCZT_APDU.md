@@ -109,6 +109,10 @@ Packet sequence:
      - `cv_net [u8; 32]`
      - `nullifier [u8; 32]`
      - `rk [u8; 32]`
+     - `spend_recipient [u8; 43]`, raw Orchard payment address
+     - `spend_value u64`
+     - `spend_rho [u8; 32]`
+     - `spend_rseed [u8; 32]`
      - `alpha [u8; 32]`
    - `zip32_derivation` packet:
      - seed fingerprint `[u8; 32]`
@@ -122,9 +126,37 @@ Packet sequence:
    - `out_ciphertext Vec<u8>` packet sequence:
      - first packet: CompactSize byte length + ciphertext bytes
      - continuation packets: ciphertext bytes only
+   - Output metadata packet:
+     - `recipient [u8; 43]`, raw Orchard payment address
+     - `value u64`
+     - `rseed [u8; 32]`
+     - `rcv [u8; 32]`
 
 3. Bundle trailer packet, only when Orchard action count is greater than `0`:
    - `flags u8`
    - `value_sum` magnitude `u64`
    - `value_sum` negative-sign flag `u8`
    - `anchor [u8; 32]`
+
+### Orchard validation requirements
+
+The app does not trust host-supplied Orchard display fields directly. Before an
+action is accepted:
+
+- `rk` is recomputed from the signing key selected by `zip32_derivation` and the
+  disclosed `alpha`.
+- `cv_net` must match `ValueCommitment(spend_value - value, rcv)`.
+- `spend_recipient` must derive from the signing Orchard FVK's external or
+  internal IVK.
+- `nullifier` is recomputed from the signing FVK's `nk`, `spend_recipient`,
+  `spend_value`, `spend_rho`, and `spend_rseed`.
+- The output must decrypt with the prepared Orchard decipher keys. For
+  decryptable outputs, the decrypted value and raw Orchard receiver must match
+  `value` and `recipient`.
+- A zero-valued undecryptable output is accepted only as a dummy output: the app
+  recomputes the Orchard note commitment from `recipient`, `value == 0`, the
+  action nullifier used as `rho`, and output `rseed`, and compares it with
+  `cmx`. Validated dummy outputs are omitted from the clear-sign review list.
+- Non-zero undecryptable outputs are rejected.
+
+Dummy spends are not represented by this compact APDU subset.

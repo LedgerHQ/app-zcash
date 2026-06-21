@@ -12,9 +12,11 @@ use pasta_curves::pallas;
 
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
-    ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES, bytes::reverse_copy, pallas_base_from_repr,
-    pallas_point_from_bytes, pallas_point_to_bytes, pallas_scalar_from_repr,
-    prf_expand_with_domain_separator_and_inputs, sinsemilla::sinsemilla_short_commit,
+    ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
+    bytes::reverse_copy,
+    pallas_base_from_repr, pallas_basepoint_mul, pallas_point_add, pallas_point_from_bytes,
+    pallas_point_to_bytes, pallas_scalar_from_repr, prf_expand_with_domain_separator_and_inputs,
+    sinsemilla::{extract_p, sinsemilla_short_commit, sinsemilla_short_commit_point},
     to_pallas_base_bytes, to_pallas_scalar_bytes,
 };
 
@@ -38,6 +40,10 @@ const NOTE_COMMITMENT_MESSAGE_BITS: usize = 32 * 8 + 32 * 8 + 64 + L_ORCHARD_BAS
 const PRF_OCK_ORCHARD_PERSONALIZATION: [u8; 16] = *b"Zcash_Orchardock";
 const KDF_ORCHARD_PERSONALIZATION: [u8; 16] = *b"Zcash_OrchardKDF";
 const NOTE_COMMITMENT_PERSONALIZATION: &str = "z.cash:Orchard-NoteCommit";
+const ORCHARD_NULLIFIER_K_BASEPOINT_BYTES: [u8; HASH_SIZE] = [
+    0x75, 0xca, 0x47, 0xe4, 0xa7, 0x6a, 0x6f, 0xd3, 0x9b, 0xdb, 0xb5, 0xcc, 0x92, 0xb1, 0x7e, 0x5e,
+    0xcf, 0xc9, 0xf4, 0xfa, 0x71, 0x55, 0x37, 0x2e, 0x8d, 0x19, 0xa8, 0x9c, 0x16, 0xaa, 0xe7, 0x25,
+];
 
 #[derive(Clone, Copy, Debug)]
 pub struct OrchardCompactAction {
@@ -74,6 +80,67 @@ pub fn decipher_compact_value(
     compact: &OrchardCompactAction,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     try_compact_note_decryption_with_ivk(ivk, compact)
+}
+
+pub fn spend_nullifier_bytes(
+    nk: &[u8; HASH_SIZE],
+    raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    let rho = pallas_base_from_repr(*rho)?;
+    let _esk = orchard_esk(rseed, &rho)?;
+
+    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
+    diversifier.copy_from_slice(&raw_address[..DIVERSIFIER_SIZE]);
+
+    let mut pk_d = [0u8; HASH_SIZE];
+    pk_d.copy_from_slice(&raw_address[DIVERSIFIER_SIZE..]);
+    if !is_valid_nonidentity_pallas_point(&pk_d)? {
+        return Err(Error::MalformedPallasPoint);
+    }
+
+    let g_d = crate::diversify_hash_ledger(&diversifier)?;
+    let cm = note_commitment_point(&g_d, &pk_d, value, &rho, rseed)?;
+    let psi = pallas_base_from_repr(orchard_psi(rseed, &rho)?)?;
+    let nk = pallas_base_from_repr(*nk)?;
+    let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
+    let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
+
+    let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
+        cm
+    } else {
+        let nullifier_k = pallas_basepoint_mul(
+            &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
+            &scalar_bytes_be(&nullifier_scalar),
+        )?;
+        pallas_point_add(&nullifier_k, &cm)?
+    };
+
+    Ok(extract_p(&nullifier_point)?.to_repr())
+}
+
+pub fn note_commitment_bytes(
+    raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    let rho = pallas_base_from_repr(*rho)?;
+    let _esk = orchard_esk(rseed, &rho)?;
+
+    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
+    diversifier.copy_from_slice(&raw_address[..DIVERSIFIER_SIZE]);
+
+    let mut pk_d = [0u8; HASH_SIZE];
+    pk_d.copy_from_slice(&raw_address[DIVERSIFIER_SIZE..]);
+    if !is_valid_nonidentity_pallas_point(&pk_d)? {
+        return Err(Error::MalformedPallasPoint);
+    }
+
+    let g_d = crate::diversify_hash_ledger(&diversifier)?;
+    note_commitment(&g_d, &pk_d, value, &rho, rseed)
 }
 
 fn try_output_recovery_with_ovk(
@@ -415,6 +482,35 @@ fn note_commitment(
     };
 
     Ok(cmx.to_repr())
+}
+
+fn note_commitment_point(
+    g_d: &[u8; HASH_SIZE],
+    pk_d: &[u8; HASH_SIZE],
+    value: u64,
+    rho: &pallas::Base,
+    rseed: &[u8; HASH_SIZE],
+) -> Result<ledger_device_sdk::ecc::math::EcPoint, Error> {
+    let psi = orchard_psi(rseed, rho)?;
+    let rcm = orchard_rcm(rseed, rho)?;
+    let rcm = pallas_scalar_from_repr(rcm)?;
+
+    let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
+    let mut offset = 0;
+    append_le_bits(&mut message, &mut offset, g_d, 32 * 8);
+    append_le_bits(&mut message, &mut offset, pk_d, 32 * 8);
+    append_le_bits(&mut message, &mut offset, &value.to_le_bytes(), 64);
+    append_le_bits(&mut message, &mut offset, &rho.to_repr(), L_ORCHARD_BASE);
+    append_le_bits(&mut message, &mut offset, &psi, L_ORCHARD_BASE);
+
+    sinsemilla_short_commit_point(NOTE_COMMITMENT_PERSONALIZATION, &message, &rcm)?
+        .ok_or(Error::InvalidKeyDiscarded)
+}
+
+fn scalar_bytes_be(scalar: &pallas::Scalar) -> [u8; HASH_SIZE] {
+    let mut bytes_be = [0u8; HASH_SIZE];
+    reverse_copy(&mut bytes_be, &scalar.to_repr());
+    bytes_be
 }
 
 fn append_le_bits(message: &mut [bool], offset: &mut usize, bytes: &[u8], bit_len: usize) {

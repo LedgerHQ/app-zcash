@@ -14420,6 +14420,16 @@ pub fn sinsemilla_short_commit(
     extract_p_bottom(commitment)
 }
 
+pub(crate) fn sinsemilla_short_commit_point(
+    domain: &str,
+    message: &[bool],
+    randomness: &pallas::Scalar,
+) -> Result<Option<EcPoint>, Error> {
+    debug_assert!(message.len() <= K * C);
+
+    sinsemilla_commit(domain, message, randomness)
+}
+
 fn sinsemilla_commit(
     domain: &str,
     message: &[bool],
@@ -14506,11 +14516,15 @@ fn extract_p_bottom(point: Option<EcPoint>) -> Result<Option<pallas::Base>, Erro
         return Ok(None);
     };
 
+    extract_p(&point).map(Some)
+}
+
+pub(crate) fn extract_p(point: &EcPoint) -> Result<pallas::Base, Error> {
     if point.is_at_infinity()? {
-        return Ok(Some(pallas::Base::zero()));
+        return Ok(pallas::Base::zero());
     }
 
-    Ok(Some(point_x(&point)?))
+    point_x(point)
 }
 
 fn point_from_s_index(index: usize) -> Result<EcPoint, Error> {

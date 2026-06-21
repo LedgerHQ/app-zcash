@@ -21,6 +21,7 @@ from application_client.zcash_verify_sign import (
     check_tx_v5_signature_validity,
 )
 
+PCZT_ORCHARD_ALPHA_1 = (1).to_bytes(32, byteorder="little")
 PCZT_ORCHARD_RK_ALPHA_1 = bytes.fromhex(
     "e95982b73ab0c2137ec354cce448a75ef39ec0cbdf6907be6df3495297834f89"
 )
@@ -30,6 +31,44 @@ PCZT_ORCHARD_EXTERNAL_RECIPIENT = bytes.fromhex(
 PCZT_ORCHARD_INTERNAL_RECIPIENT = bytes.fromhex(
     "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a"
 )
+PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT = bytes.fromhex(
+    "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02"
+)
+PCZT_ORCHARD_ACCOUNT0_SPEND_RHO = bytes.fromhex(
+    "0100000000000000000000000000000000000000000000000000000000000000"
+)
+PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED = bytes.fromhex(
+    "0100000000000000000000000000000000000000000000000000000000000000"
+)
+PCZT_ORCHARD_ACCOUNT0_SPEND_NULLIFIER = bytes.fromhex(
+    "f5fdf1d1ef02c98a48475d2a8b96f0eabc1306da508ecef07aa4324463783e35"
+)
+
+
+def _strict_orchard_action(
+    fixture: dict[str, object],
+    signing_path: str = "m/32'/133'/0'",
+    alpha: bytes = PCZT_ORCHARD_ALPHA_1,
+) -> PcztOrchardAction:
+    return PcztOrchardAction(
+        cv_net=bytes.fromhex(fixture["cv_net"]),
+        nullifier=bytes.fromhex(fixture["nullifier"]),
+        spend_recipient=bytes.fromhex(fixture["spend_recipient"]),
+        spend_rho=bytes.fromhex(fixture["spend_rho"]),
+        spend_rseed=bytes.fromhex(fixture["spend_rseed"]),
+        rk=PCZT_ORCHARD_RK_ALPHA_1,
+        alpha=alpha,
+        signing_path=signing_path,
+        cmx=bytes.fromhex(fixture["cmx"]),
+        ephemeral_key=bytes.fromhex(fixture["ephemeral_key"]),
+        enc_ciphertext=bytes.fromhex(fixture["enc_ciphertext"]),
+        out_ciphertext=bytes.fromhex(fixture["out_ciphertext"]),
+        rcv=bytes.fromhex(fixture["rcv"]),
+        rseed=bytes.fromhex(fixture["rseed"]),
+        spend_value=fixture["spend_value"],
+        value=fixture["value"],
+        recipient=bytes.fromhex(fixture["recipient"]),
+    )
 
 
 def _review_approve(
@@ -587,6 +626,9 @@ def test_pczt_sign_tx_orchard_action_count_limit(
         return PcztOrchardAction(
             cv_net=bytes(32),
             nullifier=bytes(32),
+            spend_recipient=bytes(43),
+            spend_rho=bytes(32),
+            spend_rseed=bytes(32),
             rk=bytes(32),
             alpha=bytes(32),
             signing_path="m/32'/133'/0'",
@@ -594,6 +636,7 @@ def test_pczt_sign_tx_orchard_action_count_limit(
             ephemeral_key=bytes(32),
             enc_ciphertext=bytes(580),
             out_ciphertext=bytes(80),
+            rcv=bytes(32),
         )
 
     # MAX_ORCHARD_ACTIONS is 6; declare one more to trip the bound.
@@ -627,6 +670,9 @@ def test_pczt_sign_tx_orchard_rk_mismatch_rejected(
             PcztOrchardAction(
                 cv_net=bytes(32),
                 nullifier=bytes(32),
+                spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
+                spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
+                spend_rseed=PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED,
                 rk=bad_rk,
                 alpha=(1).to_bytes(32, byteorder="little"),
                 signing_path="m/32'/133'/0'",
@@ -634,6 +680,7 @@ def test_pczt_sign_tx_orchard_rk_mismatch_rejected(
                 ephemeral_key=bytes(32),
                 enc_ciphertext=bytes(580),
                 out_ciphertext=bytes(80),
+                rcv=bytes(32),
             )
         ],
         flags=0,
@@ -651,6 +698,328 @@ def test_pczt_sign_tx_orchard_rk_mismatch_rejected(
             orchard_bundle=orchard_bundle,
         ):
             pytest.fail("Device accepted a PCZT Orchard action with mismatched rk")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_sign_tx_orchard_missing_rcv_rejected(
+    backend,
+):
+    orchard_bundle = PcztOrchardBundle(
+        actions=[
+            PcztOrchardAction(
+                cv_net=bytes(32),
+                nullifier=PCZT_ORCHARD_ACCOUNT0_SPEND_NULLIFIER,
+                spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
+                spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
+                spend_rseed=PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED,
+                rk=PCZT_ORCHARD_RK_ALPHA_1,
+                alpha=(1).to_bytes(32, byteorder="little"),
+                signing_path="m/32'/133'/0'",
+                cmx=bytes(32),
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(580),
+                out_ciphertext=bytes(80),
+                rcv=bytes(32),
+            )
+        ],
+        flags=0,
+        value_balance=0,
+        anchor=bytes(32),
+    )
+
+    client = ZcashCommandSender(backend)
+    client._send_pczt_header(PcztGlobal())
+    client._send_pczt_transparent_inputs([])
+    client._send_pczt_transparent_outputs_sync([])
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client._send_pczt_orchard_actions(
+            orchard_bundle,
+            pczt_finished=True,
+            include_rcv=False,
+        ):
+            pytest.fail("Device accepted a PCZT Orchard action without rcv")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_sign_tx_orchard_cv_net_mismatch_rejected(
+    backend,
+):
+    orchard_bundle = PcztOrchardBundle(
+        actions=[
+            PcztOrchardAction(
+                cv_net=bytes.fromhex("39ceba3e81ae3415fb4a519978f4bbc75e5a1d101ce0d6bc91d035f614a9f68b"),
+                nullifier=PCZT_ORCHARD_ACCOUNT0_SPEND_NULLIFIER,
+                spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
+                spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
+                spend_rseed=PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED,
+                rk=PCZT_ORCHARD_RK_ALPHA_1,
+                alpha=(1).to_bytes(32, byteorder="little"),
+                signing_path="m/32'/133'/0'",
+                cmx=bytes(32),
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(580),
+                out_ciphertext=bytes(80),
+                rcv=bytes(32),
+            )
+        ],
+        flags=0,
+        value_balance=0,
+        anchor=bytes(32),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=[],
+            transparent_outputs=[],
+            orchard_bundle=orchard_bundle,
+        ):
+            pytest.fail("Device accepted a PCZT Orchard action with mismatched cv_net")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_sign_tx_orchard_bad_rcv_rejected(
+    backend,
+):
+    orchard_bundle = PcztOrchardBundle(
+        actions=[
+            PcztOrchardAction(
+                cv_net=bytes(32),
+                nullifier=PCZT_ORCHARD_ACCOUNT0_SPEND_NULLIFIER,
+                spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
+                spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
+                spend_rseed=PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED,
+                rk=PCZT_ORCHARD_RK_ALPHA_1,
+                alpha=(1).to_bytes(32, byteorder="little"),
+                signing_path="m/32'/133'/0'",
+                cmx=bytes(32),
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(580),
+                out_ciphertext=bytes(80),
+                rcv=bytes([0xFF]) * 32,
+            )
+        ],
+        flags=0,
+        value_balance=0,
+        anchor=bytes(32),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=[],
+            transparent_outputs=[],
+            orchard_bundle=orchard_bundle,
+        ):
+            pytest.fail("Device accepted a PCZT Orchard action with invalid rcv")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_sign_tx_orchard_zero_value_undecryptable_rejected(
+    backend,
+):
+    orchard_bundle = PcztOrchardBundle(
+        actions=[
+            PcztOrchardAction(
+                cv_net=bytes(32),
+                nullifier=PCZT_ORCHARD_ACCOUNT0_SPEND_NULLIFIER,
+                spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
+                spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
+                spend_rseed=PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED,
+                rk=PCZT_ORCHARD_RK_ALPHA_1,
+                alpha=(1).to_bytes(32, byteorder="little"),
+                signing_path="m/32'/133'/0'",
+                cmx=bytes(32),
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(580),
+                out_ciphertext=bytes(80),
+                rcv=bytes(32),
+            )
+        ],
+        flags=0,
+        value_balance=0,
+        anchor=bytes(32),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=[],
+            transparent_outputs=[],
+            orchard_bundle=orchard_bundle,
+        ):
+            pytest.fail("Device accepted an undecryptable zero-valued Orchard output")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_sign_tx_orchard_dummy_cmx_mismatch_rejected(
+    backend,
+):
+    bad_cmx = bytes.fromhex(
+        "825f806345d7c2ae67fe186120cc5b8a370c2cedb55ccf76527e9efa43c94d30"
+    )
+    bad_cmx = bytes([bad_cmx[0] ^ 1]) + bad_cmx[1:]
+    orchard_bundle = PcztOrchardBundle(
+        actions=[
+            PcztOrchardAction(
+                cv_net=bytes.fromhex(
+                    "00b3324110776396d31646041679fd6530d57c353c6be0a93a0cd55b30aa6d8b"
+                ),
+                nullifier=bytes.fromhex(
+                    "08f337fd695cb5ca2ad7ced8ec14afed06d2f8a0e5e3d8b58dffbc69e4f81b2f"
+                ),
+                spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
+                spend_rho=bytes.fromhex(
+                    "0600000000000000000000000000000000000000000000000000000000000000"
+                ),
+                spend_rseed=bytes.fromhex(
+                    "1a00000000000000000000000000000000000000000000000000000000000000"
+                ),
+                rk=PCZT_ORCHARD_RK_ALPHA_1,
+                alpha=(1).to_bytes(32, byteorder="little"),
+                signing_path="m/32'/133'/0'",
+                cmx=bad_cmx,
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(580),
+                out_ciphertext=bytes(80),
+                rcv=bytes.fromhex(
+                    "4200000000000000000000000000000000000000000000000000000000000000"
+                ),
+                rseed=bytes.fromhex(
+                    "2e00000000000000000000000000000000000000000000000000000000000000"
+                ),
+                spend_value=300000,
+                value=0,
+                recipient=PCZT_ORCHARD_INTERNAL_RECIPIENT,
+            )
+        ],
+        flags=3,
+        value_balance=300000,
+        anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=[],
+            transparent_outputs=[],
+            orchard_bundle=orchard_bundle,
+        ):
+            pytest.fail("Device accepted a dummy Orchard output with mismatched cmx")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_sign_tx_orchard_dummy_bad_rseed_rejected(
+    backend,
+):
+    orchard_bundle = PcztOrchardBundle(
+        actions=[
+            PcztOrchardAction(
+                cv_net=bytes.fromhex(
+                    "00b3324110776396d31646041679fd6530d57c353c6be0a93a0cd55b30aa6d8b"
+                ),
+                nullifier=bytes.fromhex(
+                    "08f337fd695cb5ca2ad7ced8ec14afed06d2f8a0e5e3d8b58dffbc69e4f81b2f"
+                ),
+                spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
+                spend_rho=bytes.fromhex(
+                    "0600000000000000000000000000000000000000000000000000000000000000"
+                ),
+                spend_rseed=bytes.fromhex(
+                    "1a00000000000000000000000000000000000000000000000000000000000000"
+                ),
+                rk=PCZT_ORCHARD_RK_ALPHA_1,
+                alpha=(1).to_bytes(32, byteorder="little"),
+                signing_path="m/32'/133'/0'",
+                cmx=bytes.fromhex(
+                    "825f806345d7c2ae67fe186120cc5b8a370c2cedb55ccf76527e9efa43c94d30"
+                ),
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(580),
+                out_ciphertext=bytes(80),
+                rcv=bytes.fromhex(
+                    "4200000000000000000000000000000000000000000000000000000000000000"
+                ),
+                rseed=bytes([0xFF]) * 32,
+                spend_value=300000,
+                value=0,
+                recipient=PCZT_ORCHARD_INTERNAL_RECIPIENT,
+            )
+        ],
+        flags=3,
+        value_balance=300000,
+        anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=[],
+            transparent_outputs=[],
+            orchard_bundle=orchard_bundle,
+        ):
+            pytest.fail("Device accepted a dummy Orchard output with invalid rseed")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_sign_tx_orchard_nullifier_mismatch_rejected(
+    backend,
+):
+    bad_nullifier = (
+        bytes([PCZT_ORCHARD_ACCOUNT0_SPEND_NULLIFIER[0] ^ 1])
+        + PCZT_ORCHARD_ACCOUNT0_SPEND_NULLIFIER[1:]
+    )
+    orchard_bundle = PcztOrchardBundle(
+        actions=[
+            PcztOrchardAction(
+                cv_net=bytes(32),
+                nullifier=bad_nullifier,
+                spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
+                spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
+                spend_rseed=PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED,
+                rk=PCZT_ORCHARD_RK_ALPHA_1,
+                alpha=(1).to_bytes(32, byteorder="little"),
+                signing_path="m/32'/133'/0'",
+                cmx=bytes(32),
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(580),
+                out_ciphertext=bytes(80),
+                rcv=bytes(32),
+            )
+        ],
+        flags=0,
+        value_balance=0,
+        anchor=bytes(32),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=[],
+            transparent_outputs=[],
+            orchard_bundle=orchard_bundle,
+        ):
+            pytest.fail("Device accepted a PCZT Orchard action with mismatched nullifier")
 
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
@@ -707,13 +1076,10 @@ def test_pczt_sign_tx_v5_mult_outputs(
     )
 
 
-
 def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    ORCHARD_SIGNING_PATH = "m/32'/133'/0'"
-    ORCHARD_ALPHA = (1).to_bytes(32, byteorder="little")
     TX_PREVOUT_BYTES = bytes.fromhex("050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000")
     TRANSPARENT_INPUT = PcztTransparentInput(
         prevout_txid=bytes.fromhex("cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"),
@@ -724,39 +1090,30 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
         signing_path="m/44'/133'/0'/0/2",
     )
     TRANSPARENT_OUTPUTS = []
+    ORCHARD_ACTION = {
+        "cv_net": "fd87b590de6e73dbf0372fc4e80e4c9a44c6f9b196fd296165276b15f38ca7be",
+        "nullifier": "781c4faf960206510fdc72739267fa193d9e012dbc68998d35539837e520ae2a",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0100000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1500000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "8fa021d7ce7e10ac828106e295d0daaec54ca3101f22054e90a4bb9b61a38000",
+        "ephemeral_key": "7895cdaf491fc7b6754bbe1339eab4f4d142e59fff9cf8d3820217f1e940801b",
+        "enc_ciphertext": "ffebe7c7d7f8e08fd0baffb71f54ca6fad3b8a1b1702be187bcc24f1874a48bc3013c44c8d0aaadfbdbebeb31c3eda96e539d9856c6b2c38ce2af66b080c355856dc67bf61319f0f1ac890a1cc543f49d32d30b47241d1632e6dcba30492b6a7bdbaafb9f9dd1e68c2ac12d17b485aed2fb8ba6162f4ec70f8b3c045c4db74fd7861cfb6ce2dc74c2a4219fa429332ed86e891aeca5cf2dfd0517f99fee0f0ddcc5a1a2729bac0626f895a1b572fa8eddaf3b72d2cbb6c1681aeb865740d439b7c90334512faa315207d540eb411dfe8d38b3f6673cb65e12816f42bee50abb966437fa386c34ac54611c86cc093ddee1cfe098903f3be4a8de20de1c48fdbd8ca8a9900eeee734dfff526c39ad353a81de786deb8278bdc870b9d65cc99422e54d0bf7e8e0fcf88a0a701ee59195aaa130b8950bf39bc598520f913af4bf770dfcf37e1ed4d19549759e1642945affbe385eb80497b9652e33a5366667b4fd9c212b061c6c2c47d3f289dee39fea4eba73faf6c91428ca0b97d2be3feb7c0e1ea5ee0250aed9a96d7fe9e91c525f46debe71ddbbc0f8d05576ea27a2249f5b9a341561772b6b480404d5e839af42a56d71f20ad5538214b9925f7931d926017353759398d25a5a2611cf243ff44f732cdc57312b7dfe386118a1e9377f36d7ee312be7ce3c0efa96228a83653a607e00d556f8e04defbb39a2179bb2ed8a0389bb157c75913236e6f9ddf21dcc7108b804c1fa194b2603058e03da7ab3f6ee5dacb4fc3769879d72fc21f68116f0af304142361c4e2a86f36e76407a699d61e18fdae6c",
+        "out_ciphertext": "9964518f9947818c4b75d0aad44fd05bb75a2ed34ff2a915c080e829a150cd8491272ea43bf99db6fc677560484f7667c8ee7307c1acc44873068ef0475b940a62834f31fad9a486f183a5e2d030a01b",
+        "rcv": "3d00000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2900000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 0,
+        "value": 90000,
+        "recipient": "4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
+    }
     ORCHARD_BUNDLE = PcztOrchardBundle(
-        actions=[
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("39ceba3e81ae3415fb4a519978f4bbc75e5a1d101ce0d6bc91d035f614a9f68b"),
-                nullifier=bytes.fromhex("3768e7c28954fec9791e472e02881cb6b2c3f6d744c4eeb0f248eef01f6fb53d"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("89b07d697d3ef14edf006d9a39472371ddba49a58ff23026c8656e9cc4edd437"),
-                ephemeral_key=bytes.fromhex("b2592149ac97670466fc5eff6657dd79cf20d551b31446dd49fbf9d4b1f3a230"),
-                enc_ciphertext=bytes.fromhex("9ea84a733e8edebc00e516d1c077675494b2b58fbbb78cd4106d1378c0181c729a4606ed2b0e9aa6a84c1eb445964a7363bc9c2eccf8758e4ae1e8d3453b1de676dd06164b76f275627998f50cf6e54e6b19d04bf3a37a207fbd5ac65db7fffa8a0d2ea64f095fd1bd4b72808ff012d94dbf00480123c1ac26d5392277f20322af0595bb9d44d5964b95a859e630d90ea82695b163220a255a5eeb591a9df8d592957e5e0555a178a4aca3bfbc7ae23914c97edbc2c4ab1c5bee7220f220ed869eca8f90ea9646551767d12cb6f7d8d1c51f6f4e5989c24ec7829e2efc2d9945644fcb541ea1ba9a0a9a119e92c5452d5383f381f62501a0deeb0999e659fa2bdfa8036a6849aa67a7a70b0f3028332ba1177ef129df4dd708c85a63a956653ebfd65b174889ad84065da7dbf1c46a225b77e45caf0218cef2b6f879ab20c8c40345e75d2db634645badfecade82c07af4d110c042bd26060d9927e0d8257c68dd27163994356007842dc7334f16a82cce83bb5ce428e10adcf4e9077292eea6133c3933eba031dd73c3ded25c8d1fc7185df3b5974be79428d20b5c84d81e06be531d987971af721c29787e0217ca27462c9a64f1ad03d05581952f25505ec056e1663bafc81d36d2663309e126b647353b6938d96b6a82f187a87543ea43319c51b3617eba6815c7986b7825bd6b95b41ffeabf57265866fb47336207174b2617f30887962bddd79a710cc1f3e821d5819b826bc9317b85d3aa1fe62da28e93233dbd44f1ce12f998f0ae82832c5b7b8d85bd3bcaa36267c9ab28720765b26d6104f3b"),
-                out_ciphertext=bytes.fromhex("3cd84b39eb3dff77f836a1c9a911890a7c8c6466ef5a2ac7547509b19a25f10cbe193d8d97b9c54d2aaca820303bebbcc4c398d71345c10b5b4b68552bd12bf00eb14cef7a532490b3fa9acf86e7e4c7"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-            ),
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("871b0d9ffece64195308cdc3403af4673ace0fed752a34cc424fcaacce45fb19"),
-                nullifier=bytes.fromhex("9f2daa682b1a9ce8c102ea6504c18be633d23429b3625c42005fa15d4597632a"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("55097853a03489062efb70a19197884a035e1d364339a66d7ac01c0823e5a409"),
-                ephemeral_key=bytes.fromhex("9400b1f9865ec8845843d7f95a9caea50a30a922a064a3c41dfe8be3a6422b9c"),
-                enc_ciphertext=bytes.fromhex("77babce7a9456b470802d25939471165f40990746c68752aa72deb0de06d92e8a9e8279a7a07976ddd5a4ea656b5d0126c0cf6767fc439549b6cb4dbd119651352f7ee7bd1f2687ab2da8fa9041d164730b950d828a6b4d540cf0a329cca8edc30fc27a35f1990caf739bbd701bd05428edb3ea8badec1136b581241d951a3f29cdb49ab29aa477f3c52beaeb1c55a190f37841ab60d6d0754ac4458deb10f6e0be101731f5176c4b2845e5c50d5121994bd8ee07f6085a54e3838c2fe6bfbf8212bc8a128d4aea5522b5e3245312037fe0852e226dcbf5488a388ec83f78875976f7de2588573130788ae5c7e98d080bef6d2b6e914520f56506e4b0a57469d07ae89697c7bbd041bcdd33079fdb6ec87dfbdad29e2e369d398b34858626f9829ad3e167e001932148c7ad0f3cb0d66edb322bbbd96f7f68d9b54e88a61d24dd69788de009a48a97d85554008a1139170b35d8d1b09a5d0eb75d1a36d1a825db2138a627cbcdfbd89303fa71f417c21d1562e8cd73d5bcc3ab2f26edcf818fc592ad22d5bf17d139b5573dd1f7ec2567cd66d44b4e06d54079308d0af1c98131b0290c215b72110522038c15fe2090e67f6f6bb865096f10e58ac570624773c2755bbe261c9889846b35f143285476f798f8364301a60e401da8320a939b0d3a4ef260fab9c6349cfad8e993a7de877cdb42933810abc881f74eb3bd1a9301bf9b425750e004287f7c2df4d1ae98f1e17f44f6f306e1f65e0512ecf602ee6c0c4d7ec642f81a1a0c6895324e6013d947ebe29d365f9a23f86f7d227f9633230386bd3eb"),
-                out_ciphertext=bytes.fromhex("242d4c6ccbc830c2c8a23444b273723a0f83d07519cc818d0e2b3e563c7a14e0ca5ddccb095d2a0a4303731b403d83da0643377426365a7639f770c5cd49fd95fa982e6017a4da75050c85f0503b7f15"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                value=90000,
-                recipient=PCZT_ORCHARD_EXTERNAL_RECIPIENT,
-            ),
-        ],
-        flags=2,
+        actions=[_strict_orchard_action(ORCHARD_ACTION)],
+        flags=3,
         value_balance=-90000,
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("4CBFA1990B917FEDFB50CA9DE95A98D9967B6D4426D603A45C97F02AAB737A86E8CA5DA7ABA8AAEA1314333380C389B90707760CF671A14043C7ED2B0EB3D435")
+    EXPECTED_AUTH_SIG = bytes.fromhex("171b6a25fb8b85647d24241c03ebdf3516851bcfa4304eaf0d7f95add52b1322728ef868a593706eb5a3e514adec600dc510532c2e051061ef1db50b19746d2d")
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -774,8 +1131,6 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    ORCHARD_SIGNING_PATH = "m/32'/133'/0'"
-    ORCHARD_ALPHA = (1).to_bytes(32, byteorder="little")
     TX_PREVOUT_BYTES = bytes.fromhex("050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000")
     TRANSPARENT_INPUT = PcztTransparentInput(
         prevout_txid=bytes.fromhex("cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"),
@@ -786,41 +1141,49 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
         signing_path="m/44'/133'/0'/0/2",
     )
     TRANSPARENT_OUTPUTS = []
+    RECIPIENT_ORCHARD_ACTION = {
+        "cv_net": "53996c104a264c17582dcb0292ced66dbba909ec10c67d6a47ec3ef3aaa2c0a8",
+        "nullifier": "6209c5be5e2e174eceba581599d0d4fc3cd3bc97494cf829675de17559bfea17",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0200000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1600000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "58235845190f45e7038e42be9a36ba75a57dd5d0aa5b116ec70aa273fcfc700a",
+        "ephemeral_key": "ba15ebdadf4cff31a909e9bdbe2cfb6af9f2de87d09fbabc81438bfeba33ee3f",
+        "enc_ciphertext": "c331b211b1c19bbdc6250181e279c09ce4340a4bb771b3ea4e752c972e40a488a009c741c8cd93aef5cfe853d749e02fb4502073c7be09948a8d3b82ad18dcccd7b52b988ca37f230d711f9eb4d9bf5c90c4282b8295c5bd832e82b29cff45edf415dc1c5ad22e35e9e6ed48cb6857e617e7a7d324c881719f70b3d7926881e1bc84eedb578a2438a1c7bdc075be3dce88ad78b5455c5c554a98870e742d03c7351386f702d1f1272f3a3bf40377aa0ac2647c0d57820b039345823bd767e93e94e23fe21a338cf57ef841bd06f06ef17556dc19517c34b358879bf945b2152bd615d6163d1b9f432533ed77a274b9094e793500ef184f612dd3814aa367bd45e53a63ddb85af78897556f1281a9cb1f3fbea704b3c570023c397c9421012ec2acf1d7dda3056195bcf1028befefbde4dd07f41ec3346893834cd9a4c7effd4f81cb0cb90bdd096cee6d63bc8e40a66b92a7597ed3e628e26c10b01fdf3622d3290ba3f19341d59d8a755704115cb54bc7159034ae5ec8eb5d9aeffbca4a44f4a7645088e994af9d2dc2c7e50edfbed4d460a92c5b745a956f2fc15c0a79ad89c27eeb8cd15a4692ff32c073ad9cde54ecb020dc2329f86d4edb0f942d79e4251a43549778a5da8e89acb671f399783774c1510a9895f3113d8a2d14766be9657f603574f3726158444f64592cc0efec2c0dc21eaac0f64a3dca8a6127e105b9dc581c13bcd4ea6ecdb684ef3f81b060e26952eb21fd6acafd79b189445cfbde816366bac051b4e07d6321c669b8f9643e734dc1c11d82e729354dd34702d48383e447da",
+        "out_ciphertext": "51bfcdc33143947f41974344b8d524e32acefc5112859612da87b29ca1d646efb4aad8567f9f9df2acf464150352a8aeb7710ba8f9edcf26b6c99ed28da661473fb5410f343bab9b5ffa3fa030bf94d0",
+        "rcv": "3e00000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2a00000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 0,
+        "value": 90000,
+        "recipient": "4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
+    }
+    CHANGE_ORCHARD_ACTION = {
+        "cv_net": "33ef48fc34e684c82ff9ee9d88cdc9761bb45fd3361ae04b5da2328f712d2703",
+        "nullifier": "808981a1e1e1116c5d73810a3c09a2ab8051fc9fe192470866e5853004aaaf13",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0300000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1700000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "85b20955b27f6e8a2ad94f5a4926ac434ef441349c778ad549a22c4ea7141630",
+        "ephemeral_key": "1590a0d7151f0d62b21fc28978222f5efb0b9ea0b0dff95a6c2e210f44e226bd",
+        "enc_ciphertext": "07a29fbda6c36bafeb6b2b3dce86af1662d0775082e76122de2c84216ec97e5c850767b7dc136af4dd2e36ef19200e60a99dfcda4e87f912c0d4f81cd471aa3521fba18b38755489c71576e4aa2707b7ee93be1e8e7442fdbaf76861df11c0d3b92626570cb1cf2b4c863a85e473523c2a20d2b82e90b6fa4b03f6dbceee469819ce888ffabbd87b54b081bd2ccc4292a3494a454b9fc5496b561e78158a59e0311c8125574a43f8d3d82fc080fbf107561bda0b5eead7ed896ec5c58449354bb4feb2e9e4c9e04e75e5bcf933a9e00ccbc69ac1aa5d6510aca854fb4cb838027f301bfee6197e2b884ddc66c673d425048408f36c7c932c50fc889cee6a6d94b78ecb4872e7568e58d30d9bb9e424ee883abc437f5f6336e0c5a2a72beebcdc38a75e62ffb1c1c9f059a65b7cd3c04d985b6d611bba777e6378656170e60439b941e2b6c2fd4a25cc6f142593cee329880aea4cb0e7a8d3f885aafd1d1b79016636757628dafcacddddc861381123bdb2705823d79c1008c7e13bed7bd7b0f6fbd2567e691f94acc13b62be4509a907e89bbae9f2e50af92434f5d7f63ad183b8d4f7b328303f55220a0e364212ede963a0bdb753b7849ad9d2692aceec476dcda50c35b4c68fd48854626bf2fdd1b80480132f0dc57a4d84aa84a34306b8ff683e4602b52fa1cc254174f4aba9fb6b0a28323880fa23d7144a124192954e2ae8c95d79b248f4f855f2e1d7c9cff0eda6f81ade2d8204a186a8ea6b8910badd07a2ddff0d830cb6501b768bf827088a951aeab13bb7c006430a2aba8ffc6f236abaa9c9",
+        "out_ciphertext": "69368b3bc476a79d8c7783b2f8c73fb738016bb7b0345f300920855807168ae39991f2f15ecb065a9d883bafa431e2ca44fd42e064fd08b158bd1576d9be47afa2818de7a9d4dd000421a39e72d4bb32",
+        "rcv": "3f00000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2b00000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 0,
+        "value": 5000,
+        "recipient": "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a",
+    }
     ORCHARD_BUNDLE = PcztOrchardBundle(
         actions=[
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("7f6abc5384841cd9bc7e27ee61431d5a3b6999b0f953b36ceeb67c3fd18ce980"),
-                nullifier=bytes.fromhex("3768e7c28954fec9791e472e02881cb6b2c3f6d744c4eeb0f248eef01f6fb53d"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("8b6787b72f8d0dad4afe69a1d1a50686438c0246f07793c73583dcdc22456c05"),
-                ephemeral_key=bytes.fromhex("c2faaf0661ac0993c4f03bc6f396ed82de28ace166b922003c41117f7eed3833"),
-                enc_ciphertext=bytes.fromhex("0c60cfe0c8fe459fc53344bd278154b331d35e2e243665a41ea9cb5908f783159953ef6dae2ab240fbf9d329dc3d4ce92ec9c70588f698abc2feddd07a4cb2a0be91f50b347c07ca32e224fbbc1d9cbba2cb956466fa0b4570dfa4a32825b8fed0517bfd025bdd3aaa37aab60f2730f251a65fe52e20c2fd11d6d9714701f0abfc10576beef57f1198b194c902ebc1ef3e4b34fa6ac9bce472eda5cc55ef576173127bd6c5f55def93ef3e401c868731dcb187960abfdc8f2a7e5d9d57db363f3a9337b192be26a9e0271b1aa4f89090875f3f1a242d361cfeb5ba5ce9c885d5c190544b0256d6e8916b39e7dc463d0bca1b319479d6001bc4a37d75ade16b59823f16180b0a8c357f3791b48a41c6bcb8295773c3bc6286df42e067f186ab1a3d318122db44c8078aeb11d31282728a8207cc1f54239a02c23d99780b22f55baeaed7d2f71f2cff6177523ea496551ec7d2a325afab69b02b239929d101cc2862f063c5a5cec2756aeb981d45972235c0e2cf23596b4b36dc0196b37a4f60dbf0021e78fd92bb962d6a8154ea9c3924939cbce570309bc75bc768957dda0bfdd1264bf227ba183931ae7b13017cd36053c4b23916b50add78324e651159cb1b776d8e4f09ddf1ef745188d0dd175b47694a361b48be291b4eae6335508d5e3cdedceebb3627aaad7fa76c55f4522556fb54447eeac9a9a24753e34c13f3f531a903f5b668ca3fab010acf8d872c817fe06553f73748bbc301aeff3ab155176f7439f2fc48596c1124ad16f8783a59a90f61f75ec9166b59702c88cae7aac422e8d2ce5d"),
-                out_ciphertext=bytes.fromhex("34c277dc90fe4434b091e8125187ded0dbb32b6f92127b23910169aab39f405f522f452174cb4269ccf1ea910b9b35c8fad645e72705cc1ceaf136ea8222615a7cf3c4dcb8d2b0556558ce82968ad72c"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                value=90000,
-                recipient=PCZT_ORCHARD_EXTERNAL_RECIPIENT,
-            ),
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("26805b9bd3edd1e1a56cab175ab20f2d9e70cb5bbca060ea594e13cdb7007627"),
-                nullifier=bytes.fromhex("9f2daa682b1a9ce8c102ea6504c18be633d23429b3625c42005fa15d4597632a"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("fd972ff25ca24c9a59f03842dbc62b9373e2cd6a6f0ca197a5a827bb07347710"),
-                ephemeral_key=bytes.fromhex("31e17cef9606ac592a340a5a21de0f6ad05117e3b25075e41a714615c7232aad"),
-                enc_ciphertext=bytes.fromhex("f177281cfe1c462ef14856275b951219739629ab20ad22d7ae85ca116c9a338dab4f5132171a20f617022d8575ed5c6856000cfacbde054dd940f3060225ca56e397873c9d87fbd100c2e26680cfa31b669862e6f23633560e157826ca76cf7946d31b6769ce1f8c83f0618e2ac8c96c0c837108ad21f0046f08ce2d15b9f1956bb2c9773e4abded3b6a0c31af6faa2e20e522ca1aa9f3eaca64b8940c967fc4bb9719881bd3c5abfccf6f9d1cd838ec62b496b2c6e29824107674dfd732368f89f8a77d035e3db0531964352717e9f4633ec01cacaa7f462782ddc2ed78ac101a31bf101c81153314dcb29370b142460a5ded2b1e4b40e1b343b0217639578a60097df8ec6d94ae0513b08a2ce142c6ac5a9cc5411af71cbeb57245d6b3b51e773adddfdc6b10713b13bdaff505bfed6a8184e3f63482592349f947b75d75bdaeb5d28eac0b5113277f8c81864b2b0ae446423e4d5cc3388be1e67077cb4a09847940439f6eaef9501db5086e7acab01953e3ed00fd02944dd97f8b076843b489d552bcb51da1745ad22cb1219eadd1b62f3321e5e178f9b85d6b57ffc9e7b20905bfec8d37391c097d62d97a491131d1324461cbb2d932e487c3716b5e1032e530b7607344fb56217a568cd36c36b55c481aa6f0d0aa2f689bdd55fdd83a5f7a3155625513dc86cfaa5136a32cbe57e5ad69b1d00d1563fc6d781d819bb54661babae08bd8c2d7e966097612ecf7049e19901252bc6807dc6cb343d5b4360a39076c328c7952402ca51d0b7e4775d4d5109ffd98933c84d65daebc01f102a4ae765733"),
-                out_ciphertext=bytes.fromhex("90afa9ddb93e03002dbd3ac38d745ce2d3968478b2bb2784af3f91c7d25b3d687871f8338247dc65b1653f5dac66dd95c5775383a36beeab079ed29df204ecb5b534c1da9c05b203557ee9540ea5532f"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                value=5000,
-                recipient=PCZT_ORCHARD_INTERNAL_RECIPIENT,
-            ),
+            _strict_orchard_action(RECIPIENT_ORCHARD_ACTION),
+            _strict_orchard_action(CHANGE_ORCHARD_ACTION),
         ],
-        flags=2,
+        flags=3,
         value_balance=-95000,
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("E0548945F5B7EF0F7A9DD02FD7653ABA695C9A06AC8359597461826B47081E075DEC3DDC1BDD09C3347DF56DC3CCECED8C26DEE5ACFAB7FB379495CA6C660A08")
+    EXPECTED_AUTH_SIG = bytes.fromhex("8f9ab26095562afef67e8903e7ea30173acdfd1d2bb5853056f6c5275e24de935c6973318b8becf517c6aed42de16954dc0019a2e57dfdf83aa452cad56cd91f")
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -838,47 +1201,36 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_simple(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    ORCHARD_SIGNING_PATH = "m/32'/133'/0'"
-    ORCHARD_ALPHA = (1).to_bytes(32, byteorder="little")
     TRANSPARENT_OUTPUTS = [
         PcztTransparentOutput(
             value=290000,
             script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
         ),
     ]
+    ORCHARD_ACTION = {
+        "cv_net": "24631b59abdde690d7e6b62cfeac6619efb7753dc873d9dbfdd4af58f0c50e98",
+        "nullifier": "2e552e9315c89ecbf8016a8dfaa325ef90dedc59df4b0a42e5ff5cee0bbed821",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0400000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1800000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "f4f6493954ecd47be87e5fdebb99db614dfaf1825717f23c4b0438688d831a04",
+        "ephemeral_key": "00" * 32,
+        "enc_ciphertext": "00" * 580,
+        "out_ciphertext": "00" * 80,
+        "rcv": "4000000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2c00000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 300000,
+        "value": 0,
+        "recipient": "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a",
+    }
     ORCHARD_BUNDLE = PcztOrchardBundle(
-        actions=[
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("de086e9d8c3e879e951dc2b4eeb71cc5fe3c034699a4ab6f6fa88a53e7a97427"),
-                nullifier=bytes.fromhex("ad55957c9deceaee264e52a66c4aff7d5a9100f88c36cb9f1ef39726ab440006"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("3560d8f99b83a9b769595813639e4b0f8e483f0fc217eeedba658e29bae6a920"),
-                ephemeral_key=bytes.fromhex("9a32bfd04ca5fc04b87116119201021029bf83d4db0f7fc68c570f7e093beb0f"),
-                enc_ciphertext=bytes.fromhex("05606a55b7686cd42a991a1386cf5dbdba9a0bd4754a586861b8bb805332ac07c9be780971fe9791ea947c5214a3ff29fa8216c8271f7f628f9154573fe45d0defcbd67dbaf6a7f5279e6198385eab7999ccae6e6420fedd3c051887edbeb4b0badcdc601c7ac281d8399cd4d482bd3766cd611923a3298b56f1a3d7bc8bd39455cea8151b04429befbf98520c66d2ed57d638d157ab9c994c298188cf2fa1935c7e4abc4a84d99335de77b25b747b3d757f8e9d90cfac6e42dd3a152ec52cb4eaa4285e860ca14dc4b7eefda3e2a2350376da56c4e9b9adc534589cc55f8612d808f556af5bb4483d2b02d723ec7daa7236bb8de917747e997e03e1bc1c5009a63538c966b68d62fa934cae9f6aa19d06845a368b75e6a2f19ecacc2e6e2520fbab710b8c8726d5f9fb3cc2686f5eba0b60208d1a72526594b2305e55d0634e3c15a6b0234554ab6f496998766d2466aa4292d26e3f34b48b8a8f8bb734e085e62700ed282d57d548af65465325915511c6353432c2ffb510f84debbe32eb423e21b3fa1ce56ea30e38f65a37bbaf9c33fb0b9accb73e07806da9331eebff92aa50ceaea89512ab35d87adc6bbbd02b3f976b9b3256fd06163a0eb20aa4f8a84e93fd5d1f20de1cb364e01ed0a2f36b321b7b6c45418554093e7e9519dc436e59cc02cdf1fd23e59f2a7bf970a3b355741ac53d5a4c3b8850905ae273604305b40dc59050c55a466f183ca24869d4d20dc0e846a3d4c6a0254ef02f1520e50f8f5be9c285f0730a67547ee32103b1a5c8594a5f02e7b3fd61a1d8b1a33bfaf7e91f5050"),
-                out_ciphertext=bytes.fromhex("40b85ce64c4191976c2db2b671518d0155a81d57beaf402f31e4775e2ec60e2d473fee77e126e541c7d40d7b6442b2655933efc835a1d976aa90b3b03217673049af5d867d8980265f1bf10a7ecf5b5d"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                spend_value=100000,
-            ),
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("08b228c0e51ed7061c103f06582d6303fc20689de1dedffc26460f469602b982"),
-                nullifier=bytes.fromhex("d68f3363b4843cb568dedbf4d966d1d7876a2edfd758d126efe1a8bd1836620f"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("9215e26687dad4221bf57714aae9e61a69cda0f3407632a94053389dd8b62305"),
-                ephemeral_key=bytes.fromhex("2c3b8b1315ba08045e9efe3a3979a4f7bd320b4cb6e0437cf32308c5d87b8733"),
-                enc_ciphertext=bytes.fromhex("9bfdf9e41de825407a0eb79aaac9e66a2426247e07fee995d3ea68b5e9538a7e80143bb49a62e0a001a5bf510593f790e4f55c080c39bac1391741d756bedd81eb33bd87f7b8339fcff2951c3a2716d1a653e866cca0556714db01f23b116d550e9f6739efe37c262214d0620bd59c52839c647d56173d78e15d7e171e65ac9e1249ccebe4e1d52ace166bb07f0b20445452c75d5f59a11aa9e490859dce7c108037b53cb3bfd9a242b88ce23625bc0a2e3f88b04abfd60a962186b99335bfd40448f724abfa2b8b804f3c544edc7c0bdb2020ba8b5ce8fcd59da9fa9837640f7079503a6b36fcbfe1399a5baedf8b40a223ffb63c675db73aa7d29a20fa692b5cb20b1e3f504c8b60e616fd05ea2b0983f05d51ffa5b2563e480efb7d5665f77f38f6db2f913b2334034a02e25b0e8898a94967bf596a19556dfd061de393c29ff2e8d6460d26546a3ba68315957f332ccb120a9a7656bc0bda47677be3f998e51bf542ca4d3c213fa33c0ad7beb60bc46da16838015183d32ad91c9071b5ee9d1dacbee5a24af746457ffd6f614341e39f45be9596498ba355d14c1e0e83c8d73f4351c21c4b026fd911e77af3efe8cca37adb2680ffa4b0039449470c7c198170edc8ed44e803ff84c039372566806661d2d274ef222f19a364e1b5b4921eb9c8f7959dc1ad859867d4f4597286647f202876b78d0f699bfe38bbda4e8e4835d7350732e6f0ca6697400933065cccbf3b807fd7cf4a16e2faa553e9ac7f672717cb45eb34bbf4f32cf6e91c8cdb623e75099d5e0eb3887e538d6e6fc102d854395af9"),
-                out_ciphertext=bytes.fromhex("eb750713d45b7caa405813743e6e145a48fc7d6b89933a39a56fe9c7d29accc793f8c8c30e217e69e897bc157278f341042b3d8b1b92c9134b96c36901b28157ab2de75219edd12bd522a34eabf1fab2"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                spend_value=200000,
-            ),
-        ],
-        flags=1,
+        actions=[_strict_orchard_action(ORCHARD_ACTION)],
+        flags=3,
         value_balance=300000,
         anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("223EC7633D1ECF322FB8CC00AD426CB01A2C4760AC5EDEA5F6A8715914ACCE917403B2CDE4A1C3A547C01E1F6874A92531405ACAF2B91E70AE4A1038DAC0472D")
+    EXPECTED_AUTH_SIG = bytes.fromhex("c9c9c463d2e9b29fd40cdf442913115e64bfb2fb52a6873486f191f0062bcd3783304527181d6ed316281d1680ebb4da4dd0822932091ab36676a1440e7f0820")
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -894,49 +1246,36 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_change(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    ORCHARD_SIGNING_PATH = "m/32'/133'/0'"
-    ORCHARD_ALPHA = (1).to_bytes(32, byteorder="little")
     TRANSPARENT_OUTPUTS = [
         PcztTransparentOutput(
             value=290000,
             script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
         ),
     ]
+    CHANGE_ORCHARD_ACTION = {
+        "cv_net": "6dc30a9161336a15dc711399c28ec43c6553c5d2080d26f3dd5a5b92205a8a3f",
+        "nullifier": "6adb0656945a7d10a3e3ea9770bb6908028b215744c3eb97cebc2f26b0d5a93f",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0500000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1900000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "d39997b4db9c319c4e4c1d0263ca722097cb450e19d082ccb1a0110293468a20",
+        "ephemeral_key": "0a9c9de85198786097f3ab9f2b898b8dfc2abfc54c1c4e11ec1ebabb54b9df20",
+        "enc_ciphertext": "a2fd467e666d966bb8db3c421e429e77fbb8caaa499ef55cde5e7541149852c6c193ffaf27839972dd372573751f471a7b6481c4fb5125aa1c9411a6304604ca224f8a272aeed0f0a8dcf77e22c436c720b070849ce8362daa7d168baad887f65679d9e2b753cba4da655b47c6c1f9a8b4286205338561689571ddde3eacd8fd148ddfe722213653b2935dd73379fe1569599462774c62e27dc06b5f2adce5a27681bbbc2cf0e48ba1959003a670a0f986f67d0069d3dc7d49cd3fe9be4f66dda188ab123bca4fcb4c38355943cb6b9864b13939f81f206be2b6570f61ddc66081d26b4eddc1d6beff4471e8648cdbf7dc1ae19021f0ca119373572c2aaf04c827bdb118b3514bec74c0f2fc2bc77c1b529f22fa536c5173e12b76763f742f714c901cd020a3acbfad5d0410464b61716d33a6a0d439551d15140fb24f2721e2812ffdec5a47bc0634299d826c9fc7e5a61a17b36541880e2a49914592b3ea3f873bb7d736fd782a2408f2836cbeacedfe754aae6e48762e07ed5269a8398a5332e83ff5901a77a7bf6eb76e356e48e41eb5af51fb8206d85b50244ed1dd5ba6cfe562d5c9c54e2825c43174e8df3779dcc5777e40692d4c82750eaa5e745f9547f4fe1d0661cc259b1cf4f8c14a2d91360499e5224e9bca03871f823ef5966f01cd900f73387b3acaaa2978c047c75e076e2f44ef9b89a59858b0fdc9d511a2ea3726f95a18d598f2c324a738c2b36b1a2057db72d1efae06d835cf4aa697e7845de1a8585da38f0673cb5c0f6e78588c330132524ee45f0559ee2011d155fbab30a904",
+        "out_ciphertext": "e286df1b466593e4e7c588800d2c19228169f267b7a3b112186fda3ef85e826e1c2e61a30ed454d001f4e9152828db088e40b314c385cb12d3cb9cf8b2c11a36b00699af2d03d73934f674f33a6cc5c7",
+        "rcv": "4100000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2d00000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 300000,
+        "value": 5000,
+        "recipient": "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a",
+    }
     ORCHARD_BUNDLE = PcztOrchardBundle(
-        actions=[
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("2f5aae0b9f187db35774b6a8881705bbcf2eb0ac7be56ad2ac927d9c3e899521"),
-                nullifier=bytes.fromhex("d68f3363b4843cb568dedbf4d966d1d7876a2edfd758d126efe1a8bd1836620f"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("49109401ee3ec99022f47483fafd1cc786b3a24a03924bc6d0c0fdc7fb076015"),
-                ephemeral_key=bytes.fromhex("e97dd4f52670c52acbbd6316a5fca101b0c33a71a3a79445d3cdb58363be2f93"),
-                enc_ciphertext=bytes.fromhex("9194a8602be00f4e035fbd6c598f2c16e47c5c68809fdca0e2d9db0ee960e59e93a1f7b4b49c4bd36421f94194747c6a0ff0a2cf20d7bbf703d46b67ce11ea6ec2986a632513646a8a3d49722a2a6b85b4d7040a4321f323859be6f87ea980d3a9e4f0ff0d5b652fd2485f967f16dc83348bdc78e63cdc60edf0d768fddd71aef72b9c7db1d17f7ba4df42a68cc4a011004baaa6829309237a0cb4ed6d38c1569b7344b56db6f69ac9ec1dabae44521f97abb45b5fadadbc8e623cc4e07716dd488e4ea5d268ae04fe39c267e140389fa010c91acfd2fa8c702cdb4a9b7d20b0e7d1fb8006b7dc576a6a98b825ec85819abf910df99a5bbb3e0c7ff28b7007fb081571d4e6bca0290dda73b60522328401cd1978b1495c24e7784713897b608e36383b254c4c4eb2d7ea590c302d3cf1447433ab09f6cf66cf9a7275bd7cf10ce9fbc4127eabd378af66184b74a48cb794ac46255d53584b024404da66848b4a94a8b48266e01f2934890d172a818e9bca6c7cc3662f040620e3f2a0a1c5093df1a02f47f04b5e370c51460af8abdcb24b808dcbd5597cba7f21ff1773101e81d61b82dd319fe4b45416af9987793e4ac959dfa73acd3499519395657398c31e7887f9ba0033deebac685737ed4f96c3686fe169026f7a460f576f50b9b8de6ac4a6f7d0dded364ffc92edf0be4d926647684cdb72c307377a99aee9b168557a792f8d10254968d598c0626ceaf658257b7d9511dbb78925687e77c80f1ac460e85a861c52539f645cd595a273e204d2ab987610b3f86f79365dc20153e5c4c32f9f3088"),
-                out_ciphertext=bytes.fromhex("9bdd58eda5ad9518dc15cea267120236d9eb964c6ed3b197ca532d3a9581c77bf27c359f3f3b1666e3ac3504c17e2473fe1431e8c761680da3a6c7386815cc717ae741604fa5d5a5fe79cb3879aa7af6"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                spend_value=100000,
-            ),
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("a33ef5236a0bbf46dee6b44320fc293f5ee3238fbbcca7d7a6c9b20ac2da6138"),
-                nullifier=bytes.fromhex("ad55957c9deceaee264e52a66c4aff7d5a9100f88c36cb9f1ef39726ab440006"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("46ba59eb9cbbf5fa129c29fa0c6733af5ecec1d80d8e450a93f6d910ce608f11"),
-                ephemeral_key=bytes.fromhex("1a16e26f7c5ec1caeb3549893749a2e912ffcafe0dffa3ba6d78a4656c477c10"),
-                enc_ciphertext=bytes.fromhex("ba475e732850138870cbe28ab73c29d1d7d29973715d6102287b77420dfa8715486f999f66729d3891ed6f0cde043013091bb28437ad9f57306ac3b8694da7727796ee570d690fd6dae42c5cf15f5751b38130f7c48683852605d68cc3448000af3386156a3e4c4e5522dd9decb8687d2dab1cb544f50ce1296f93933c47fe6fae027fafc9c01194ae1a7987a42f526679154910e352fb45b91dd93922097db44592d185a3e98e621ba913f6085c2a11af6b42bca643ad9120e35b35748e2a4f6af7dccc64eade91713ff27c0eed03caee6e85953bd38fc0ed76c189b2957ae1fd56121aef7de9e9e95d9413301aa70ac858a4f4b78cfb0670c40dfd4f65cd6d6aaffd4b32b4de820b0160b2a5d2012bfee7b6315d1299be3faac1fd92f43cde408f81192d9e68170cd5dfffdf55b4e5557a8ee39fe65bd27cc9c9a852415acfbee22577e1f24a4244c1180477111a88992a98450334f3da859d38403cc8328d4bdcc344fd3dd93e659213b8967edca63e3976121df1b59affd328307778ba1368b41e4782bb7094153321dd7f9f691a503dfe3e8ab40a280a189f9f6fb0d9009d1d48db883f63dfff7f1945168942dc46a1a673bda727405aab3076599d8dc5a8d047fdc02c33b74baa189bfdc5fddd93ff0a78708013f723af3dc89c91c44cb88c190b531092a10bd4caa277347d03651ed81826682bf26f6557ada37f0d4d9a4e9259880dda9928099ab729136a0eb1bf47891789c814c32b738886d3caed34787fa3cfa5fbd766ed2454e365b32d2fbfa2dc96f359bbcb4008563438b4adb5e507ce"),
-                out_ciphertext=bytes.fromhex("2c67f43c51278361143bcb44e4b7344bb1159eca9482e81ccdbec33e372dc5930073e0c5721afd2b37a2a19bc8d00074e7d37de2ef118a1aa39602c1a15e4a784b2b137917be051e62ea4c42af7c34e1"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                spend_value=200000,
-                value=5000,
-                recipient=PCZT_ORCHARD_INTERNAL_RECIPIENT,
-            ),
-        ],
+        actions=[_strict_orchard_action(CHANGE_ORCHARD_ACTION)],
         flags=3,
         value_balance=295000,
         anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("36F43F8402821E188ABA691E735233E2D0C8132C4B25B75F21ABC543D11F86920666C23227051EBB50B2096CB32FC02FD060ED9E17006C57E6376C68E5AFF73C")
+    EXPECTED_AUTH_SIG = bytes.fromhex("8d1572632d414bbc6028a263ca52f28aae838c2728f0d6f772e528a4a24193130d34e1c1d949dbc519e5c62345f38d627ff0e6987bb60c8a1920f0b707dd5331")
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -952,8 +1291,6 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_transparent_change(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    ORCHARD_SIGNING_PATH = "m/32'/133'/0'"
-    ORCHARD_ALPHA = (1).to_bytes(32, byteorder="little")
     TRANSPARENT_OUTPUTS = [
         PcztTransparentOutput(
             value=290000,
@@ -965,39 +1302,30 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_transparent_change(
             signing_path="m/44'/133'/0'/1/0",
         ),
     ]
+    ORCHARD_ACTION = {
+        "cv_net": "00b3324110776396d31646041679fd6530d57c353c6be0a93a0cd55b30aa6d8b",
+        "nullifier": "08f337fd695cb5ca2ad7ced8ec14afed06d2f8a0e5e3d8b58dffbc69e4f81b2f",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0600000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1a00000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "825f806345d7c2ae67fe186120cc5b8a370c2cedb55ccf76527e9efa43c94d30",
+        "ephemeral_key": "00" * 32,
+        "enc_ciphertext": "00" * 580,
+        "out_ciphertext": "00" * 80,
+        "rcv": "4200000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2e00000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 300000,
+        "value": 0,
+        "recipient": "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a",
+    }
     ORCHARD_BUNDLE = PcztOrchardBundle(
-        actions=[
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("de086e9d8c3e879e951dc2b4eeb71cc5fe3c034699a4ab6f6fa88a53e7a97427"),
-                nullifier=bytes.fromhex("ad55957c9deceaee264e52a66c4aff7d5a9100f88c36cb9f1ef39726ab440006"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("3560d8f99b83a9b769595813639e4b0f8e483f0fc217eeedba658e29bae6a920"),
-                ephemeral_key=bytes.fromhex("9a32bfd04ca5fc04b87116119201021029bf83d4db0f7fc68c570f7e093beb0f"),
-                enc_ciphertext=bytes.fromhex("05606a55b7686cd42a991a1386cf5dbdba9a0bd4754a586861b8bb805332ac07c9be780971fe9791ea947c5214a3ff29fa8216c8271f7f628f9154573fe45d0defcbd67dbaf6a7f5279e6198385eab7999ccae6e6420fedd3c051887edbeb4b0badcdc601c7ac281d8399cd4d482bd3766cd611923a3298b56f1a3d7bc8bd39455cea8151b04429befbf98520c66d2ed57d638d157ab9c994c298188cf2fa1935c7e4abc4a84d99335de77b25b747b3d757f8e9d90cfac6e42dd3a152ec52cb4eaa4285e860ca14dc4b7eefda3e2a2350376da56c4e9b9adc534589cc55f8612d808f556af5bb4483d2b02d723ec7daa7236bb8de917747e997e03e1bc1c5009a63538c966b68d62fa934cae9f6aa19d06845a368b75e6a2f19ecacc2e6e2520fbab710b8c8726d5f9fb3cc2686f5eba0b60208d1a72526594b2305e55d0634e3c15a6b0234554ab6f496998766d2466aa4292d26e3f34b48b8a8f8bb734e085e62700ed282d57d548af65465325915511c6353432c2ffb510f84debbe32eb423e21b3fa1ce56ea30e38f65a37bbaf9c33fb0b9accb73e07806da9331eebff92aa50ceaea89512ab35d87adc6bbbd02b3f976b9b3256fd06163a0eb20aa4f8a84e93fd5d1f20de1cb364e01ed0a2f36b321b7b6c45418554093e7e9519dc436e59cc02cdf1fd23e59f2a7bf970a3b355741ac53d5a4c3b8850905ae273604305b40dc59050c55a466f183ca24869d4d20dc0e846a3d4c6a0254ef02f1520e50f8f5be9c285f0730a67547ee32103b1a5c8594a5f02e7b3fd61a1d8b1a33bfaf7e91f5050"),
-                out_ciphertext=bytes.fromhex("40b85ce64c4191976c2db2b671518d0155a81d57beaf402f31e4775e2ec60e2d473fee77e126e541c7d40d7b6442b2655933efc835a1d976aa90b3b03217673049af5d867d8980265f1bf10a7ecf5b5d"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                spend_value=100000,
-            ),
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("08b228c0e51ed7061c103f06582d6303fc20689de1dedffc26460f469602b982"),
-                nullifier=bytes.fromhex("d68f3363b4843cb568dedbf4d966d1d7876a2edfd758d126efe1a8bd1836620f"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("9215e26687dad4221bf57714aae9e61a69cda0f3407632a94053389dd8b62305"),
-                ephemeral_key=bytes.fromhex("2c3b8b1315ba08045e9efe3a3979a4f7bd320b4cb6e0437cf32308c5d87b8733"),
-                enc_ciphertext=bytes.fromhex("9bfdf9e41de825407a0eb79aaac9e66a2426247e07fee995d3ea68b5e9538a7e80143bb49a62e0a001a5bf510593f790e4f55c080c39bac1391741d756bedd81eb33bd87f7b8339fcff2951c3a2716d1a653e866cca0556714db01f23b116d550e9f6739efe37c262214d0620bd59c52839c647d56173d78e15d7e171e65ac9e1249ccebe4e1d52ace166bb07f0b20445452c75d5f59a11aa9e490859dce7c108037b53cb3bfd9a242b88ce23625bc0a2e3f88b04abfd60a962186b99335bfd40448f724abfa2b8b804f3c544edc7c0bdb2020ba8b5ce8fcd59da9fa9837640f7079503a6b36fcbfe1399a5baedf8b40a223ffb63c675db73aa7d29a20fa692b5cb20b1e3f504c8b60e616fd05ea2b0983f05d51ffa5b2563e480efb7d5665f77f38f6db2f913b2334034a02e25b0e8898a94967bf596a19556dfd061de393c29ff2e8d6460d26546a3ba68315957f332ccb120a9a7656bc0bda47677be3f998e51bf542ca4d3c213fa33c0ad7beb60bc46da16838015183d32ad91c9071b5ee9d1dacbee5a24af746457ffd6f614341e39f45be9596498ba355d14c1e0e83c8d73f4351c21c4b026fd911e77af3efe8cca37adb2680ffa4b0039449470c7c198170edc8ed44e803ff84c039372566806661d2d274ef222f19a364e1b5b4921eb9c8f7959dc1ad859867d4f4597286647f202876b78d0f699bfe38bbda4e8e4835d7350732e6f0ca6697400933065cccbf3b807fd7cf4a16e2faa553e9ac7f672717cb45eb34bbf4f32cf6e91c8cdb623e75099d5e0eb3887e538d6e6fc102d854395af9"),
-                out_ciphertext=bytes.fromhex("eb750713d45b7caa405813743e6e145a48fc7d6b89933a39a56fe9c7d29accc793f8c8c30e217e69e897bc157278f341042b3d8b1b92c9134b96c36901b28157ab2de75219edd12bd522a34eabf1fab2"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                spend_value=200000,
-            ),
-        ],
-        flags=1,
+        actions=[_strict_orchard_action(ORCHARD_ACTION)],
+        flags=3,
         value_balance=300000,
         anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("114943BF307F040230E2744A432CB083586B8BB46272BA9A7C853FAA3A967635C609924EAA55E78205004E65BD5EB4CDDAF0E94EBFF953DA740A92AC0A79F32B")
+    EXPECTED_AUTH_SIG = bytes.fromhex("082db120e7231c0ae1deef3644b22520efa27830b7af56ba6d98fe53ed52da8f5304969c04047adc11901c33408cc4dff466487aeca5b94fa0f788bc5f956f1c")
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1020,6 +1348,9 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_unrecoverable_output_rejected(
             PcztOrchardAction(
                 cv_net=bytes.fromhex("0ce5eae9c123a3373634630e258b5e534b3e7c6148ca5a6c04c61bbfa76663b0"),
                 nullifier=bytes.fromhex("d68cef8d52a164d092d8bd4a616458187f7703ce6ce5ee9ded3fde2df4c56912"),
+                spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
+                spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
+                spend_rseed=PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED,
                 rk=PCZT_ORCHARD_RK_ALPHA_1,
                 cmx=bytes.fromhex("9db7163d3fa5a001ba00b42c73589b9791682089f2ef0a14f4ea0d7790cf1e01"),
                 ephemeral_key=bytes.fromhex("b8734861bcf115a70efbcb60f711782e71a8ebc0e5ebc1a7b9f97e1c20f5c22e"),
@@ -1030,10 +1361,14 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_unrecoverable_output_rejected(
                 spend_value=100000,
                 value=180000,
                 recipient=PCZT_ORCHARD_EXTERNAL_RECIPIENT,
+                rcv=bytes(32),
             ),
             PcztOrchardAction(
                 cv_net=bytes.fromhex("1a88eb3f897cda9bf68454c33f627e0150f974f22af9cd961d04ebc9036bc895"),
                 nullifier=bytes.fromhex("fc3ea087e60269ff25114682610a6b0d716f191fbf2acf767d2de63de4b95a00"),
+                spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
+                spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
+                spend_rseed=PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED,
                 rk=PCZT_ORCHARD_RK_ALPHA_1,
                 cmx=bytes.fromhex("e185cf8de2955a4298f602e4bcf508f55a68cc6c79a5379dda08cab1fec7f628"),
                 ephemeral_key=bytes.fromhex("0ddc203d51b8edd935c9445d9c808d2e53585bc1eeaebf5823c9a5e70eb05b12"),
@@ -1044,6 +1379,7 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_unrecoverable_output_rejected(
                 spend_value=200000,
                 value=100000,
                 recipient=PCZT_ORCHARD_INTERNAL_RECIPIENT,
+                rcv=bytes(32),
             ),
         ],
         flags=3,
@@ -1068,45 +1404,50 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    ORCHARD_SIGNING_PATH = "m/32'/133'/0'"
-    ORCHARD_ALPHA = (1).to_bytes(32, byteorder="little")
     TRANSPARENT_OUTPUTS = []
+    RECIPIENT_ORCHARD_ACTION = {
+        "cv_net": "2bbcd0793d399b207b228ca760f2b51ac8d6866e2649b3c3ff1e67b454c5a6bf",
+        "nullifier": "a554dda140773e5cdf5234e36227ab659452e8102d4de726c8a72fa182d94203",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0700000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1b00000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "4b335e40a9dc718f353cb4d0e6614c59dd00fda6a37e704c08b2b8f3da1d9b1e",
+        "ephemeral_key": "3f2ebdad40909b5114a62ae394fa47b03521a8e335ca83c0d8ab25b36593fd24",
+        "enc_ciphertext": "061a91562732f49247090c3b9b62b76ac5c0e032362822f23416efc60c105aef10b0a7da0f85bbac92e4d3e3fcf5e366034081d9bec64d07dce0fef608c4f573ae37bf3fe54809903b0b93e27be25ef0853860f9711cad533b47d7cb4bf07677df752316252004a9a43880f45eb0dd99e1b16cfaf39ed94d7559a7057df6d12341c3e9450f9687b0bdec3c6a5028dc730b025b25e5481964d788cb827bf7b989835b56e41f448e42b3c55eb7a422cfdc49e32c97145f1820bf830571f349a807abac8c91f60ae21b676573d66a56ca2fe53fa7aebdb4f0076d618442c1bff1db245fc7597af34f081db5539036b73b7ab02435d1278efd359fccdd1f52151d3cc5f477f07120685cc3bf5efd23e99f31842b3234168c6b37d912f35cb0b847a1f5947212a4e2a5596f8b41a0d6442c5d3eb2ee679acc9e0b4507a806397f1efb5422d77459ea2509af8b360f1a973e1df62b4d849fd6ab3f90547f9a3c3cc0805609fd0cb6a560bd39a77c57e9796833ecf4d77b45f8450f7fe516ca82004b6601200ce39460b688002df97d50660b5e5026a784e2fa071ea81570ba5020f1d0f473fb269b806fdaeabad975345f20d9299fc2c005986037164b858a8deeff07932df5ef5a3a23676227b631161edfcfd0d2bd29aaddefb6ff2950e9ca7b7d23208dc80d25d2869ea80a149f8fae83d7cd03374ea71acaa0fddaca47dab649d81a99c32e67774c27723983886a67528a22d1a1d339dfbd6e81c11e83c9a17fee47439124fcfe5353aff39c2de30a1681ae3d2636c8c049ceab035cf9dbd396aa580dce3c",
+        "out_ciphertext": "d6a12d5f0f1702bc0e6978fdf44779c741dea7c2b8cdf9bda2cf8780e440c838adc5f97076237d279044d859aa2efe4f0ea97a236ed869a351da9947a7717c00b3cb4d967086b9a05b5318b22b731ea8",
+        "rcv": "4300000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2f00000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 200000,
+        "value": 180000,
+        "recipient": "4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
+    }
+    CHANGE_ORCHARD_ACTION = {
+        "cv_net": "af7b9a0ad90cecf9dbcf08d1057da0bf8451a189cc8dfa758e1543cffb5edb97",
+        "nullifier": "57aad2670e2e4df67ca855c53973db38e7942efa8e906ee961adb71955aa8423",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0800000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1c00000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "4d5af089ac858234d3472b545efe5796a609792d06bf18dbb8b3841ac0e9e031",
+        "ephemeral_key": "92f7498c759a77b4065f9389d345c755ba241e68f0d8bf6d78f443257167d79f",
+        "enc_ciphertext": "183f95348800b0c01daaa128c74ed5a4904024192330114b7b59460db6e332321425e9875e96bf7c1ba1bcb751ab6d8b494bd4b4e2587e177c9b083bf3a015a5879b69eaf2380c26d60501ff825be33eebc8ff3a86dfb04dd6fd1e814ea5e486148518ed256ea064267fbf9bc41ec6f8bf6da17b2bd9a81b42cb92dc398a5876333e64826b62a61dba4a5d9e740cdb6f0f1ac7e5f3bd8bff60c30088334491263b61f88b5e102eeb2d539ca32e45ce8600bcaf37368a2696528ee5e5cc52f8cf52df2c7e98f682ce6a4036527adce9f167df7f90200f3cdc9b451bdb4e36c3a46c2a2c42a0f0036161040267ef5dd267721db87f5b910dccf72afc67e059450db2b3df4789348ca72ddc5c310c4504c3779c5cca6a4ff94a73da8ee09dc06adc1856654b4be95e0adcf4510a0506b8b604bbd7fc340206728018f602060be3966cc0c91f601680b6e9e0f1132188cc217fef595b57c761b9292546d1dfe7148c42e4b8140cb364c23d1f0af6f794daf89c07927ea2d3be5f31ecf3f7d4dd973db806e3c0ef7cfb461848ba8562283c18c572f5e12d20ad8fff16cd0b58530501154a79458a28d2666707938915c95d854a3de8aee39a34d35c65a4e903b6135107726842ff150afa92243751606ec24fc0df246979f93c612a1f694b52863bb652226ceb520984aabda5c9fc60969589d9c894f3deceb448d04f3e61386430275eb4a64cacdf40704ccde93ae6573c1cd02b0bcfa689cf5de779cd2cf47ec13bb2e19c0d736fc0d0b7523b46487a1457e23dc1b473f1846475dc9544a81429c9caa51f3d",
+        "out_ciphertext": "9f38b7e5c9bee88aa9be8bb44a386bd90fb6f915820f4a6469e120f2764774a3936e69063b514e83e587b9bd7b049d94d002c21dca9e8fa33b75aae1d584e8f4b77a0389e104596e2002aac2571fe384",
+        "rcv": "4400000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "3000000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 0,
+        "value": 10000,
+        "recipient": "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a",
+    }
     ORCHARD_BUNDLE = PcztOrchardBundle(
         actions=[
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("f61b81d4d82e61c245f59ba77c6822b937132e5b794224f95db8433063994f22"),
-                nullifier=bytes.fromhex("fc3ea087e60269ff25114682610a6b0d716f191fbf2acf767d2de63de4b95a00"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("ab272660436c13c8a53f357335612f49ba61c2476651a1b3135881c4fe0a773d"),
-                ephemeral_key=bytes.fromhex("4c7314227c0199b9311470468981d47713a5f5109369edd7153a470751b070ac"),
-                enc_ciphertext=bytes.fromhex("46cbe07c7c443635f101d481bc111642eae701694f6a8e503b163f6eeba752f8336e93a1264d9dc138e450182f6f34c179f577ded73a34e805405edf459ca3c204b704ab6e12a9d98fd58bdd6f23f5175b5f88d4ce8e1ce6e15f5e8ac33001a4a3ee0ac641c5738cd851fb6db8cb7b0eb8cf72e831585b5b4071477e7f8e92fe23f3c8496b283ac227be5219a333b4703efc604dda4752fe7cc2d3a9974d5159017b90d5e1c815db1c8cddab91dacd715c66b7666272178a28c7a7d05b763a9c6525e6f35810852bb77f69245068819d634f0d637101afcd9a3ecc2c17371f269d37d42f543169f9cdbd02be2092bf5eb263dc787fda8a811681303fefb65e7c81fa7fd537d108060d8f56a42577cf45dc57fff563cc7b4d167da96b625e66d02789924cacbf7c5a876383e49573624ab52261d19a49f635e501a15109575562bdd3500eee5681ce00f176fbe9bf9aa607969ef9e124f6932b24f40045a7067d4791794300f875eca146b9a0f7356292e5501511332dad6cc50948e1eae208131f1328ee84d62d916a22239e3f373ee994966cac76aee4a5f4e4d14f2462c98e828f38c8e95bef12a5ca50060e3a5203df81f10d7946e33f51072117403bb2d74cff0d58d66530aefe2c84ccc6c37b2baf77ea7b3ad66d0bc463912de82033f96265aa7c5c9a46a09d9389274dc52c202652b3d09629163416e2deba86e1c556ad1513c9d42e02aea10416c071ad579e6fd813e30210494d918f808664391eebcc501aaa9e8884573bea0f67a8061fe5e531f1ffbbc14da40961ec0d05695c32aebd8ecd"),
-                out_ciphertext=bytes.fromhex("dbdf7cc4e1b5e89044eca85547ed7adea0e88738fcab767b03993ede592eb18c2dec1e20c9fd22fed35be298d2621734ddf17176aa51b836e5cd43ff1220854bca515559ddb184b318f65198e890a880"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                spend_value=200000,
-                value=180000,
-                recipient=PCZT_ORCHARD_EXTERNAL_RECIPIENT,
-            ),
-            PcztOrchardAction(
-                cv_net=bytes.fromhex("7b19b7ceb6a1d588209a62d08e1c13f309e61381f767a59328ff91e4191d98a3"),
-                nullifier=bytes.fromhex("d68cef8d52a164d092d8bd4a616458187f7703ce6ce5ee9ded3fde2df4c56912"),
-                rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("e960b02f6b6e0e58008aac76cd99b4690541a867fbc6f5d52606262264fdda2e"),
-                ephemeral_key=bytes.fromhex("a5d064724cd7eeea8058bc46f0b99e3f166acb7533b2bb7f0e71455800438e36"),
-                enc_ciphertext=bytes.fromhex("5b7222cdbc3dc4a72cb76e55c1c4035e6ea3ff9b9a8bdc64535e22fd54618a048b61985ca54d154083d92fe9c95806024e214cdd82b1419499387c93bddee1a25b5eb1999aaec9967fe85d7bc41f8c634b7f1b02f140b4947e56bf5e77e84e7a0becac4421ec825a90ef2febfa2099635bdfee145e441d4a98e8accb8608bcc88f2abe8f8503fafc165490f4687fe1687245f731ce2e558513fba50f8a9e079e3599c266fb02ce396472c527fda66e2b4c4c0e7617ccce6aa26ec1312f77c580331dadbf96d9fc7b13277f54cae948938653cfe56a7f695c90764662978ffabbe286b947653498bc4968f62a91f11c94199e23c7906175482480dbbbe8188755590f8084babfca2b9044b4c1c0e84a18f7043b47a6001807170ad5e4b8ab680661407645b2c5ec8740dc69da49255364d4278db9f0bc63ea98e64634114d8bebfabffa57ff61c2509db5431284c16ab926e5c0ba2c219282a7c9ed03c36d9659c0bb1be59b7570935ea2d7352aa11022500cf9b4a6d1ecc556bab49118999663de5f2a22cd78819f5778e3599416ab150f42440ccc761c955dc15f49eab0fd20467a5aae9c6f84dfd14528df46af4da2f0a5ddefa4552be915c564ce720e7d26e1d3261a9bfe568fa1929d3c4da13d2a87eefa955d35aa0a99fdca301d52c3b0ecdb59c275510b7323ff4c46e3e6bf4bdcea7dddd4b9f5349f508b5c62adb529c23f91af42e960a0322ddb6c010b1915f0512db34feabac23fc42294f00f18f6225bd7614e7dadd74d61d8c2d40f8bd02294e262448e7984b7205d3bc6256b751c73042b"),
-                out_ciphertext=bytes.fromhex("08abc376d9c33581d1a74aba93b503b2911846ab7d77e8ed96f0210c4ffabb09e81a728fff021f90784cbb2c8b3dd3b7f62491e02618c25a3f819836aed45fcf707a379e4b11b65aaf7f6283c250fcd6"),
-                alpha=ORCHARD_ALPHA,
-                signing_path=ORCHARD_SIGNING_PATH,
-                value=10000,
-                recipient=PCZT_ORCHARD_INTERNAL_RECIPIENT,
-            ),
+            _strict_orchard_action(RECIPIENT_ORCHARD_ACTION),
+            _strict_orchard_action(CHANGE_ORCHARD_ACTION),
         ],
         flags=3,
         value_balance=10000,
         anchor=bytes.fromhex("c5e1408579e67cf16b5d19479408fa035a7db4fe3060123d139eba8523bc9633"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("37BDBE4BD6FE9BEEA2AC75B6733A3ADA62D9937A864A9EFE935DE7470399BD06C623F10DB34AC960A95343CAE26CF49FB411DC90564C603DD376EC12076DA20B")
+    EXPECTED_AUTH_SIG = bytes.fromhex("920a50c9903cd33fdd143bb10d4baaaa6d064f0a9db6c4a5f3c6bdabf870ad8831ce35ebb5cf06a6f49dfd3b51b52e1d9b28d2da5b0bfacd5c3fe530fe18880b")
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1117,42 +1458,3 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
         TRANSPARENT_OUTPUTS,
         ORCHARD_BUNDLE,
     )
-
-
-def test_pczt_sign_tx_with_v4_nu6_input(
-    backend,
-    scenario_navigator: NavigateWithScenario,
-):
-    EXPECTED_SIG = "31440220488d0fca08431682cd5f10968a72affdd569f61a4a358f73edf05d0fb4a3e1a702204722751bd7d27f999ed714694ad024465d54c288a9cc560559d9594914d92ac501"
-    PCZT_GLOBAL = PcztGlobal(consensus_branch_id=0xC8E71055)
-    CHANGE_PATH = "m/44'/133'/4'/1/0"
-    TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("0ad3e89c25a3660efacfb08f35dab5cb65d3683f55d7426026d61e93fa395a3e"),
-        prevout_index=0,
-        value=53142882,
-        script_pubkey=bytes.fromhex("76a914c91bd3bb62b6abbb0005ea78613c0c4f11330b4a88ac"),
-        sequence=bytes.fromhex("00000000"),
-        signing_path="m/44'/133'/4'/0/0",
-    )
-    RECIPIENT_OUTPUT = PcztTransparentOutput(
-        value=10000000,
-        script_pubkey=bytes.fromhex("76a9147678416cb82a4a716dd1ee6b332744ba2a1f11c488ac"),
-    )
-    CHANGE_OUTPUT = PcztTransparentOutput(
-        value=42916656,
-        script_pubkey=bytes.fromhex("76a914c628ce8ff6367f0ea6763f1c1d865329af0715ac88ac"),
-        signing_path=CHANGE_PATH,
-    )
-
-    client = ZcashCommandSender(backend)
-
-    with client.send_pczt(
-        pczt_global=PCZT_GLOBAL,
-        transparent_inputs=[TRANSPARENT_INPUT],
-        transparent_outputs=[RECIPIENT_OUTPUT, CHANGE_OUTPUT],
-    ):
-        _review_approve(scenario_navigator, "test_sign_tx_with_v4_nu6_input")
-
-    resp = client.pczt_sign_transparent(input_index=0).data
-
-    assert resp.hex() == EXPECTED_SIG
