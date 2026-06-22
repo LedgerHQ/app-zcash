@@ -37,7 +37,7 @@ use crate::parser::orchard_decipher::{
     ORCHARD_OUT_CIPHERTEXT_SIZE, ORCHARD_RAW_ADDRESS_SIZE, OrchardActionCiphertext,
     OrchardCompactAction, OrchardDecipherKeys, decipher_compact_value, decipher_value_with_ovk,
 };
-use crate::tx::{Hashers, TxInfo, TxOutput, TxSigningState};
+use crate::tx::{Hashers, TransferType, TxInfo, TxOutput, TxPool, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _};
 use crate::utils::check_output_displayable;
 use crate::utils::{

@@ -83,12 +83,62 @@ impl TxOutputMemo {
     }
 }
 
+// Value pool an output belongs to. Used to classify the transfer type for the
+// clear-signing review subtitle.
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TxPool {
+    // Transparent (public) output.
+    #[default]
+    Transparent,
+    // Orchard (shielded/private) output.
+    Orchard,
+}
+
 #[derive(Default)]
 pub struct TxOutput {
     pub amount: u64,
     pub address: String,
     pub is_change: bool,
     pub memo: Option<TxOutputMemo>,
+    pub pool: TxPool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TransferType {
+    // Transparent inputs spent to transparent recipients.
+    PublicToPublic,
+    // Transparent inputs shielded into Orchard recipients.
+    PublicToPrivate,
+    // Orchard notes spent to transparent recipients.
+    PrivateToPublic,
+    // Orchard notes spent to Orchard recipients.
+    PrivateToPrivate,
+}
+
+impl TransferType {
+    // Classifies the transfer from the source pool and the displayed outputs.
+    pub fn classify(from_private: bool, outputs: &[TxOutput]) -> Self {
+        let to_private = outputs
+            .iter()
+            .any(|output| !output.is_change && output.pool == TxPool::Orchard);
+
+        match (from_private, to_private) {
+            (false, false) => TransferType::PublicToPublic,
+            (false, true) => TransferType::PublicToPrivate,
+            (true, false) => TransferType::PrivateToPublic,
+            (true, true) => TransferType::PrivateToPrivate,
+        }
+    }
+
+    // Human-readable subtitle shown under the review title.
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            TransferType::PublicToPublic => "Public transfer",
+            TransferType::PublicToPrivate => "Transfer from public to private address",
+            TransferType::PrivateToPublic => "Transfer from private to public address",
+            TransferType::PrivateToPrivate => "Private transfer",
+        }
+    }
 }
 
 #[derive(Default)]

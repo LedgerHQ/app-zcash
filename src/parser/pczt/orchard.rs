@@ -786,6 +786,7 @@ impl PcztParser {
             address,
             is_change,
             memo,
+            pool: TxPool::Orchard,
         });
 
         if is_change {

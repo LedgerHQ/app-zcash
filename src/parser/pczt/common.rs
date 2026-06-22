@@ -114,7 +114,10 @@ impl PcztParser {
             }
         }
 
-        let review_result = ui_display_tx(&ctx.tx_info.outputs, fees);
+        // Source is private when Orchard notes are being spent.
+        let transfer_type =
+            TransferType::classify(self.orchard_spend_value_sum > 0, &ctx.tx_info.outputs);
+        let review_result = ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type);
 
         if !ok!(review_result) {
             return Err(ParserError::user());

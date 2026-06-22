@@ -721,6 +721,7 @@ impl PcztParser {
                 address,
                 is_change,
                 memo: None,
+                pool: TxPool::Transparent,
             });
 
             if is_change {
