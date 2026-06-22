@@ -26,6 +26,7 @@ mod handlers {
     pub mod get_trusted_input;
     pub mod get_version;
     pub mod get_vk;
+    pub mod pczt;
     pub mod sign_msg;
     pub mod sign_tx;
 }
@@ -60,19 +61,20 @@ use zeroize::Zeroizing;
 use crate::consts::{
     INS_GET_SHIELD_ADDR, P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE,
     P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE,
-    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_NEXT, P1HashSignMode,
-    P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
-    P2ShieldedAddrMode, P2VkMode,
+    P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_LAST, P1_NEXT,
+    P1HashSignMode, P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE,
+    P2_HASH_INPUT_START_SAPLING, P2ShieldedAddrMode, P2VkMode,
 };
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
     consts::{
         INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_VK, INS_GET_WALLET_PUBLIC_KEY,
-        INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN, INS_SIGN_MESSAGE,
-        ZCASH_CLA,
+        INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN,
+        INS_PCZT_TRANSPARENT_INPUT, INS_SIGN_MESSAGE, ZCASH_CLA,
     },
     handlers::{
         get_trusted_input::handler_get_trusted_input,
+        pczt::handler_pczt_transparent_input,
         sign_msg::handler_sign_msg,
         sign_tx::{handler_hash_input_finalize_full, handler_hash_input_start, handler_hash_sign},
     },
@@ -161,6 +163,10 @@ pub enum Instruction {
     HashSign {
         mode: P1HashSignMode,
     },
+    PcztTransparentInput {
+        first: bool,
+        last: bool,
+    },
     SignMessage {
         first: bool,
         next: bool,
@@ -203,7 +209,7 @@ impl TryFrom<ApduHeader> for Instruction {
             }
             (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
                 first: p1 == P1_FIRST,
-                next: p1 == P1_NEXT,
+                next: p1 == P1_LAST,
             }),
             (
                 INS_HASH_INPUT_START,
@@ -224,6 +230,14 @@ impl TryFrom<ApduHeader> for Instruction {
             (INS_HASH_SIGN, p1, 0) => Ok(Instruction::HashSign {
                 mode: P1HashSignMode::try_from(p1)?,
             }),
+            (INS_PCZT_TRANSPARENT_INPUT, p1, 0)
+                if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
+            {
+                Ok(Instruction::PcztTransparentInput {
+                    first: value.p1 == P1_FIRST,
+                    last: value.p1 == P1_LAST,
+                })
+            }
             (INS_SIGN_MESSAGE, p1, 0) => Ok(Instruction::SignMessage {
                 first: p1 == P1_FIRST,
                 next: p1 == P1_NEXT,
@@ -373,7 +387,8 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
             Instruction::GetTrustedInput { .. }
             | Instruction::HashInputStart { .. }
             | Instruction::HashFinalizeFull { .. }
-            | Instruction::HashSign { .. },
+            | Instruction::HashSign { .. }
+            | Instruction::PcztTransparentInput { .. },
             true,
         ) = (ins, is_error)
         {
@@ -410,6 +425,9 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
             handler_hash_input_finalize_full(comm, ctx, *is_change)
         }
         Instruction::HashSign { mode } => handler_hash_sign(comm, ctx, *mode),
+        Instruction::PcztTransparentInput { first, last } => {
+            handler_pczt_transparent_input(comm, ctx, *first, *last)
+        }
         Instruction::SignMessage { first, next } => handler_sign_msg(comm, ctx, *first, *next),
     }
 }

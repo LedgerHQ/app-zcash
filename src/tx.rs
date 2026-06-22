@@ -2,16 +2,23 @@ use core::ptr::addr_of_mut;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use ledger_device_sdk::hash::HashError;
 use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::nbgl::NbglHomeAndSettings;
-
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 
 use crate::parser::orchard_decipher::OrchardDecipherKeys;
-use crate::parser::{OutputParser, Parser, ParserMode};
+use crate::parser::personalization::{
+    ZCASH_OUTPUTS_HASH_PERSONALIZATION, ZCASH_PREVOUTS_HASH_PERSONALIZATION,
+    ZCASH_SAPLING_HASH_PERSONALIZATION, ZCASH_SEQUENCE_HASH_PERSONALIZATION,
+    ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
+};
+use crate::parser::{OutputParser, Parser, ParserMode, PcztParser};
+use crate::utils::blake2b_256_pers::Blake2b256Personalization as _;
+use orchard::bundle::commitments::ZCASH_ORCHARD_HASH_PERSONALIZATION;
 
 #[derive(Default)]
 pub struct Hashers {
@@ -33,6 +40,27 @@ pub struct Hashers {
 
     // Legacy V4 txid is SHA256d over the V4-encoded transaction bytes.
     pub v4_tx_hasher: Sha2_256,
+}
+
+impl Hashers {
+    pub fn init_v5_tx_hashers(&mut self) -> Result<(), HashError> {
+        self.prevouts_hasher
+            .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION)?;
+        self.sequence_hasher
+            .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION)?;
+        self.outputs_hasher
+            .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION)?;
+        self.amounts_hasher
+            .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION)?;
+        self.scripts_hasher
+            .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION)?;
+        self.sapling_hasher
+            .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION)?;
+        self.orchard_hasher
+            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION)?;
+
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -123,6 +151,7 @@ pub struct TxContext<'a> {
 
     pub home: NbglHomeAndSettings,
     pub parser: Parser,
+    pub pczt_parser: PcztParser,
     pub output_parser: OutputParser,
     pub vk_response: Option<PendingVkResponse>,
     pub is_vk_display_finished: bool,
@@ -147,6 +176,7 @@ impl<'s> TxContext<'s> {
             // NOTE: We don't need to init hashers here because they will initialized before first use in parser.
             addr_of_mut!((*ptr).home).write(NbglHomeAndSettings::default());
             addr_of_mut!((*ptr).parser).write(Parser::new(mode));
+            addr_of_mut!((*ptr).pczt_parser).write(PcztParser::new());
             addr_of_mut!((*ptr).output_parser).write(OutputParser::new());
             addr_of_mut!((*ptr).vk_response).write(None);
             addr_of_mut!((*ptr).is_vk_display_finished).write(false);
@@ -164,6 +194,7 @@ impl<'s> TxContext<'s> {
         self.trusted_input_info = TrustedInputInfo::default();
         self.hashers = Hashers::default();
         self.parser = Parser::new(mode);
+        self.pczt_parser = PcztParser::new();
         self.output_parser = OutputParser::new();
         self.vk_response = None;
         self.is_vk_display_finished = false;

@@ -15,6 +15,7 @@ use crate::parser::orchard_decipher::{
     ORCHARD_OUT_CIPHERTEXT_SIZE, OrchardActionCiphertext, OrchardCompactAction,
     decipher_compact_value, decipher_value_with_ovk,
 };
+use crate::parser::personalization::ZCASH_OUTPUTS_HASH_PERSONALIZATION;
 
 use super::*;
 
