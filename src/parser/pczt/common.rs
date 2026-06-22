@@ -108,6 +108,7 @@ impl PcztParser {
         let reveal_self_outputs = !has_external_output;
         if reveal_self_outputs {
             debug!("PCZT has no external outputs; displaying self-transfer output");
+            // PCZT does not read tx_info.outputs after review; this only affects UI filtering.
             for output in ctx.tx_info.outputs.iter_mut() {
                 output.is_change = false;
             }
