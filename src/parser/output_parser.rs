@@ -385,7 +385,7 @@ impl OutputParser {
                         check_output_displayable(
                             &script.0.0,
                             self.current_output_amount,
-                            &ctx.tx_info.change_pk_hash,
+                            ctx.tx_info.change_pk_hash.as_ref(),
                         )
                     {
                         let is_change = output == CheckDispOutput::Change;

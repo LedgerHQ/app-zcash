@@ -36,8 +36,6 @@ pub struct Hashers {
     pub tx_compact_hasher: Blake2b_256,
     pub tx_non_compact_hasher: Blake2b_256,
 
-    pub tx_full_hasher: Blake2b_256,
-
     // Legacy V4 txid is SHA256d over the V4-encoded transaction bytes.
     pub v4_tx_hasher: Sha2_256,
 }
@@ -81,7 +79,7 @@ pub struct TxInfo {
 
     pub outputs: Vec<TxOutput>,
     pub is_change_found: bool,
-    pub change_pk_hash: [u8; 20],
+    pub change_pk_hash: Option<[u8; 20]>,
 
     pub prevouts_hash: [u8; 32],
     pub sequence_hash: [u8; 32],

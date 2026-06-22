@@ -7,8 +7,7 @@ use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 
 use self::personalization::{
-    ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
-    ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
+    ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
 };
 use self::reader::ReadBytesExt;
 use corez::io::Read;
@@ -23,9 +22,7 @@ use zcash_protocol::value::Zatoshis;
 use zcash_transparent::address::Script;
 use zcash_transparent::bundle::OutPoint;
 
-use crate::parser::compute::{
-    SighHashComputeMode, finalize_signature_hash, finalize_signature_input_hash,
-};
+use crate::parser::compute::finalize_signature_input_hash;
 use crate::parser::reader::ByteReader;
 use crate::settings::Settings;
 use crate::swap;
@@ -40,6 +37,10 @@ use crate::{
 use error::ok;
 use ledger_device_sdk::log::{debug, error, info};
 
+pub use compute::{
+    compute_no_transparent_input_signature_digest, compute_shielded_signature_digest,
+    compute_transparent_input_signature_digest,
+};
 pub use error::{ParserError, ParserSourceError};
 pub use output_parser::{OutputParser, OutputParserCtx};
 pub use pczt::{PcztParser, PcztParserCtx};
@@ -337,30 +338,17 @@ impl Parser {
                 info!("TX prevout hash {}", HexSlice(&ctx.tx_info.prevouts_hash));
                 info!("TX sequence hash {}", HexSlice(&ctx.tx_info.sequence_hash));
 
-                info!("Compute headers hash");
+                if input_count != 0 {
+                    ok!(ctx
+                        .hashers
+                        .prevouts_hasher
+                        .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
 
-                let full_hasher = &mut ctx.hashers.tx_full_hasher;
-                ok!(full_hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-
-                ok!(version.write(&mut full_hasher.as_writer()));
-                ok!(full_hasher.update(&u32::from(consensus_branch_id).to_le_bytes()));
-                ok!(full_hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
-                ok!(full_hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
-
-                // Save header_digest
-                ok!(full_hasher.finalize(&mut ctx.tx_info.header_digest));
-
-                info!("V5 header digest {}", HexSlice(&ctx.tx_info.header_digest));
-
-                ok!(ctx
-                    .hashers
-                    .prevouts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
-
-                ok!(ctx
-                    .hashers
-                    .scripts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION));
+                    ok!(ctx
+                        .hashers
+                        .scripts_hasher
+                        .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION));
+                }
             }
             // Support V4 in trusted input mode (Transaction ID computation)
             (ParserMode::TrustedInput, TxVersion::V4, _) => {
@@ -398,14 +386,10 @@ impl Parser {
                     ParserState::TransactionPresignReady
                 }
                 (ParserMode::Signature, true) => {
-                    let zero_output_count = self.output_count == 0;
-                    finalize_signature_hash(
-                        ctx,
-                        if zero_output_count {
-                            SighHashComputeMode::NoTransparentInputsOrOutputs
-                        } else {
-                            SighHashComputeMode::NoTransparentInputs
-                        },
+                    compute_no_transparent_input_signature_digest(
+                        ctx.tx_info,
+                        self.output_count,
+                        ctx.tx_info.sighash_type,
                     )?;
                     ParserState::TransactionReadyToSign
                 }

@@ -59,23 +59,25 @@ use tx::TxContext;
 use zeroize::Zeroizing;
 
 use crate::consts::{
-    INS_GET_SHIELD_ADDR, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER, P1_FINALIZE_FULL_CHANGEINFO,
-    P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST, P1_GET_PUBLIC_KEY_DISPLAY,
-    P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE, P1_GET_VK_FIRST, P1_HASH_INPUT_START_FIRST,
-    P1_HASH_INPUT_START_NEXT, P1_LAST, P1_NEXT, P1HashSignMode, P2_FINALIZE_FULL_DEFAULT,
-    P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING, P2ShieldedAddrMode, P2VkMode,
+    INS_GET_SHIELD_ADDR, MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
+    P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
+    P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE, P1_GET_VK_FIRST,
+    P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_LAST, P1_NEXT, P1HashSignMode,
+    P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
+    P2_PCZT_CONTINUE, P2_PCZT_FINISHED, P2ShieldedAddrMode, P2VkMode,
 };
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
     consts::{
         INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_VK, INS_GET_WALLET_PUBLIC_KEY,
-        INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN,
-        INS_PCZT_SIGN_TRANSPARENT, INS_PCZT_TRANSPARENT_INPUT, INS_PCZT_TRANSPARENT_OUTPUT,
-        INS_SIGN_MESSAGE, ZCASH_CLA,
+        INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN, INS_PCZT_HEADER,
+        INS_PCZT_ORCHARD_ACTION, INS_PCZT_SIGN_ORCHARD, INS_PCZT_SIGN_TRANSPARENT,
+        INS_PCZT_TRANSPARENT_INPUT, INS_PCZT_TRANSPARENT_OUTPUT, INS_SIGN_MESSAGE, ZCASH_CLA,
     },
     handlers::{
         get_trusted_input::handler_get_trusted_input,
         pczt::{
+            handler_pczt_header, handler_pczt_orchard_action, handler_pczt_sign_orchard,
             handler_pczt_sign_transparent, handler_pczt_transparent_input,
             handler_pczt_transparent_output,
         },
@@ -167,6 +169,7 @@ pub enum Instruction {
     HashSign {
         mode: P1HashSignMode,
     },
+    PcztHeader,
     PcztTransparentInput {
         first: bool,
         last: bool,
@@ -175,8 +178,19 @@ pub enum Instruction {
         first: bool,
         last: bool,
     },
+    PcztOrchardAction {
+        first: bool,
+        last: bool,
+        finished: bool,
+    },
     PcztSignTransparent {
         input_index: usize,
+    },
+    PcztSignOrchard {
+        action_index: usize,
+    },
+    PcztInvalid {
+        sw: AppSW,
     },
     SignMessage {
         first: bool,
@@ -241,7 +255,8 @@ impl TryFrom<ApduHeader> for Instruction {
             (INS_HASH_SIGN, p1, 0) => Ok(Instruction::HashSign {
                 mode: P1HashSignMode::try_from(p1)?,
             }),
-            (INS_PCZT_TRANSPARENT_INPUT, p1, 0)
+            (INS_PCZT_HEADER, P1_FIRST, P2_PCZT_CONTINUE) => Ok(Instruction::PcztHeader),
+            (INS_PCZT_TRANSPARENT_INPUT, p1, P2_PCZT_CONTINUE)
                 if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
             {
                 Ok(Instruction::PcztTransparentInput {
@@ -249,12 +264,21 @@ impl TryFrom<ApduHeader> for Instruction {
                     last: value.p1 == P1_LAST,
                 })
             }
-            (INS_PCZT_TRANSPARENT_OUTPUT, p1, 0)
+            (INS_PCZT_TRANSPARENT_OUTPUT, p1, P2_PCZT_CONTINUE)
                 if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
             {
                 Ok(Instruction::PcztTransparentOutput {
                     first: value.p1 == P1_FIRST,
                     last: value.p1 == P1_LAST,
+                })
+            }
+            (INS_PCZT_ORCHARD_ACTION, p1, P2_PCZT_CONTINUE | P2_PCZT_FINISHED)
+                if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
+            {
+                Ok(Instruction::PcztOrchardAction {
+                    first: value.p1 == P1_FIRST,
+                    last: value.p1 == P1_LAST,
+                    finished: value.p2 == P2_PCZT_FINISHED,
                 })
             }
             (INS_PCZT_SIGN_TRANSPARENT, 0, p2)
@@ -264,6 +288,23 @@ impl TryFrom<ApduHeader> for Instruction {
                     input_index: p2 as usize,
                 })
             }
+            (INS_PCZT_SIGN_ORCHARD, 0, p2) if (p2 as usize) < MAX_PCZT_ORCHARD_ACTIONS_NUMBER => {
+                Ok(Instruction::PcztSignOrchard {
+                    action_index: p2 as usize,
+                })
+            }
+            (
+                INS_PCZT_HEADER
+                | INS_PCZT_TRANSPARENT_INPUT
+                | INS_PCZT_TRANSPARENT_OUTPUT
+                | INS_PCZT_ORCHARD_ACTION
+                | INS_PCZT_SIGN_TRANSPARENT
+                | INS_PCZT_SIGN_ORCHARD,
+                _,
+                _,
+            ) => Ok(Instruction::PcztInvalid {
+                sw: AppSW::WrongP1P2,
+            }),
             (INS_SIGN_MESSAGE, p1, 0) => Ok(Instruction::SignMessage {
                 first: p1 == P1_FIRST,
                 next: p1 == P1_NEXT,
@@ -414,9 +455,13 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
             | Instruction::HashInputStart { .. }
             | Instruction::HashFinalizeFull { .. }
             | Instruction::HashSign { .. }
+            | Instruction::PcztHeader
             | Instruction::PcztTransparentInput { .. }
             | Instruction::PcztTransparentOutput { .. }
-            | Instruction::PcztSignTransparent { .. },
+            | Instruction::PcztOrchardAction { .. }
+            | Instruction::PcztSignTransparent { .. }
+            | Instruction::PcztSignOrchard { .. }
+            | Instruction::PcztInvalid { .. },
             true,
         ) = (ins, is_error)
         {
@@ -453,14 +498,27 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
             handler_hash_input_finalize_full(comm, ctx, *is_change)
         }
         Instruction::HashSign { mode } => handler_hash_sign(comm, ctx, *mode),
+        Instruction::PcztHeader => handler_pczt_header(comm, ctx),
         Instruction::PcztTransparentInput { first, last } => {
             handler_pczt_transparent_input(comm, ctx, *first, *last)
         }
         Instruction::PcztTransparentOutput { first, last } => {
             handler_pczt_transparent_output(comm, ctx, *first, *last)
         }
+        Instruction::PcztOrchardAction {
+            first,
+            last,
+            finished,
+        } => handler_pczt_orchard_action(comm, ctx, *first, *last, *finished),
         Instruction::PcztSignTransparent { input_index } => {
             handler_pczt_sign_transparent(comm, ctx, *input_index)
+        }
+        Instruction::PcztSignOrchard { action_index } => {
+            handler_pczt_sign_orchard(comm, ctx, *action_index)
+        }
+        Instruction::PcztInvalid { sw } => {
+            ctx.pczt_parser.reset();
+            Err(*sw)
         }
         Instruction::SignMessage { first, next } => handler_sign_msg(comm, ctx, *first, *next),
     }

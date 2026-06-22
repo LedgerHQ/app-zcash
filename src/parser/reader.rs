@@ -74,6 +74,12 @@ pub trait ReadBytesExt: Read {
         self.read_exact(&mut buf)?;
         Ok(u32::from_le_bytes(buf))
     }
+
+    fn read_u64_le(&mut self) -> Result<u64> {
+        let mut buf = [0u8; 8];
+        self.read_exact(&mut buf)?;
+        Ok(u64::from_le_bytes(buf))
+    }
 }
 
 impl<R: Read + ?Sized> ReadBytesExt for R {}

@@ -8,11 +8,21 @@ pub const ZCASH_DECIMALS_DIV: u64 = 10u64.pow(ZCASH_DECIMALS);
 pub const MAX_SCRIPT_SIZE: usize = 1024 * 2;
 // Limit the number of transparent outputs and orchard action in legacy parser due to device memory constraints.
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
+pub const SIGHASH_ALL: u8 = 0x01;
+pub const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
+pub const ZIP32_PATH_LEN: usize = 3;
+pub const ZIP32_PURPOSE: u32 = 32;
+#[cfg(not(feature = "testnet"))]
+pub const ZCASH_BIP44_COIN_TYPE: u32 = 133;
+#[cfg(feature = "testnet")]
+pub const ZCASH_BIP44_COIN_TYPE: u32 = 1;
 
 // Limit the number of PCZT transparent inputs due to device memory constraints.
 pub const MAX_PCZT_TRANSPARENT_INPUTS_NUMBER: usize = 10;
 // Limit the number of PCZT transparent outputs due to device memory constraints.
 pub const MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER: usize = 10;
+// Limit the number of PCZT orchard actions due to device memory constraints.
+pub const MAX_PCZT_ORCHARD_ACTIONS_NUMBER: usize = 10;
 
 pub const ZCASH_CLA: u8 = 0xE0;
 pub const INS_GET_WALLET_PUBLIC_KEY: u8 = 0x40;
@@ -24,9 +34,12 @@ pub const INS_SIGN_MESSAGE: u8 = 0x4E;
 pub const INS_GET_FIRMWARE_VERSION: u8 = 0xC4;
 pub const INS_GET_VK: u8 = 0x50;
 pub const INS_GET_SHIELD_ADDR: u8 = 0x51;
-pub const INS_PCZT_TRANSPARENT_INPUT: u8 = 0x52;
-pub const INS_PCZT_TRANSPARENT_OUTPUT: u8 = 0x53;
-pub const INS_PCZT_SIGN_TRANSPARENT: u8 = 0x54;
+pub const INS_PCZT_HEADER: u8 = 0x52;
+pub const INS_PCZT_TRANSPARENT_INPUT: u8 = 0x53;
+pub const INS_PCZT_TRANSPARENT_OUTPUT: u8 = 0x54;
+pub const INS_PCZT_SIGN_TRANSPARENT: u8 = 0x55;
+pub const INS_PCZT_ORCHARD_ACTION: u8 = 0x56;
+pub const INS_PCZT_SIGN_ORCHARD: u8 = 0x57;
 
 pub const P1_FIRST: u8 = 0x00;
 pub const P1_NEXT: u8 = 0x80;
@@ -46,6 +59,8 @@ pub const P1_FINALIZE_FULL_MORE: u8 = 0x00;
 pub const P1_FINALIZE_FULL_LAST: u8 = 0x80;
 pub const P1_FINALIZE_FULL_CHANGEINFO: u8 = 0xFF;
 pub const P2_FINALIZE_FULL_DEFAULT: u8 = 0x00;
+pub const P2_PCZT_CONTINUE: u8 = 0x00;
+pub const P2_PCZT_FINISHED: u8 = 0x01;
 
 pub const TRUSTED_INPUT_SIZE: usize = 2 + 2 + 32 + 4 + 8; // magic + rand + txid + idx + amount
 pub const TRUSTED_INPUT_TOTAL_SIZE: usize = TRUSTED_INPUT_SIZE + 8;

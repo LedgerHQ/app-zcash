@@ -1,4 +1,4 @@
-use crate::{parser::compute::SighHashComputeMode, tx::SupportedTxVersion};
+use crate::tx::SupportedTxVersion;
 
 use super::*;
 
@@ -48,46 +48,12 @@ impl Parser {
 
         let trusted_input_mode = TrustedInputMode::read(reader)?;
 
-        // TODO: remove untrusted input support after PCZT support fully implemented
-        if trusted_input_mode == TrustedInputMode::Untrusted {
-            if !ctx.tx_state.is_tx_parsed_once {
-                error!("Untrusted input mode is only supported for PCZT signing");
-                return Err(ParserError::from_str(
-                    "Untrusted input mode is only supported for PCZT signing",
-                ));
-            }
-
-            let prevout = ok!(OutPoint::read(&mut *reader));
-            info!("Previous outpoint: {:?}", prevout);
-            ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
-
-            let amount = ok!({
-                let mut tmp = [0u8; 8];
-                ok!(reader.read_exact(&mut tmp));
-                ok!(ctx.hashers.amounts_hasher.update(&tmp));
-                Zatoshis::from_nonnegative_i64_le_bytes(tmp)
-            });
-            ctx.tx_info.total_amount = ctx.tx_info.total_amount.saturating_add(amount.into_u64());
-            info!("Input amount: {:?}", amount);
-            info!("New amount: {}", ctx.tx_info.total_amount);
-
-            ok!(ctx
-                .hashers
-                .prevouts_hasher
-                .update(&amount.to_i64_le_bytes()));
-
-            let script_size: usize = ok!(CompactSize::read_t(&mut *reader));
-            info!("Script size: {}", script_size);
-
-            self.state = ParserState::ProcessInputScript {
-                size: script_size,
-                remaining_size: script_size,
-            };
-            self.script_bytes.clear();
-            self.script_bytes.extend(iter::repeat_n(0, script_size));
-
-            return Ok(());
-        }
+        let TrustedInputMode::Trusted = trusted_input_mode else {
+            error!("Untrusted input mode is not supported for signing");
+            return Err(ParserError::from_str(
+                "Untrusted input mode is not supported for signing",
+            ));
+        };
 
         let trusted_input_len = ok!(reader.read_u8()) as usize;
         if trusted_input_len != TRUSTED_INPUT_TOTAL_SIZE {
@@ -250,7 +216,15 @@ impl Parser {
 
             if self.mode == ParserMode::Signature {
                 if ctx.tx_state.is_tx_parsed_once {
-                    finalize_signature_hash(ctx, SighHashComputeMode::SomeTransparentInputs)?;
+                    let mut txin_sig_digest = [0u8; 32];
+                    ok!(ctx.hashers.prevouts_hasher.finalize(&mut txin_sig_digest));
+                    info!("txin sig digest {}", HexSlice(&txin_sig_digest));
+
+                    compute_transparent_input_signature_digest(
+                        ctx.tx_info,
+                        &txin_sig_digest,
+                        ctx.tx_info.sighash_type,
+                    )?;
 
                     self.state = ParserState::TransactionReadyToSign;
                 } else {
