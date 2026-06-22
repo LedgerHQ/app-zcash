@@ -1,4 +1,10 @@
 use super::*;
+use crate::tx::TxOutputMemo;
+use alloc::string::ToString;
+use ledger_device_sdk::hash::blake2::Blake2b_256;
+
+const ZCASH_MEMO_TEXT_MAX_TAG: u8 = 0xF4;
+const ZCASH_MEMO_EMPTY_TAG: u8 = 0xF6;
 
 impl PcztParser {
     pub(super) fn parse_orchard_actions_start(
@@ -703,6 +709,56 @@ impl PcztParser {
         Ok(())
     }
 
+    fn orchard_output_memo_display(
+        output: &DecipheredOrchardOutput,
+        is_change: bool,
+    ) -> Result<Option<TxOutputMemo>, ParserError> {
+        if is_change {
+            return Ok(None);
+        }
+
+        let Some(memo) = output.memo.as_ref() else {
+            return Ok(None);
+        };
+
+        Self::orchard_memo_display(memo)
+    }
+
+    fn orchard_memo_display(memo: &[u8]) -> Result<Option<TxOutputMemo>, ParserError> {
+        if memo.len() != ORCHARD_MEMO_SIZE {
+            return Err(ParserError::from_sw(AppSW::TechnicalProblem));
+        }
+
+        if memo[0] == ZCASH_MEMO_EMPTY_TAG && memo[1..].iter().all(|byte| *byte == 0) {
+            return Ok(None);
+        }
+
+        let Some(memo_len) = memo
+            .iter()
+            .rposition(|byte| *byte != 0)
+            .map(|index| index + 1)
+        else {
+            return Ok(None);
+        };
+
+        if memo[0] <= ZCASH_MEMO_TEXT_MAX_TAG
+            && let Ok(text) = core::str::from_utf8(&memo[..memo_len])
+            && Self::is_displayable_ascii_memo(text)
+        {
+            return Ok(Some(TxOutputMemo::text(text.to_string())));
+        }
+
+        let mut hasher = Blake2b_256::default();
+        ok!(hasher.update(memo));
+        let mut hash = [0u8; 32];
+        ok!(hasher.finalize(&mut hash));
+        Ok(Some(TxOutputMemo::hash(format!("{}", HexSlice(&hash)))))
+    }
+
+    fn is_displayable_ascii_memo(text: &str) -> bool {
+        text.bytes().all(|byte| matches!(byte, 0x20..=0x7E))
+    }
+
     fn push_deciphered_orchard_output(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -718,6 +774,7 @@ impl PcztParser {
             UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(output.raw_address)])
                 .map(|address| address.encode(&network))
                 .unwrap_or_else(|_| format!("orchard:{}", HexSlice(&output.raw_address)));
+        let memo = Self::orchard_output_memo_display(&output, is_change)?;
 
         debug!(
             "PCZT orchard output address: {}, amount: {}, change: {}",
@@ -728,6 +785,7 @@ impl PcztParser {
             amount: output.value,
             address,
             is_change,
+            memo,
         });
 
         if is_change {

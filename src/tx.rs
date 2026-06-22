@@ -62,10 +62,33 @@ impl Hashers {
 }
 
 #[derive(Default)]
+pub struct TxOutputMemo {
+    pub label: &'static str,
+    pub value: String,
+}
+
+impl TxOutputMemo {
+    pub fn text(value: String) -> Self {
+        Self {
+            label: "Memo",
+            value,
+        }
+    }
+
+    pub fn hash(value: String) -> Self {
+        Self {
+            label: "Memo hash",
+            value,
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct TxOutput {
     pub amount: u64,
     pub address: String,
     pub is_change: bool,
+    pub memo: Option<TxOutputMemo>,
 }
 
 #[derive(Default)]

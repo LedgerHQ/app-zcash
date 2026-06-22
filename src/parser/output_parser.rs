@@ -205,6 +205,7 @@ impl OutputParser {
             amount: output.value,
             address,
             is_change,
+            memo: None,
         });
 
         if is_change {
@@ -403,6 +404,7 @@ impl OutputParser {
                             amount: self.current_output_amount,
                             address,
                             is_change,
+                            memo: None,
                         });
 
                         if is_change {

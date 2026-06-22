@@ -720,6 +720,7 @@ impl PcztParser {
                 amount: self.current_output_amount,
                 address,
                 is_change,
+                memo: None,
             });
 
             if is_change {

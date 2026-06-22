@@ -1,3 +1,4 @@
+use alloc::{boxed::Box, vec};
 use chacha20::{
     ChaCha20,
     cipher::{KeyIvInit, StreamCipher, StreamCipherSeek},
@@ -62,10 +63,12 @@ pub struct OrchardActionCiphertext<'a> {
     pub out_ciphertext: [u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct DecipheredOrchardOutput {
     pub value: u64,
     pub raw_address: [u8; ORCHARD_RAW_ADDRESS_SIZE],
+    // Keep the 512-byte memo off stack-sensitive Orchard return paths.
+    pub memo: Option<Box<[u8]>>,
 }
 
 pub fn decipher_value_with_ovk(
@@ -187,6 +190,8 @@ fn try_output_recovery_with_ovk(
 
     let mut note_plaintext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
     note_plaintext_prefix.copy_from_slice(&note_plaintext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
+    let mut memo = vec![0u8; ORCHARD_MEMO_SIZE].into_boxed_slice();
+    memo.copy_from_slice(&note_plaintext[ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE..]);
 
     parse_and_validate_note_plaintext(
         &action.compact,
@@ -194,6 +199,7 @@ fn try_output_recovery_with_ovk(
         &pk_d,
         Some(&esk),
         &rho,
+        Some(memo),
     )
 }
 
@@ -235,7 +241,7 @@ fn try_compact_note_decryption_with_ivk(
     };
     let pk_d = crate::orchard_pk_d(&ivk.to_repr(), &g_d)?;
 
-    parse_and_validate_note_plaintext(compact, &note_plaintext_prefix, &pk_d, None, &rho)
+    parse_and_validate_note_plaintext(compact, &note_plaintext_prefix, &pk_d, None, &rho, None)
 }
 
 fn parse_and_validate_note_plaintext(
@@ -244,6 +250,7 @@ fn parse_and_validate_note_plaintext(
     pk_d: &[u8; HASH_SIZE],
     expected_esk: Option<&[u8; HASH_SIZE]>,
     rho: &pallas::Base,
+    memo: Option<Box<[u8]>>,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let Some(note_plaintext) = parse_note_plaintext_prefix(plaintext) else {
         return Ok(None);
@@ -278,6 +285,7 @@ fn parse_and_validate_note_plaintext(
     Ok(Some(DecipheredOrchardOutput {
         value: note_plaintext.value,
         raw_address,
+        memo,
     }))
 }
 

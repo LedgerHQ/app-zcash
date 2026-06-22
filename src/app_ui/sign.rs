@@ -75,6 +75,15 @@ pub fn ui_display_tx(outputs: &[TxOutput], fees: u64) -> Result<bool, AppSW> {
         });
     }
 
+    for output in outputs.iter().filter(|output| !output.is_change) {
+        if let Some(memo) = output.memo.as_ref() {
+            my_fields.push(Field {
+                name: memo.label,
+                value: memo.value.as_str(),
+            });
+        }
+    }
+
     my_fields.push(Field {
         name: "Fees",
         value: fees_str.as_str(),
