@@ -6,11 +6,11 @@ use ::orchard::bundle::commitments::{
 use alloc::{format, string::ToString, vec::Vec};
 use core::{cmp, mem};
 
+use ::orchard::keys::Scope as OrchardScope;
 use ::orchard::note::TransmittedNoteCiphertext;
 use ::orchard::primitives::redpallas::{SpendAuth, VerificationKey as RedpallasVerificationKey};
 use corez::io::Read;
 use ledger_device_sdk::hash::HashInit as _;
-use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::log::{debug, info};
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
 use zcash_encoding::CompactSize;
@@ -34,11 +34,10 @@ use crate::parser::compute::{
 use crate::parser::orchard::ORCHARD_MEMO_SIZE;
 use crate::parser::orchard_decipher::{
     DecipheredOrchardOutput, ORCHARD_ENC_CIPHERTEXT_SIZE, ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE,
-    ORCHARD_OUT_CIPHERTEXT_SIZE, OrchardActionCiphertext, OrchardCompactAction,
-    OrchardDecipherKeys, decipher_compact_value, decipher_value_with_ovk,
+    ORCHARD_OUT_CIPHERTEXT_SIZE, ORCHARD_RAW_ADDRESS_SIZE, OrchardActionCiphertext,
+    OrchardCompactAction, OrchardDecipherKeys, decipher_compact_value, decipher_value_with_ovk,
 };
-use crate::swap;
-use crate::tx::{Hashers, TxInfo, TxOutput, TxSigningState};
+use crate::tx::{Hashers, TransferType, TxInfo, TxOutput, TxPool, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _};
 use crate::utils::check_output_displayable;
 use crate::utils::{
@@ -49,7 +48,7 @@ use crate::utils::{
     extended_public_key::ExtendedPublicKey,
     hashers::ToHash160,
 };
-use crate::zip32::{derive_orchard_ask, derive_orchard_fvk, orchard_network};
+use crate::zip32::{OrchardFvk, derive_orchard_ask, derive_orchard_fvk, orchard_network};
 
 use super::reader::{ByteReader, ReadBytesExt};
 use super::{ParserError, finalize_and_log_hash, ok};
@@ -98,6 +97,7 @@ enum PcztParserState {
     ProcessOrchardEncCiphertext,
     WaitOrchardOutCiphertextLen,
     ProcessOrchardOutCiphertext,
+    WaitOrchardOutputMetadata,
     WaitOrchardTrailer,
     OrchardActionsDone,
 }
@@ -113,6 +113,7 @@ impl PcztParserState {
                 | PcztParserState::ProcessOrchardEncCiphertext
                 | PcztParserState::WaitOrchardOutCiphertextLen
                 | PcztParserState::ProcessOrchardOutCiphertext
+                | PcztParserState::WaitOrchardOutputMetadata
                 | PcztParserState::WaitOrchardTrailer
                 | PcztParserState::OrchardActionsDone
         )
@@ -138,7 +139,6 @@ pub struct PcztParserCtx<'ctx> {
     pub tx_state: &'ctx mut TxSigningState,
     pub tx_info: &'ctx mut TxInfo,
     pub hashers: &'ctx mut Hashers,
-    pub swap_params: Option<&'ctx CreateTxParams>,
 }
 
 pub struct PcztParser {
@@ -162,16 +162,28 @@ pub struct PcztParser {
     orchard_signed_action_count: usize,
     orchard_signature_digest: Option<[u8; 32]>,
     orchard_value_balance: i64,
+    orchard_spend_value_sum: u64,
+    orchard_output_value_sum: u64,
     current_orchard_flags: u8,
     current_orchard_value_sum_magnitude: u64,
     current_orchard_cv_net: [u8; 32],
     current_orchard_nullifier: [u8; 32],
     current_orchard_rk: [u8; 32],
+    current_orchard_spend_value: u64,
+    current_orchard_spend_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
+    current_orchard_spend_rho: [u8; 32],
+    current_orchard_spend_rseed: [u8; 32],
+    current_orchard_rcv: Option<[u8; 32]>,
+    current_orchard_output_rseed: Option<[u8; 32]>,
     current_orchard_cmx: [u8; 32],
     current_orchard_ephemeral_key: [u8; 32],
+    current_orchard_out_ciphertext: Option<[u8; ORCHARD_OUT_CIPHERTEXT_SIZE]>,
+    current_orchard_output_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
+    current_orchard_output_value: u64,
     current_orchard_enc_ciphertext: Vec<u8>,
     current_orchard_alpha: Option<[u8; 32]>,
     current_orchard_path: Option<Bip32Path>,
+    current_orchard_fvk: Option<OrchardFvk>,
     script_bytes: Vec<u8>,
     orchard_field_bytes: Vec<u8>,
 }
@@ -263,16 +275,16 @@ impl PcztParser {
     //   cv_net                 [u8; 32]
     //   spend                  Spend subset
     //   output                 Output subset
-    //   rcv                    SKIPPED
+    //   rcv                    Required [u8; 32], appended after output `rseed`.
     //
     // orchard::Spend fields, in order:
     //   nullifier              [u8; 32]
     //   rk                     [u8; 32]
     //   spend_auth_sig         SKIPPED
-    //   recipient              SKIPPED
-    //   value                  SKIPPED
-    //   rho                    SKIPPED
-    //   rseed                  SKIPPED
+    //   recipient              [u8; 43], raw Orchard payment address
+    //   value                  u64
+    //   rho                    [u8; 32]
+    //   rseed                  [u8; 32]
     //   fvk                    SKIPPED
     //   witness                SKIPPED
     //   alpha                  [u8; 32]
@@ -291,9 +303,9 @@ impl PcztParser {
     //   ephemeral_key          [u8; 32]
     //   enc_ciphertext         Vec<u8>, currently must be 580 bytes
     //   out_ciphertext         Vec<u8>, currently must be 80 bytes
-    //   recipient              SKIPPED
-    //   value                  SKIPPED
-    //   rseed                  SKIPPED
+    //   recipient              [u8; 43], raw Orchard payment address
+    //   value                  u64
+    //   rseed                  Required [u8; 32]
     //   ock                    SKIPPED
     //   zip32_derivation       SKIPPED
     //   user_address           SKIPPED
@@ -321,16 +333,28 @@ impl PcztParser {
             orchard_signed_action_count: 0,
             orchard_signature_digest: None,
             orchard_value_balance: 0,
+            orchard_spend_value_sum: 0,
+            orchard_output_value_sum: 0,
             current_orchard_flags: 0,
             current_orchard_value_sum_magnitude: 0,
             current_orchard_cv_net: [0; 32],
             current_orchard_nullifier: [0; 32],
             current_orchard_rk: [0; 32],
+            current_orchard_spend_value: 0,
+            current_orchard_spend_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
+            current_orchard_spend_rho: [0; 32],
+            current_orchard_spend_rseed: [0; 32],
+            current_orchard_rcv: None,
+            current_orchard_output_rseed: None,
             current_orchard_cmx: [0; 32],
             current_orchard_ephemeral_key: [0; 32],
+            current_orchard_out_ciphertext: None,
+            current_orchard_output_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
+            current_orchard_output_value: 0,
             current_orchard_enc_ciphertext: Vec::new(),
             current_orchard_alpha: None,
             current_orchard_path: None,
+            current_orchard_fvk: None,
             script_bytes: Vec::new(),
             orchard_field_bytes: Vec::new(),
         }
@@ -556,6 +580,9 @@ impl PcztParser {
                     }
                     PcztParserState::ProcessOrchardOutCiphertext => {
                         self.parse_orchard_out_ciphertext(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitOrchardOutputMetadata => {
+                        self.parse_orchard_output_metadata(ctx, &mut reader)?
                     }
                     PcztParserState::WaitOrchardTrailer => {
                         self.parse_orchard_trailer(ctx, &mut reader)?

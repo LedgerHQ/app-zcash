@@ -23,7 +23,7 @@ use crate::{
 use alloc::{format, string::String, vec::Vec};
 use ledger_device_sdk::nbgl::{Field, NbglReview};
 
-use crate::tx::TxOutput;
+use crate::tx::{TransferType, TxOutput};
 
 fn format_zec_amount(amount: u64) -> String {
     // ZEC has 8 decimal places
@@ -33,7 +33,15 @@ fn format_zec_amount(amount: u64) -> String {
 }
 
 /// Display transaction outputs and fees for user confirmation.
-pub fn ui_display_tx(outputs: &[TxOutput], fees: u64) -> Result<bool, AppSW> {
+///
+/// `transfer_type` classifies the flow (public, shielding, deshielding or fully
+/// private) and is shown as the review subtitle so the user can tell apart the
+/// involved value pools.
+pub fn ui_display_tx(
+    outputs: &[TxOutput],
+    fees: u64,
+    transfer_type: TransferType,
+) -> Result<bool, AppSW> {
     let fees_str = format_zec_amount(fees);
 
     // Build name and value strings
@@ -75,6 +83,15 @@ pub fn ui_display_tx(outputs: &[TxOutput], fees: u64) -> Result<bool, AppSW> {
         });
     }
 
+    for output in outputs.iter().filter(|output| !output.is_change) {
+        if let Some(memo) = output.memo.as_ref() {
+            my_fields.push(Field {
+                name: memo.label,
+                value: memo.value.as_str(),
+            });
+        }
+    }
+
     my_fields.push(Field {
         name: "Fees",
         value: fees_str.as_str(),
@@ -83,7 +100,11 @@ pub fn ui_display_tx(outputs: &[TxOutput], fees: u64) -> Result<bool, AppSW> {
     // Create NBGL review. Maximum number of fields and string buffer length can be customized
     // with constant generic parameters of NbglReview. Default values are 32 and 1024 respectively.
     let review: NbglReview = NbglReview::new()
-        .titles("Review transaction", "", "Sign transaction")
+        .titles(
+            "Review transaction to send ZEC",
+            transfer_type.subtitle(),
+            "Sign transaction",
+        )
         .glyph(load_glyph());
 
     Ok(review.show(&my_fields))

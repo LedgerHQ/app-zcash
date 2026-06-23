@@ -102,13 +102,24 @@ impl PcztParser {
             fees, ctx.tx_info.total_amount, self.total_output_amount, self.orchard_value_balance
         );
 
-        if let Some(swap_params) = ctx.swap_params {
-            ok!(swap::check_swap_params(
-                swap_params,
-                &ctx.tx_info.outputs,
-                fees
-            ));
-        } else if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees)) {
+        // In the case of internal transfers between pools (for example, transparent -> Orchard or Orchard -> transparent),
+        // we have to display the internal outputs on the clear-sign screen.
+        let has_external_output = ctx.tx_info.outputs.iter().any(|output| !output.is_change);
+        let reveal_self_outputs = !has_external_output;
+        if reveal_self_outputs {
+            debug!("PCZT has no external outputs; displaying self-transfer output");
+            // PCZT does not read tx_info.outputs after review; this only affects UI filtering.
+            for output in ctx.tx_info.outputs.iter_mut() {
+                output.is_change = false;
+            }
+        }
+
+        // Source is private when Orchard notes are being spent.
+        let transfer_type =
+            TransferType::classify(self.orchard_spend_value_sum > 0, &ctx.tx_info.outputs);
+        let review_result = ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type);
+
+        if !ok!(review_result) {
             return Err(ParserError::user());
         }
 

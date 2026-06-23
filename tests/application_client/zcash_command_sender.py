@@ -1,3 +1,5 @@
+# pylint: disable=too-many-lines
+
 from dataclasses import dataclass
 from enum import IntEnum
 import struct
@@ -563,7 +565,9 @@ class ZcashCommandSender:
     def _build_pczt_orchard_action_packets(
         self,
         orchard_bundle: PcztOrchardBundle,
+        include_rcv: bool = True,
     ) -> list[bytes]:
+        # pylint: disable=too-many-branches
         packets = [
             self._checked_pczt_packet(
                 write_varint(len(orchard_bundle.actions)),
@@ -577,10 +581,35 @@ class ZcashCommandSender:
         for action in orchard_bundle.actions:
             if len(action.alpha) != 32:
                 raise ValueError("Orchard alpha must be 32 bytes")
+            if len(action.spend_recipient) != 43:
+                raise ValueError("Orchard spend recipient must be 43 bytes")
+            if len(action.spend_rho) != 32:
+                raise ValueError("Orchard spend rho must be 32 bytes")
+            if len(action.spend_rseed) != 32:
+                raise ValueError("Orchard spend rseed must be 32 bytes")
+            if len(action.recipient) != 43:
+                raise ValueError("Orchard recipient must be 43 bytes")
+            if include_rcv and action.rcv is None:
+                raise ValueError("Orchard rcv is required")
+            if action.rcv is not None and len(action.rcv) != 32:
+                raise ValueError("Orchard rcv must be 32 bytes")
+            if len(action.rseed) != 32:
+                raise ValueError("Orchard output rseed must be 32 bytes")
+            if not 0 <= action.spend_value <= 0x7FFF_FFFF_FFFF_FFFF:
+                raise ValueError("Orchard spend value out of range")
+            if not 0 <= action.value <= 0x7FFF_FFFF_FFFF_FFFF:
+                raise ValueError("Orchard output value out of range")
 
             packets.append(
                 self._checked_pczt_packet(
-                    action.cv_net + action.nullifier + action.rk + action.alpha,
+                    action.cv_net
+                    + action.nullifier
+                    + action.rk
+                    + action.spend_recipient
+                    + action.spend_value.to_bytes(8, byteorder="little")
+                    + action.spend_rho
+                    + action.spend_rseed
+                    + action.alpha,
                     "orchard action spend small fields",
                 )
             )
@@ -599,6 +628,19 @@ class ZcashCommandSender:
             packets.extend(
                 self._split_pczt_field_packet(
                     write_varint(len(action.out_ciphertext)) + action.out_ciphertext
+                )
+            )
+            output_metadata = (
+                action.recipient
+                + action.value.to_bytes(8, byteorder="little")
+                + action.rseed
+            )
+            if include_rcv:
+                output_metadata += action.rcv
+            packets.append(
+                self._checked_pczt_packet(
+                    output_metadata,
+                    "orchard action output metadata",
                 )
             )
 
@@ -702,9 +744,11 @@ class ZcashCommandSender:
         self,
         orchard_bundle: PcztOrchardBundle,
         pczt_finished: bool = False,
+        include_rcv: bool = True,
     ) -> Generator[None, None, None]:
         packets = self._build_pczt_orchard_action_packets(
             orchard_bundle,
+            include_rcv=include_rcv,
         )
 
         for idx, packet in enumerate(packets[:-1]):
@@ -730,11 +774,16 @@ class ZcashCommandSender:
         raw_transaction: bytes,
         signing_path: str,
         alpha: bytes,
+        rcv_values: list[bytes] | None = None,
+        spend_note_fields: list[tuple[bytes, bytes, bytes]] | None = None,
     ) -> PcztOrchardBundle:
+        # pylint: disable=too-many-positional-arguments
         return pczt_orchard_bundle_from_raw_tx(
             raw_transaction,
             signing_path,
             alpha,
+            rcv_values=rcv_values,
+            spend_note_fields=spend_note_fields,
         )
 
     def pczt_sign_transparent(

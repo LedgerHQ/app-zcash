@@ -115,7 +115,10 @@ impl OutputParser {
                 fees
             ));
         } else {
-            if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees)) {
+            // Source is private when Orchard notes are being spent.
+            let transfer_type =
+                TransferType::classify(self.orchard_value_balance > 0, &ctx.tx_info.outputs);
+            if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type)) {
                 return Err(ParserError::user());
             }
             info!("All outputs reviewed");
@@ -205,6 +208,8 @@ impl OutputParser {
             amount: output.value,
             address,
             is_change,
+            memo: None,
+            pool: TxPool::Orchard,
         });
 
         if is_change {
@@ -403,6 +408,8 @@ impl OutputParser {
                             amount: self.current_output_amount,
                             address,
                             is_change,
+                            memo: None,
+                            pool: TxPool::Transparent,
                         });
 
                         if is_change {
