@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.6.0
+
+- Add PCZT support
+
 ## 3.5.0
 
 - Add clear signing support for Orchard transactions

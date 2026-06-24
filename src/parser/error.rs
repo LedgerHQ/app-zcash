@@ -98,6 +98,15 @@ impl ParserError {
     }
 
     #[track_caller]
+    pub fn from_sw(sw: AppSW) -> ParserError {
+        ParserError {
+            source: sw.into(),
+            file: file!(),
+            line: line!(),
+        }
+    }
+
+    #[track_caller]
     pub fn user() -> ParserError {
         ParserError {
             source: ParserSourceError::UserDenied,

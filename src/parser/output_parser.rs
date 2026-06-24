@@ -15,6 +15,7 @@ use crate::parser::orchard_decipher::{
     ORCHARD_OUT_CIPHERTEXT_SIZE, OrchardActionCiphertext, OrchardCompactAction,
     decipher_compact_value, decipher_value_with_ovk,
 };
+use crate::parser::personalization::ZCASH_OUTPUTS_HASH_PERSONALIZATION;
 
 use super::*;
 
@@ -114,7 +115,10 @@ impl OutputParser {
                 fees
             ));
         } else {
-            if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees)) {
+            // Source is private when Orchard notes are being spent.
+            let transfer_type =
+                TransferType::classify(self.orchard_value_balance > 0, &ctx.tx_info.outputs);
+            if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type)) {
                 return Err(ParserError::user());
             }
             info!("All outputs reviewed");
@@ -204,6 +208,8 @@ impl OutputParser {
             amount: output.value,
             address,
             is_change,
+            memo: None,
+            pool: TxPool::Orchard,
         });
 
         if is_change {
@@ -384,7 +390,7 @@ impl OutputParser {
                         check_output_displayable(
                             &script.0.0,
                             self.current_output_amount,
-                            &ctx.tx_info.change_pk_hash,
+                            ctx.tx_info.change_pk_hash.as_ref(),
                         )
                     {
                         let is_change = output == CheckDispOutput::Change;
@@ -402,6 +408,8 @@ impl OutputParser {
                             amount: self.current_output_amount,
                             address,
                             is_change,
+                            memo: None,
+                            pool: TxPool::Transparent,
                         });
 
                         if is_change {

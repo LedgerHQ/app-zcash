@@ -1,4 +1,4 @@
-use crate::{parser::compute::SighHashComputeMode, tx::SupportedTxVersion};
+use crate::tx::SupportedTxVersion;
 
 use super::*;
 
@@ -216,7 +216,15 @@ impl Parser {
 
             if self.mode == ParserMode::Signature {
                 if ctx.tx_state.is_tx_parsed_once {
-                    finalize_signature_hash(ctx, SighHashComputeMode::SomeTransparentInputs)?;
+                    let mut txin_sig_digest = [0u8; 32];
+                    ok!(ctx.hashers.prevouts_hasher.finalize(&mut txin_sig_digest));
+                    info!("txin sig digest {}", HexSlice(&txin_sig_digest));
+
+                    compute_transparent_input_signature_digest(
+                        ctx.tx_info,
+                        &txin_sig_digest,
+                        ctx.tx_info.sighash_type,
+                    )?;
 
                     self.state = ParserState::TransactionReadyToSign;
                 } else {

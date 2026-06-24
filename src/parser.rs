@@ -1,7 +1,3 @@
-use self::personalization::{
-    ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
-    ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
-};
 use ::orchard::bundle::commitments::{
     ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION, ZCASH_ORCHARD_HASH_PERSONALIZATION,
 };
@@ -11,9 +7,7 @@ use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 
 use self::personalization::{
-    ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_OUTPUTS_HASH_PERSONALIZATION,
-    ZCASH_PREVOUTS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
-    ZCASH_SEQUENCE_HASH_PERSONALIZATION,
+    ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
 };
 use self::reader::ReadBytesExt;
 use corez::io::Read;
@@ -28,13 +22,14 @@ use zcash_protocol::value::Zatoshis;
 use zcash_transparent::address::Script;
 use zcash_transparent::bundle::OutPoint;
 
-use crate::parser::compute::{
-    SighHashComputeMode, finalize_signature_hash, finalize_signature_input_hash,
-};
+use crate::parser::compute::finalize_signature_input_hash;
 use crate::parser::reader::ByteReader;
 use crate::settings::Settings;
 use crate::swap;
-use crate::tx::{Hashers, SupportedTxVersion, TrustedInputInfo, TxInfo, TxOutput, TxSigningState};
+use crate::tx::{
+    Hashers, SupportedTxVersion, TransferType, TrustedInputInfo, TxInfo, TxOutput, TxPool,
+    TxSigningState,
+};
 use crate::utils::blake2b_256_pers::{AsWriter, AsWriterB as _, Blake2b256Personalization};
 use crate::utils::{CheckDispOutput, HexSlice, check_output_displayable, secure_memcmp};
 use crate::{app_ui::sign::ui_display_tx, utils::base58_address::Base58Address};
@@ -45,15 +40,21 @@ use crate::{
 use error::ok;
 use ledger_device_sdk::log::{debug, error, info};
 
+pub use compute::{
+    compute_no_transparent_input_signature_digest, compute_shielded_signature_digest,
+    compute_transparent_input_signature_digest,
+};
 pub use error::{ParserError, ParserSourceError};
 pub use output_parser::{OutputParser, OutputParserCtx};
+pub use pczt::{PcztParser, PcztParserCtx};
 
 mod compute;
 mod error;
 mod orchard;
 pub(crate) mod orchard_decipher;
 mod output_parser;
-mod personalization;
+mod pczt;
+pub(crate) mod personalization;
 mod reader;
 mod sapling;
 mod transparent;
@@ -96,7 +97,7 @@ pub(super) fn finalize_and_log_hash(
     Ok(hash)
 }
 
-#[derive(Debug, TryFromPrimitive)]
+#[derive(Debug, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
 enum TrustedInputMode {
     Trusted = 0x01,
@@ -331,34 +332,7 @@ impl Parser {
             (ParserMode::TrustedInput, TxVersion::V5, _)
             | (ParserMode::Signature, TxVersion::V5, false) => {
                 debug!("Init V5 tx hashers");
-                ok!(ctx
-                    .hashers
-                    .prevouts_hasher
-                    .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .sequence_hasher
-                    .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .outputs_hasher
-                    .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .amounts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .scripts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .sapling_hasher
-                    .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .orchard_hasher
-                    .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION));
+                ok!(ctx.hashers.init_v5_tx_hashers());
             }
             // In case of Signature mode, continue computing Tx hash from previous state
             (ParserMode::Signature, TxVersion::V5, true) => {
@@ -367,30 +341,17 @@ impl Parser {
                 info!("TX prevout hash {}", HexSlice(&ctx.tx_info.prevouts_hash));
                 info!("TX sequence hash {}", HexSlice(&ctx.tx_info.sequence_hash));
 
-                info!("Compute headers hash");
+                if input_count != 0 {
+                    ok!(ctx
+                        .hashers
+                        .prevouts_hasher
+                        .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
 
-                let full_hasher = &mut ctx.hashers.tx_full_hasher;
-                ok!(full_hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-
-                ok!(version.write(&mut full_hasher.as_writer()));
-                ok!(full_hasher.update(&u32::from(consensus_branch_id).to_le_bytes()));
-                ok!(full_hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
-                ok!(full_hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
-
-                // Save header_digest
-                ok!(full_hasher.finalize(&mut ctx.tx_info.header_digest));
-
-                info!("V5 header digest {}", HexSlice(&ctx.tx_info.header_digest));
-
-                ok!(ctx
-                    .hashers
-                    .prevouts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
-
-                ok!(ctx
-                    .hashers
-                    .scripts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION));
+                    ok!(ctx
+                        .hashers
+                        .scripts_hasher
+                        .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION));
+                }
             }
             // Support V4 in trusted input mode (Transaction ID computation)
             (ParserMode::TrustedInput, TxVersion::V4, _) => {
@@ -428,14 +389,10 @@ impl Parser {
                     ParserState::TransactionPresignReady
                 }
                 (ParserMode::Signature, true) => {
-                    let zero_output_count = self.output_count == 0;
-                    finalize_signature_hash(
-                        ctx,
-                        if zero_output_count {
-                            SighHashComputeMode::NoTransparentInputsOrOutputs
-                        } else {
-                            SighHashComputeMode::NoTransparentInputs
-                        },
+                    compute_no_transparent_input_signature_digest(
+                        ctx.tx_info,
+                        self.output_count,
+                        ctx.tx_info.sighash_type,
                     )?;
                     ParserState::TransactionReadyToSign
                 }
