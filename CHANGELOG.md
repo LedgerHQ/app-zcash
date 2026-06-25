@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.7.0
+
+- Various security fixes
+
 ## 3.6.0
 
 - Add PCZT support
