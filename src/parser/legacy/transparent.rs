@@ -2,10 +2,10 @@ use crate::tx::SupportedTxVersion;
 
 use super::*;
 
-impl Parser {
+impl LegacyParser {
     pub fn parse_input(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         let prevout = ok!(OutPoint::read(&mut *reader));
@@ -28,7 +28,7 @@ impl Parser {
         info!("Previous outpoint: {:?}", prevout);
         info!("Script size: {}", script_size);
 
-        self.state = ParserState::ProcessInputScript {
+        self.state = LegacyParserState::ProcessInputScript {
             size: script_size,
             remaining_size: script_size,
         };
@@ -41,7 +41,7 @@ impl Parser {
 
     pub fn parse_input_signature_mode(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         debug!("Parsing input for signature mode...");
@@ -132,7 +132,7 @@ impl Parser {
                 .update(&amount.to_i64_le_bytes()));
         }
 
-        self.state = ParserState::ProcessInputScript {
+        self.state = LegacyParserState::ProcessInputScript {
             size: script_size,
             remaining_size: script_size,
         };
@@ -145,7 +145,7 @@ impl Parser {
 
     pub fn parse_input_script(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
         size: usize,
         remaining_size: usize,
@@ -158,7 +158,7 @@ impl Parser {
         };
 
         if new_remaining_size != 0 {
-            self.state = ParserState::ProcessInputScript {
+            self.state = LegacyParserState::ProcessInputScript {
                 size,
                 remaining_size: new_remaining_size,
             };
@@ -214,7 +214,7 @@ impl Parser {
         if self.input_count == self.input_parsed_count {
             info!("All inputs parsed");
 
-            if self.mode == ParserMode::Signature {
+            if self.mode == LegacyParserMode::Signature {
                 if ctx.tx_state.is_tx_parsed_once {
                     let mut txin_sig_digest = [0u8; 32];
                     ok!(ctx.hashers.prevouts_hasher.finalize(&mut txin_sig_digest));
@@ -226,11 +226,11 @@ impl Parser {
                         ctx.tx_info.sighash_type,
                     )?;
 
-                    self.state = ParserState::TransactionReadyToSign;
+                    self.state = LegacyParserState::TransactionReadyToSign;
                 } else {
                     finalize_signature_input_hash(ctx)?;
 
-                    self.state = ParserState::TransactionPresignReady;
+                    self.state = LegacyParserState::TransactionPresignReady;
 
                     // Skip trailing bytes if any
                     ok!(reader.advance(reader.remaining_len()));
@@ -241,9 +241,9 @@ impl Parser {
 
             info!("Input hashing done");
 
-            self.state = ParserState::InputHashingDone;
+            self.state = LegacyParserState::InputHashingDone;
         } else {
-            self.state = ParserState::WaitInput;
+            self.state = LegacyParserState::WaitInput;
         }
 
         Ok(())
@@ -251,7 +251,7 @@ impl Parser {
 
     pub fn parse_input_hashing_done(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         let output_count: usize = ok!(CompactSize::read_t(&mut *reader));
@@ -265,14 +265,14 @@ impl Parser {
         }
 
         self.output_count = output_count;
-        self.state = ParserState::WaitOutput;
+        self.state = LegacyParserState::WaitOutput;
 
         Ok(())
     }
 
     pub fn parse_output(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         let amount = ok!({
@@ -312,7 +312,7 @@ impl Parser {
         info!("Output amount: {:?}", amount);
         info!("Output script size: {}", script_size);
 
-        self.state = ParserState::ProcessOutputScript {
+        self.state = LegacyParserState::ProcessOutputScript {
             size: script_size,
             remaining_size: script_size,
         };
@@ -324,7 +324,7 @@ impl Parser {
 
     pub fn parse_output_script(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
         size: usize,
         remaining_size: usize,
@@ -337,7 +337,7 @@ impl Parser {
         };
 
         if new_remaining_size != 0 {
-            self.state = ParserState::ProcessOutputScript {
+            self.state = LegacyParserState::ProcessOutputScript {
                 size,
                 remaining_size: new_remaining_size,
             };
@@ -372,9 +372,9 @@ impl Parser {
 
         if self.output_count == self.output_parsed_count {
             info!("All outputs parsed");
-            self.state = ParserState::OutputHashingDone;
+            self.state = LegacyParserState::OutputHashingDone;
         } else {
-            self.state = ParserState::WaitOutput;
+            self.state = LegacyParserState::WaitOutput;
         }
 
         Ok(())
@@ -382,7 +382,7 @@ impl Parser {
 
     pub fn parse_output_hashing_done(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         info!("Output hashing done");
@@ -396,15 +396,15 @@ impl Parser {
         info!("Orchard action count: {}", self.orchard_action_count);
 
         self.state = if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {
-            ParserState::ProcessSapling
+            LegacyParserState::ProcessSapling
         } else if self.orchard_action_count > 0 {
             ok!(ctx
                 .hashers
                 .tx_compact_hasher
                 .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
-            ParserState::ProcessOrchardCompact
+            LegacyParserState::ProcessOrchardCompact
         } else {
-            ParserState::ProcessExtra
+            LegacyParserState::ProcessExtra
         };
 
         Ok(())

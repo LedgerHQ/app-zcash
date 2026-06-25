@@ -21,7 +21,9 @@ use ledger_device_sdk::random::LedgerRng;
 
 use crate::AppSW;
 use crate::consts::SIGHASH_ALL;
-use crate::parser::{OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError};
+use crate::parser::{
+    LegacyOutputParserCtx, LegacyParser, LegacyParserCtx, LegacyParserMode, ParserSourceError,
+};
 use crate::tx::TxContext;
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
@@ -35,21 +37,21 @@ pub fn handler_hash_input_start(
 ) -> Result<(), AppSW> {
     if continue_hashing {
         info!("Reset parser");
-        ctx.parser = Parser::new(ParserMode::Signature);
+        ctx.legacy_parser = LegacyParser::new(LegacyParserMode::Signature);
         // Extract transparent output count from output parser on final state
-        ctx.parser
-            .set_transparent_output_count(ctx.output_parser.transparent_output_count());
+        ctx.legacy_parser
+            .set_transparent_output_count(ctx.legacy_output_parser.transparent_output_count());
     } else if first {
         info!("Reset TX context");
-        ctx.reset(ParserMode::Signature);
+        ctx.reset(LegacyParserMode::Signature);
     }
 
     // Try to get data from comm
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
-    ctx.parser
+    ctx.legacy_parser
         .parse(
-            &mut ParserCtx {
+            &mut LegacyParserCtx {
                 tx_state: &mut ctx.tx_signing_state,
                 tx_info: &mut ctx.tx_info,
                 trusted_input_info: &mut ctx.trusted_input_info,
@@ -80,7 +82,7 @@ pub fn handler_hash_input_finalize_full(
     }
 
     // Check processing states
-    if !ctx.parser.is_presign_ready() || ctx.output_parser.is_finished() {
+    if !ctx.legacy_parser.is_presign_ready() || ctx.legacy_output_parser.is_finished() {
         error!("Bad processing state");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
@@ -108,9 +110,9 @@ pub fn handler_hash_input_finalize_full(
         return Ok(());
     }
 
-    ctx.output_parser
+    ctx.legacy_output_parser
         .parse(
-            &mut OutputParserCtx {
+            &mut LegacyOutputParserCtx {
                 tx_info: &mut ctx.tx_info,
                 hashers: &mut ctx.hashers,
                 swap_params: ctx.swap_params,
@@ -144,7 +146,7 @@ pub fn handler_hash_input_finalize_full(
             }
         })?;
 
-    if ctx.output_parser.is_finished() && !ctx.tx_signing_state.is_tx_parsed_once {
+    if ctx.legacy_output_parser.is_finished() && !ctx.tx_signing_state.is_tx_parsed_once {
         info!("Set TX parsed once flag");
         ctx.tx_signing_state.is_tx_parsed_once = true;
     }
@@ -207,7 +209,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         return Ok(());
     }
 
-    if !ctx.parser.is_ready_to_sign() {
+    if !ctx.legacy_parser.is_ready_to_sign() {
         error!("Bad processing state for signing");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }

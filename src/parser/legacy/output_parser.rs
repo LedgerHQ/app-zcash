@@ -2,22 +2,22 @@ use crate::parser::personalization::ZCASH_OUTPUTS_HASH_PERSONALIZATION;
 
 use super::*;
 
-pub struct OutputParserCtx<'ctx> {
+pub struct LegacyOutputParserCtx<'ctx> {
     pub tx_info: &'ctx mut TxInfo,
     pub hashers: &'ctx mut Hashers,
     pub swap_params: Option<&'ctx CreateTxParams>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum OutputParseState {
+enum LegacyOutputParserState {
     ParsingNumberOfOutputs,
     ParsingOutput,
     ProcessOutputScript { size: usize, remaining_size: usize },
     OutputProcessingDone,
 }
 
-pub struct OutputParser {
-    state: OutputParseState,
+pub struct LegacyOutputParser {
+    state: LegacyOutputParserState,
     output_count: usize,
     pub total_output_amount: u64,
     output_parsed_count: usize,
@@ -25,10 +25,10 @@ pub struct OutputParser {
     script_bytes: Vec<u8>,
 }
 
-impl OutputParser {
+impl LegacyOutputParser {
     pub fn new() -> Self {
-        OutputParser {
-            state: OutputParseState::ParsingNumberOfOutputs,
+        LegacyOutputParser {
+            state: LegacyOutputParserState::ParsingNumberOfOutputs,
             output_count: 0,
             total_output_amount: 0,
             output_parsed_count: 0,
@@ -42,12 +42,12 @@ impl OutputParser {
     }
 
     pub fn is_finished(&self) -> bool {
-        self.state == OutputParseState::OutputProcessingDone
+        self.state == LegacyOutputParserState::OutputProcessingDone
     }
 
     fn finalize_outputs_review(
         &mut self,
-        ctx: &mut OutputParserCtx<'_>,
+        ctx: &mut LegacyOutputParserCtx<'_>,
     ) -> Result<(), ParserError> {
         if ctx.tx_info.outputs.is_empty() {
             return Err(ParserError::from_str("No transparent outputs to display"));
@@ -89,14 +89,18 @@ impl OutputParser {
         Ok(())
     }
 
-    pub fn parse(&mut self, ctx: &mut OutputParserCtx<'_>, data: &[u8]) -> Result<(), ParserError> {
+    pub fn parse(
+        &mut self,
+        ctx: &mut LegacyOutputParserCtx<'_>,
+        data: &[u8],
+    ) -> Result<(), ParserError> {
         let mut reader = ByteReader::new(data);
 
         while reader.remaining_len() > 0 {
             let prev_state = self.state;
 
             match &self.state {
-                OutputParseState::ParsingNumberOfOutputs => {
+                LegacyOutputParserState::ParsingNumberOfOutputs => {
                     let output_count: usize = ok!(CompactSize::read_t(&mut reader));
                     info!("Output count: {}", output_count);
 
@@ -110,9 +114,9 @@ impl OutputParser {
                         .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION));
 
                     self.output_count = output_count;
-                    self.state = OutputParseState::ParsingOutput;
+                    self.state = LegacyOutputParserState::ParsingOutput;
                 }
-                OutputParseState::ParsingOutput => {
+                LegacyOutputParserState::ParsingOutput => {
                     let amount: Zatoshis = ok!({
                         let mut tmp = [0u8; 8];
                         ok!(reader.read_exact(&mut tmp));
@@ -139,13 +143,13 @@ impl OutputParser {
                     self.script_bytes.clear();
                     self.script_bytes.extend(iter::repeat_n(0, script_size));
 
-                    self.state = OutputParseState::ProcessOutputScript {
+                    self.state = LegacyOutputParserState::ProcessOutputScript {
                         size: script_size,
                         remaining_size: script_size,
                     };
                 }
 
-                OutputParseState::ProcessOutputScript {
+                LegacyOutputParserState::ProcessOutputScript {
                     size,
                     remaining_size,
                 } => {
@@ -158,7 +162,7 @@ impl OutputParser {
                     };
 
                     if new_remaining_size != 0 {
-                        self.state = OutputParseState::ProcessOutputScript {
+                        self.state = LegacyOutputParserState::ProcessOutputScript {
                             size: *size,
                             remaining_size: new_remaining_size,
                         };
@@ -218,13 +222,13 @@ impl OutputParser {
                         info!("All outputs parsed");
 
                         self.finalize_outputs_review(ctx)?;
-                        self.state = OutputParseState::OutputProcessingDone;
+                        self.state = LegacyOutputParserState::OutputProcessingDone;
                     } else {
-                        self.state = OutputParseState::ParsingOutput;
+                        self.state = LegacyOutputParserState::ParsingOutput;
                     }
                 }
 
-                OutputParseState::OutputProcessingDone => {
+                LegacyOutputParserState::OutputProcessingDone => {
                     break;
                 }
             }

@@ -16,7 +16,7 @@ use crate::parser::personalization::{
     ZCASH_SAPLING_HASH_PERSONALIZATION, ZCASH_SEQUENCE_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
 };
-use crate::parser::{OutputParser, Parser, ParserMode, PcztParser};
+use crate::parser::{LegacyOutputParser, LegacyParser, LegacyParserMode, PcztParser};
 use crate::utils::blake2b_256_pers::Blake2b256Personalization as _;
 use orchard::bundle::commitments::ZCASH_ORCHARD_HASH_PERSONALIZATION;
 
@@ -221,9 +221,9 @@ pub struct TxContext<'a> {
     pub hashers: Hashers,
 
     pub home: NbglHomeAndSettings,
-    pub parser: Parser,
+    pub legacy_parser: LegacyParser,
     pub pczt_parser: PcztParser,
-    pub output_parser: OutputParser,
+    pub legacy_output_parser: LegacyOutputParser,
     pub vk_response: Option<PendingVkResponse>,
     pub is_vk_display_finished: bool,
     /// Swap parameters if running in swap mode.
@@ -236,7 +236,7 @@ impl<'s> TxContext<'s> {
     pub unsafe fn init_in_place(
         ptr: *mut TxContext<'s>,
         swap_params: Option<&'s CreateTxParams>,
-        mode: ParserMode,
+        mode: LegacyParserMode,
     ) {
         unsafe {
             addr_of_mut!((*ptr).is_extra_header_data_set).write(false);
@@ -244,11 +244,11 @@ impl<'s> TxContext<'s> {
             addr_of_mut!((*ptr).tx_signing_state).write(TxSigningState::default());
             addr_of_mut!((*ptr).tx_info).write(TxInfo::default());
             addr_of_mut!((*ptr).trusted_input_info).write(TrustedInputInfo::default());
-            // NOTE: We don't need to init hashers here because they will initialized before first use in parser.
+            // NOTE: We don't need to init hashers here because they will be initialized before first use in a parser.
             addr_of_mut!((*ptr).home).write(NbglHomeAndSettings::default());
-            addr_of_mut!((*ptr).parser).write(Parser::new(mode));
+            addr_of_mut!((*ptr).legacy_parser).write(LegacyParser::new(mode));
             addr_of_mut!((*ptr).pczt_parser).write(PcztParser::new());
-            addr_of_mut!((*ptr).output_parser).write(OutputParser::new());
+            addr_of_mut!((*ptr).legacy_output_parser).write(LegacyOutputParser::new());
             addr_of_mut!((*ptr).vk_response).write(None);
             addr_of_mut!((*ptr).is_vk_display_finished).write(false);
             addr_of_mut!((*ptr).swap_params).write(swap_params);
@@ -256,7 +256,7 @@ impl<'s> TxContext<'s> {
     }
 
     #[inline(never)]
-    pub fn reset(&mut self, mode: ParserMode) {
+    pub fn reset(&mut self, mode: LegacyParserMode) {
         // Don't reset home and swap params, they're not part of TX state
         self.is_extra_header_data_set = false;
         self.is_finished = false;
@@ -264,9 +264,9 @@ impl<'s> TxContext<'s> {
         self.tx_info = TxInfo::default();
         self.trusted_input_info = TrustedInputInfo::default();
         self.hashers = Hashers::default();
-        self.parser = Parser::new(mode);
+        self.legacy_parser = LegacyParser::new(mode);
         self.pczt_parser = PcztParser::new();
-        self.output_parser = OutputParser::new();
+        self.legacy_output_parser = LegacyOutputParser::new();
         self.vk_response = None;
         self.is_vk_display_finished = false;
     }

@@ -27,11 +27,11 @@ use crate::consts::{
     MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
     MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
 };
+use crate::parser::ORCHARD_MEMO_SIZE;
 use crate::parser::compute::{
     compute_shielded_signature_digest, compute_transparent_input_signature_digest,
     transparent_input_txin_signature_digest, write_transparent_script,
 };
-use crate::parser::orchard::ORCHARD_MEMO_SIZE;
 use crate::parser::orchard_decipher::{
     DecipheredOrchardOutput, ORCHARD_ENC_CIPHERTEXT_SIZE, ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE,
     ORCHARD_OUT_CIPHERTEXT_SIZE, ORCHARD_RAW_ADDRESS_SIZE, OrchardActionCiphertext,

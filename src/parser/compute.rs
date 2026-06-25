@@ -11,7 +11,7 @@ use zcash_encoding::CompactSize;
 use crate::{
     consts::SIGHASH_ALL,
     parser::{
-        ParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, finalize_and_log_hash, ok,
+        LegacyParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, finalize_and_log_hash, ok,
     },
     tx::{SupportedTxVersion, TxInfo},
     utils::{
@@ -20,7 +20,7 @@ use crate::{
     },
 };
 
-pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
+pub fn tx_id(ctx: &mut LegacyParserCtx<'_>) -> Result<(), ParserError> {
     let tx_version = ctx
         .tx_info
         .tx_version
@@ -117,7 +117,7 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
     Ok(())
 }
 
-pub fn finalize_signature_input_hash(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
+pub fn finalize_signature_input_hash(ctx: &mut LegacyParserCtx<'_>) -> Result<(), ParserError> {
     ok!(ctx
         .hashers
         .prevouts_hasher
