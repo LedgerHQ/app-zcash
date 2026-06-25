@@ -600,6 +600,9 @@ impl PcztParser {
                 return Ok(true);
             }
             Ok(None) => debug!("PCZT orchard internal IVK decryption did not match"),
+            Err(ledger_zcash_crypto::Error::OutOfMemory) => {
+                return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+            }
             Err(err) => debug!("PCZT orchard compact decryption failed: {:?}", err),
         }
 
@@ -618,6 +621,9 @@ impl PcztParser {
                 return Ok(true);
             }
             Ok(None) => debug!("PCZT orchard external OVK recovery did not match"),
+            Err(ledger_zcash_crypto::Error::OutOfMemory) => {
+                return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+            }
             Err(err) => debug!("PCZT orchard OVK recovery failed: {:?}", err),
         }
 

@@ -14,6 +14,7 @@ pub use orchard::keys::FullViewingKey as OrchardFvk;
 pub fn map_ledger_crypto_error(err: ledger_zcash_crypto::Error) -> AppSW {
     match err {
         ledger_zcash_crypto::Error::InvalidKeyDiscarded => AppSW::Deny,
+        ledger_zcash_crypto::Error::OutOfMemory => AppSW::NotEnoughMemorySpace,
         _ => AppSW::TechnicalProblem,
     }
 }

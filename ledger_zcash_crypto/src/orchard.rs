@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec};
+use alloc::{boxed::Box, vec::Vec};
 use chacha20::{
     ChaCha20,
     cipher::{KeyIvInit, StreamCipher, StreamCipherSeek},
@@ -190,8 +190,11 @@ fn try_output_recovery_with_ovk(
 
     let mut note_plaintext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
     note_plaintext_prefix.copy_from_slice(&note_plaintext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
-    let mut memo = vec![0u8; ORCHARD_MEMO_SIZE].into_boxed_slice();
-    memo.copy_from_slice(&note_plaintext[ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE..]);
+    let mut memo = Vec::new();
+    memo.try_reserve_exact(ORCHARD_MEMO_SIZE)
+        .map_err(|_| Error::OutOfMemory)?;
+    memo.extend_from_slice(&note_plaintext[ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE..]);
+    let memo = memo.into_boxed_slice();
 
     parse_and_validate_note_plaintext(
         &action.compact,
