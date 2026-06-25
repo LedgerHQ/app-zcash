@@ -113,14 +113,23 @@ pub enum TransferType {
     PrivateToPublic,
     // Orchard notes spent to Orchard recipients.
     PrivateToPrivate,
+    // Transfer with both public and private source or recipient pools.
+    Mixed,
 }
 
 impl TransferType {
     // Classifies the transfer from the source pool and the displayed outputs.
-    pub fn classify(from_private: bool, outputs: &[TxOutput]) -> Self {
+    pub fn classify(from_public: bool, from_private: bool, outputs: &[TxOutput]) -> Self {
+        let to_public = outputs
+            .iter()
+            .any(|output| !output.is_change && output.pool == TxPool::Transparent);
         let to_private = outputs
             .iter()
             .any(|output| !output.is_change && output.pool == TxPool::Orchard);
+
+        if (from_public && from_private) || (to_public && to_private) {
+            return TransferType::Mixed;
+        }
 
         match (from_private, to_private) {
             (false, false) => TransferType::PublicToPublic,
@@ -137,6 +146,7 @@ impl TransferType {
             TransferType::PublicToPrivate => "Transfer from public to private address",
             TransferType::PrivateToPublic => "Transfer from private to public address",
             TransferType::PrivateToPrivate => "Private transfer",
+            TransferType::Mixed => "Mixed pool transfer",
         }
     }
 }

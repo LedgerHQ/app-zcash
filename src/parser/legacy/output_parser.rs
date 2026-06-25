@@ -72,7 +72,7 @@ impl LegacyOutputParser {
                 fees
             ));
         } else {
-            let transfer_type = TransferType::classify(false, &ctx.tx_info.outputs);
+            let transfer_type = TransferType::classify(true, false, &ctx.tx_info.outputs);
             if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type)) {
                 return Err(ParserError::user());
             }
