@@ -232,6 +232,15 @@ pub struct TxContext<'a> {
 }
 
 impl<'s> TxContext<'s> {
+    // Initializes `TxContext` directly at `ptr` without materializing the whole
+    // context on the stack during a reset.
+    //
+    // # Safety
+    //
+    // `ptr` must be valid for writes, properly aligned, and point to storage
+    // for a `TxContext<'s>`. The `hashers` field is intentionally left
+    // uninitialized here and must not be read until a parser initializes the
+    // required hashers before first use.
     #[inline(never)]
     pub unsafe fn init_in_place(
         ptr: *mut TxContext<'s>,
@@ -244,7 +253,9 @@ impl<'s> TxContext<'s> {
             addr_of_mut!((*ptr).tx_signing_state).write(TxSigningState::default());
             addr_of_mut!((*ptr).tx_info).write(TxInfo::default());
             addr_of_mut!((*ptr).trusted_input_info).write(TrustedInputInfo::default());
-            // NOTE: We don't need to init hashers here because they will be initialized before first use in a parser.
+            // SAFETY: Skip Hashers initialization on purpose: the struct is large, and
+            // constructing it here may place a large temporary on the stack.
+            // Parsers initialize the required hashers before first use.
             addr_of_mut!((*ptr).home).write(NbglHomeAndSettings::default());
             addr_of_mut!((*ptr).legacy_parser).write(LegacyParser::new(mode));
             addr_of_mut!((*ptr).pczt_parser).write(PcztParser::new());
