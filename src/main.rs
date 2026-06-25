@@ -62,7 +62,7 @@ use crate::consts::{
     INS_GET_SHIELD_ADDR, MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
     P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
     P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE, P1_GET_VK_FIRST,
-    P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_LAST, P1_NEXT, P1HashSignMode,
+    P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_LAST, P1_NEXT,
     P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
     P2_PCZT_CONTINUE, P2_PCZT_FINISHED, P2ShieldedAddrMode, P2VkMode,
 };
@@ -166,9 +166,7 @@ pub enum Instruction {
     HashFinalizeFull {
         is_change: bool,
     },
-    HashSign {
-        mode: P1HashSignMode,
-    },
+    HashSign,
     PcztHeader,
     PcztTransparentInput {
         first: bool,
@@ -234,7 +232,7 @@ impl TryFrom<ApduHeader> for Instruction {
             }
             (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
                 first: p1 == P1_FIRST,
-                next: p1 == P1_LAST,
+                next: p1 == P1_NEXT,
             }),
             (
                 INS_HASH_INPUT_START,
@@ -252,9 +250,7 @@ impl TryFrom<ApduHeader> for Instruction {
             ) => Ok(Instruction::HashFinalizeFull {
                 is_change: value.p1 == P1_FINALIZE_FULL_CHANGEINFO,
             }),
-            (INS_HASH_SIGN, p1, 0) => Ok(Instruction::HashSign {
-                mode: P1HashSignMode::try_from(p1)?,
-            }),
+            (INS_HASH_SIGN, 0, 0) => Ok(Instruction::HashSign),
             (INS_PCZT_HEADER, P1_FIRST, P2_PCZT_CONTINUE) => Ok(Instruction::PcztHeader),
             (INS_PCZT_TRANSPARENT_INPUT, p1, P2_PCZT_CONTINUE)
                 if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
@@ -340,12 +336,11 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             (true, StatusType::Address)
         }
         (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
-        | (
-            Instruction::HashSign {
-                mode: P1HashSignMode::Sign,
-            },
-            AppSW::Ok,
-        ) if tx_ctx.is_finished() => (true, StatusType::Transaction),
+        | (Instruction::HashSign, AppSW::Ok)
+            if tx_ctx.is_finished() =>
+        {
+            (true, StatusType::Transaction)
+        }
         (_, _) => (false, StatusType::Transaction),
     };
 
@@ -454,7 +449,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
             Instruction::GetTrustedInput { .. }
             | Instruction::HashInputStart { .. }
             | Instruction::HashFinalizeFull { .. }
-            | Instruction::HashSign { .. }
+            | Instruction::HashSign
             | Instruction::PcztHeader
             | Instruction::PcztTransparentInput { .. }
             | Instruction::PcztTransparentOutput { .. }
@@ -497,7 +492,7 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
         Instruction::HashFinalizeFull { is_change } => {
             handler_hash_input_finalize_full(comm, ctx, *is_change)
         }
-        Instruction::HashSign { mode } => handler_hash_sign(comm, ctx, *mode),
+        Instruction::HashSign => handler_hash_sign(comm, ctx),
         Instruction::PcztHeader => handler_pczt_header(comm, ctx),
         Instruction::PcztTransparentInput { first, last } => {
             handler_pczt_transparent_input(comm, ctx, *first, *last)

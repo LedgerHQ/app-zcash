@@ -41,8 +41,7 @@ use error::ok;
 use ledger_device_sdk::log::{debug, error, info};
 
 pub use compute::{
-    compute_no_transparent_input_signature_digest, compute_shielded_signature_digest,
-    compute_transparent_input_signature_digest,
+    compute_no_transparent_input_signature_digest, compute_transparent_input_signature_digest,
 };
 pub use error::{ParserError, ParserSourceError};
 pub use output_parser::{OutputParser, OutputParserCtx};
