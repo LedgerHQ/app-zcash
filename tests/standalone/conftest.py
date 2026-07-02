@@ -1,5 +1,4 @@
 from ragger.conftest import configuration
-from ragger.navigator import NavInsID
 import pytest
 
 ###########################
@@ -14,7 +13,7 @@ import pytest
 #########################
 
 # Pull all features from the base ragger conftest using the overridden configuration
-pytest_plugins = ("ragger.conftest.base_conftest", )
+pytest_plugins = ("ragger.conftest.base_conftest",)
 
 
 @pytest.fixture(scope=configuration.OPTIONAL.BACKEND_SCOPE)
@@ -25,7 +24,7 @@ def additional_speculos_arguments():
 # Notes :
 # 1. Remove this fixture once the pending review screen is removed from the app
 # 2. This fixture clears the pending review screen before each test
-# 3. The scope should be the same as the one configured by BACKEND_SCOPE in 
+# 3. The scope should be the same as the one configured by BACKEND_SCOPE in
 # ragger/conftest/configuration.py
 # @pytest.fixture(scope="class", autouse=True)
 # def clear_pending_review(firmware, navigator):
