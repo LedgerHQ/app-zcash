@@ -117,7 +117,9 @@ def pczt_orchard_bundle_from_raw_tx(
 
     spend_note_fields = [] if spend_note_fields is None else spend_note_fields
     if len(spend_note_fields) != orchard_action_count:
-        raise ValueError("Raw Orchard actions require one spend note field set per action")
+        raise ValueError(
+            "Raw Orchard actions require one spend note field set per action"
+        )
     for spend_recipient, spend_rho, spend_rseed in spend_note_fields:
         if len(spend_recipient) != ORCHARD_RAW_ADDRESS_SIZE:
             raise ValueError("Orchard spend recipient must be 43 bytes")

@@ -3,8 +3,10 @@ from dataclasses import dataclass
 from struct import pack
 from .zcash_utils import UINT64_MAX, read_compactsize, write_varint
 
+
 class TransactionError(Exception):
     pass
+
 
 @dataclass
 class Transaction:
@@ -22,13 +24,16 @@ class Transaction:
             raise TransactionError(f"Bad address: '{self.to}'!")
 
         # Serialize the transaction data to a JSON-formatted string
-        return json.dumps({
-            "nonce": self.nonce,
-            "coin": self.coin,
-            "value": self.value,
-            "to": self.to,
-            "memo": self.memo
-        }).encode('utf-8')
+        return json.dumps(
+            {
+                "nonce": self.nonce,
+                "coin": self.coin,
+                "value": self.value,
+                "to": self.to,
+                "memo": self.memo,
+            }
+        ).encode("utf-8")
+
 
 #  V5 TX format:
 #  [ nVersion | flags ]           4 bytes
@@ -74,18 +79,18 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
     if is_v4_nu6:
         i += header_v4_size
     else:
-        locktime = buf[header_v4_size:header_v4_size+4]
-        expiry   = buf[header_v4_size+4:header_v4_size+4*2]
+        locktime = buf[header_v4_size : header_v4_size + 4]
+        expiry = buf[header_v4_size + 4 : header_v4_size + 4 * 2]
         i += header_v5_size
 
     vin_n, i = read_compactsize(buf, i)
-    header_bytes = bytes(buf[0:header_v4_size]) + bytes(buf[i - 1:i])
+    header_bytes = bytes(buf[0:header_v4_size]) + bytes(buf[i - 1 : i])
     chunks.append(header_bytes)
 
     for _ in range(vin_n):
         prevout_start = i
         i += 32 + 4
-        slen, i   = read_compactsize(buf, i)
+        slen, i = read_compactsize(buf, i)
         chunks.append(buf[prevout_start:i])
 
         script_start = i
@@ -94,12 +99,12 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
         chunks.append(buf[script_start:i])
 
     vout_n, i = read_compactsize(buf, i)
-    chunks.append(buf[i-1:i])
+    chunks.append(buf[i - 1 : i])
 
     for _ in range(vout_n):
         value_start = i
         i += 8
-        plen, i  = read_compactsize(buf, i)
+        plen, i = read_compactsize(buf, i)
         chunks.append(buf[value_start:i])
 
         script_pk_start = i
@@ -109,8 +114,8 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
     # Sapling and Orchard fields
     sapling_start = i
     sap_sp, i = read_compactsize(buf, i)
-    sap_out,i = read_compactsize(buf, i)
-    orch, i   = read_compactsize(buf, i)
+    sap_out, i = read_compactsize(buf, i)
+    orch, i = read_compactsize(buf, i)
     chunks.append(buf[sapling_start:i])
 
     # Sapling data (if any)
@@ -142,7 +147,7 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
         memo_remaining = sap_out * 512
         while memo_remaining > 0:
             memo_chunk = min(128, memo_remaining)
-            chunks.append(buf[i:i + memo_chunk])
+            chunks.append(buf[i : i + memo_chunk])
             i += memo_chunk
             memo_remaining -= memo_chunk
 
@@ -157,14 +162,16 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
         # Orchard actions: compact part
         for _ in range(orch):
             compact_start = i
-            i += 32 + 32 + 32 + 52  # nullifier + cmx + ephemeral_key + enc_ciphertext[..52]
+            i += (
+                32 + 32 + 32 + 52
+            )  # nullifier + cmx + ephemeral_key + enc_ciphertext[..52]
             chunks.append(buf[compact_start:i])
 
         # Orchard memos (512 bytes per action), split into 128-byte chunks
         memo_remaining = orch * 512
         while memo_remaining > 0:
             memo_chunk = min(128, memo_remaining)
-            chunks.append(buf[i:i + memo_chunk])
+            chunks.append(buf[i : i + memo_chunk])
             i += memo_chunk
             memo_remaining -= memo_chunk
 
@@ -195,6 +202,7 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
 
     return chunks
 
+
 def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
     # pylint: disable=R0914,R0915
 
@@ -203,8 +211,8 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
     header_size = 4 * 5
     header_quirk_size = 4 * 3
 
-    locktime = buf[header_quirk_size:header_quirk_size + 4]
-    expiry = buf[header_quirk_size + 4:header_quirk_size + 8]
+    locktime = buf[header_quirk_size : header_quirk_size + 4]
+    expiry = buf[header_quirk_size + 4 : header_quirk_size + 8]
 
     i += header_size
 
@@ -218,10 +226,10 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
         prevout = buf[prevout_start:i]
 
         script_len, i = read_compactsize(buf, i)
-        script = buf[i:i + script_len]
+        script = buf[i : i + script_len]
         i += script_len
 
-        sequence = buf[i:i + 4]
+        sequence = buf[i : i + 4]
         i += 4
 
         inputs.append(
@@ -236,11 +244,11 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
 
     outputs = []
     for _ in range(vout_n):
-        value = buf[i:i + 8]
+        value = buf[i : i + 8]
         i += 8
 
         script_len, i = read_compactsize(buf, i)
-        script = buf[i:i + script_len]
+        script = buf[i : i + script_len]
         i += script_len
 
         outputs.append(
@@ -268,7 +276,7 @@ def split_tx_v5_for_hash_input(buf: bytes) -> dict[str, object]:
         memo_remaining = orch * 512
         while memo_remaining > 0:
             memo_chunk = min(128, memo_remaining)
-            shielded_chunks.append(buf[i:i + memo_chunk])
+            shielded_chunks.append(buf[i : i + memo_chunk])
             i += memo_chunk
             memo_remaining -= memo_chunk
 
@@ -309,17 +317,19 @@ def _extract_raw_tx_v5_outputs(buf: bytes) -> list[dict[str, bytes]]:
     vout_n, i = read_compactsize(buf, i)
     outputs = []
     for _ in range(vout_n):
-        value = buf[i:i + 8]
+        value = buf[i : i + 8]
         i += 8
         script_len, i = read_compactsize(buf, i)
-        script = buf[i:i + script_len]
+        script = buf[i : i + script_len]
         i += script_len
         outputs.append({"value": value, "script": script})
 
     return outputs
 
 
-def convert_raw_tx_v5_orchard_to_app_format(buf: bytes, prevout_txs: bytes | list[bytes]) -> bytes:
+def convert_raw_tx_v5_orchard_to_app_format(
+    buf: bytes, prevout_txs: bytes | list[bytes]
+) -> bytes:
     """Convert a raw NU5 Orchard transaction into the app parser's digest-oriented layout."""
     # pylint: disable=too-many-locals,R0915
     prevout_tx_list = [prevout_txs] if isinstance(prevout_txs, bytes) else prevout_txs
@@ -334,12 +344,12 @@ def convert_raw_tx_v5_orchard_to_app_format(buf: bytes, prevout_txs: bytes | lis
 
     tx.extend(write_varint(vin_n))
     for input_idx in range(vin_n):
-        prev_txid = buf[i:i + 32]
+        prev_txid = buf[i : i + 32]
         i += 32 + 4
-        prev_vout = int.from_bytes(buf[i - 4:i], byteorder="little")
+        prev_vout = int.from_bytes(buf[i - 4 : i], byteorder="little")
         script_len, i = read_compactsize(buf, i)
         script_end = i + script_len
-        sequence = buf[script_end:script_end + 4]
+        sequence = buf[script_end : script_end + 4]
         i = script_end + 4
 
         prevout_tx = prevout_tx_list[min(input_idx, len(prevout_tx_list) - 1)]
@@ -367,8 +377,12 @@ def convert_raw_tx_v5_orchard_to_app_format(buf: bytes, prevout_txs: bytes | lis
     sapling_outputs, i = read_compactsize(buf, i)
     orchard_actions, i = read_compactsize(buf, i)
 
-    assert sapling_spends == 0, "Raw Sapling spends are not supported in this converter!"
-    assert sapling_outputs == 0, "Raw Sapling outputs are not supported in this converter!"
+    assert sapling_spends == 0, (
+        "Raw Sapling spends are not supported in this converter!"
+    )
+    assert sapling_outputs == 0, (
+        "Raw Sapling outputs are not supported in this converter!"
+    )
 
     tx.extend(write_varint(sapling_spends))
     tx.extend(write_varint(sapling_outputs))
@@ -378,19 +392,19 @@ def convert_raw_tx_v5_orchard_to_app_format(buf: bytes, prevout_txs: bytes | lis
     memo_chunks = []
     noncompact_chunks = []
     for _ in range(orchard_actions):
-        cv = buf[i:i + 32]
+        cv = buf[i : i + 32]
         i += 32
-        nullifier = buf[i:i + 32]
+        nullifier = buf[i : i + 32]
         i += 32
-        rk = buf[i:i + 32]
+        rk = buf[i : i + 32]
         i += 32
-        cmx = buf[i:i + 32]
+        cmx = buf[i : i + 32]
         i += 32
-        ephemeral_key = buf[i:i + 32]
+        ephemeral_key = buf[i : i + 32]
         i += 32
-        enc_ciphertext = buf[i:i + 580]
+        enc_ciphertext = buf[i : i + 580]
         i += 580
-        out_ciphertext = buf[i:i + 80]
+        out_ciphertext = buf[i : i + 80]
         i += 80
 
         assert len(enc_ciphertext) == 580, "Invalid Orchard encCiphertext size!"
@@ -400,9 +414,9 @@ def convert_raw_tx_v5_orchard_to_app_format(buf: bytes, prevout_txs: bytes | lis
         memo_chunks.append(enc_ciphertext[52:564])
         noncompact_chunks.append(cv + rk + enc_ciphertext[564:] + out_ciphertext)
 
-    flags = buf[i:i + 1]
-    value_balance = buf[i + 1:i + 1 + 8]
-    anchor = buf[i + 1 + 8:i + 1 + 8 + 32]
+    flags = buf[i : i + 1]
+    value_balance = buf[i + 1 : i + 1 + 8]
+    anchor = buf[i + 1 + 8 : i + 1 + 8 + 32]
 
     assert len(flags) == 1, "Missing Orchard flags!"
     assert len(value_balance) == 8, "Missing Orchard value balance!"

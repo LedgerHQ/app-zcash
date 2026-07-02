@@ -14,7 +14,7 @@ def test_bad_cla(backend):
 # Ensure the app returns an error when a bad INS is used
 def test_bad_ins(backend):
     with pytest.raises(ExceptionRAPDU) as e:
-        backend.exchange(cla=CLA, ins=0xff)
+        backend.exchange(cla=CLA, ins=0xFF)
     assert e.value.status == Errors.SW_INS_NOT_SUPPORTED
 
 
@@ -33,14 +33,18 @@ def test_wrong_p1p2(backend):
         backend.exchange(cla=CLA, ins=InsType.GET_APP_NAME, p1=P1.P1_FIRST, p2=0x02)
     assert e.value.status == Errors.SW_WRONG_P1P2
     with pytest.raises(ExceptionRAPDU) as e:
-        backend.exchange(cla=CLA, ins=InsType.PCZT_SIGN_TRANSPARENT, p1=P1.P1_FIRST, p2=10)
+        backend.exchange(
+            cla=CLA, ins=InsType.PCZT_SIGN_TRANSPARENT, p1=P1.P1_FIRST, p2=10
+        )
     assert e.value.status == Errors.SW_WRONG_P1P2
 
 
 def test_hash_sign_rejects_legacy_shielded_modes(backend):
     for mode in (0x02, 0x03):
         with pytest.raises(ExceptionRAPDU) as e:
-            backend.exchange(cla=CLA, ins=InsType.HASH_SIGN, p1=mode, p2=0x00, data=b"\x00")
+            backend.exchange(
+                cla=CLA, ins=InsType.HASH_SIGN, p1=mode, p2=0x00, data=b"\x00"
+            )
         assert e.value.status == Errors.SW_WRONG_P1P2
 
 
