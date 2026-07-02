@@ -34,8 +34,8 @@ fn format_zec_amount(amount: u64) -> String {
 
 /// Display transaction outputs and fees for user confirmation.
 ///
-/// `transfer_type` classifies the flow (public, shielding, deshielding or fully
-/// private) and is shown as the review subtitle so the user can tell apart the
+/// `transfer_type` classifies the flow (public, shielding, deshielding, private
+/// or mixed) and is shown as the review subtitle so the user can tell apart the
 /// involved value pools.
 pub fn ui_display_tx(
     outputs: &[TxOutput],

@@ -3,7 +3,7 @@ use ledger_device_sdk::log::{debug, error, info};
 
 use crate::AppSW;
 use crate::handlers::sign_tx::{append_signature, orchard_spend_auth_signature_with_alpha};
-use crate::parser::{ParserError, ParserMode, ParserSourceError, PcztParserCtx};
+use crate::parser::{LegacyParserMode, ParserError, ParserSourceError, PcztParserCtx};
 use crate::tx::TxContext;
 
 fn are_pczt_transparent_signatures_done(ctx: &TxContext) -> bool {
@@ -69,7 +69,7 @@ fn finish_pczt_if_requested(ctx: &mut TxContext, requested: bool) -> Result<(), 
 
 pub fn handler_pczt_header(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
     info!("Reset TX context for PCZT header parsing");
-    ctx.reset(ParserMode::Signature);
+    ctx.reset(LegacyParserMode::Signature);
 
     let data = match comm.get_data() {
         Ok(data) => data,

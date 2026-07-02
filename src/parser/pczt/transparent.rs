@@ -700,32 +700,38 @@ impl PcztParser {
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
     ) -> Result<(), ParserError> {
-        if let output @ (CheckDispOutput::Change | CheckDispOutput::Displayable) =
-            check_output_displayable(
-                &self.script_bytes,
-                self.current_output_amount,
-                ctx.tx_info.change_pk_hash.as_ref(),
-            )
-        {
-            let is_change = output == CheckDispOutput::Change;
+        match check_output_displayable(
+            &self.script_bytes,
+            self.current_output_amount,
+            ctx.tx_info.change_pk_hash.as_ref(),
+        ) {
+            output @ (CheckDispOutput::Change | CheckDispOutput::Displayable) => {
+                let is_change = output == CheckDispOutput::Change;
 
-            if is_change && ctx.tx_info.is_change_found {
-                return Err(ParserError::from_str("Multiple change outputs detected"));
+                if is_change && ctx.tx_info.is_change_found {
+                    return Err(ParserError::from_str("Multiple change outputs detected"));
+                }
+
+                let address =
+                    ok!(Base58Address::from_output_script(&self.script_bytes)).to_string();
+                debug!("PCZT transparent output address: {}", &address);
+
+                ctx.tx_info.outputs.push(TxOutput {
+                    amount: self.current_output_amount,
+                    address,
+                    is_change,
+                    memo: None,
+                    pool: TxPool::Transparent,
+                });
+
+                if is_change {
+                    ctx.tx_info.is_change_found = true;
+                }
             }
-
-            let address = ok!(Base58Address::from_output_script(&self.script_bytes)).to_string();
-            debug!("PCZT transparent output address: {}", &address);
-
-            ctx.tx_info.outputs.push(TxOutput {
-                amount: self.current_output_amount,
-                address,
-                is_change,
-                memo: None,
-                pool: TxPool::Transparent,
-            });
-
-            if is_change {
-                ctx.tx_info.is_change_found = true;
+            CheckDispOutput::None => {
+                return Err(ParserError::from_str(
+                    "Unsupported transparent output script cannot be safely reviewed",
+                ));
             }
         }
 

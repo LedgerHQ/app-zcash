@@ -22,10 +22,10 @@ const SAPLING_OUTPUTS_NONCOMPACT_SIZE: usize =
     SAPLING_CMU_SIZE + SAPLING_OUT_CIPHERTEXT_SIZE + SAPLING_ZKPROOF_SIZE;
 const SAPLING_MEMO_SIZE: usize = 512;
 
-impl Parser {
+impl LegacyParser {
     pub fn parse_sapling(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         info!("Process sapling");
@@ -53,7 +53,7 @@ impl Parser {
                 .tx_non_compact_hasher
                 .init_with_perso(ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION));
 
-            self.state = ParserState::ProcessSaplingSpends { anchor };
+            self.state = LegacyParserState::ProcessSaplingSpends { anchor };
         } else if self.sapling_output_count > 0 {
             // No spends
             // Get empty sapling spends digest
@@ -75,9 +75,9 @@ impl Parser {
                 .tx_compact_hasher
                 .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION));
 
-            self.state = ParserState::ProcessSaplingOutputsCompact;
+            self.state = LegacyParserState::ProcessSaplingOutputsCompact;
         } else {
-            self.state = ParserState::ProcessExtra;
+            self.state = LegacyParserState::ProcessExtra;
         }
 
         Ok(())
@@ -85,7 +85,7 @@ impl Parser {
 
     pub fn parse_sapling_spends(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
         anchor: [u8; 32],
     ) -> Result<(), ParserError> {
@@ -122,7 +122,7 @@ impl Parser {
 
         if self.sapling_spend_count == self.sapling_spend_parsed_count {
             info!("All sapling spends parsed");
-            self.state = ParserState::ProcessSaplingSpendsHashing;
+            self.state = LegacyParserState::ProcessSaplingSpendsHashing;
         }
 
         Ok(())
@@ -130,7 +130,7 @@ impl Parser {
 
     pub fn parse_sapling_spends_hashing(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         _reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         info!("Process sapling spends hashing");
@@ -177,9 +177,9 @@ impl Parser {
                 .tx_compact_hasher
                 .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION));
 
-            self.state = ParserState::ProcessSaplingOutputsCompact;
+            self.state = LegacyParserState::ProcessSaplingOutputsCompact;
         } else {
-            self.state = ParserState::ProcessExtra;
+            self.state = LegacyParserState::ProcessExtra;
         }
 
         Ok(())
@@ -187,7 +187,7 @@ impl Parser {
 
     pub fn parse_sapling_outputs_compact(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         info!(
@@ -213,7 +213,7 @@ impl Parser {
                 .init_with_perso(ZCASH_SAPLING_OUTPUTS_MEMOS_HASH_PERSONALIZATION));
 
             // memo_size = 512 each APDU will contain quarter of the memo
-            self.state = ParserState::ProcessSaplingOutputsMemo {
+            self.state = LegacyParserState::ProcessSaplingOutputsMemo {
                 size: self.sapling_output_count * SAPLING_MEMO_SIZE,
                 remaining_size: self.sapling_output_count * SAPLING_MEMO_SIZE,
             };
@@ -224,7 +224,7 @@ impl Parser {
 
     pub fn parse_sapling_outputs_memo(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
         size: usize,
         remaining_size: usize,
@@ -247,9 +247,9 @@ impl Parser {
                 .init_with_perso(ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION));
 
             self.sapling_output_parsed_count = 0;
-            self.state = ParserState::ProcessSaplingOutputsNonCompact;
+            self.state = LegacyParserState::ProcessSaplingOutputsNonCompact;
         } else {
-            self.state = ParserState::ProcessSaplingOutputsMemo {
+            self.state = LegacyParserState::ProcessSaplingOutputsMemo {
                 size,
                 remaining_size: new_remaining_size,
             };
@@ -260,7 +260,7 @@ impl Parser {
 
     pub fn parse_sapling_outputs_non_compact(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         info!(
@@ -279,7 +279,7 @@ impl Parser {
 
         if self.sapling_output_count == self.sapling_output_parsed_count {
             info!("All sapling non compact outputs parsed");
-            self.state = ParserState::ProcessSaplingOutputHashing;
+            self.state = LegacyParserState::ProcessSaplingOutputHashing;
         }
 
         Ok(())
@@ -287,7 +287,7 @@ impl Parser {
 
     pub fn parse_sapling_output_hashing(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         _reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         info!("Finalize sapling outputs hashing");
@@ -333,9 +333,9 @@ impl Parser {
                 .hashers
                 .tx_compact_hasher
                 .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
-            self.state = ParserState::ProcessOrchardCompact;
+            self.state = LegacyParserState::ProcessOrchardCompact;
         } else {
-            self.state = ParserState::ProcessExtra;
+            self.state = LegacyParserState::ProcessExtra;
         }
 
         Ok(())

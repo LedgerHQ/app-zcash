@@ -62,12 +62,6 @@ class P1(IntEnum):
     # Parameter 1 for change information for HASH_INPUT_FINALIZE_FULL.
     P1_FINALIZE_FULL_CHANGEINFO = 0xFF
 
-class HashSignMode(IntEnum):
-    Sign = 0x00
-    Digest = 0x01
-    SpendAuthSig = 0x02
-    BindingSig = 0x03
-
 class P2(IntEnum):
     # Parameter 2 default value
     P2_NONE = 0x00
@@ -356,57 +350,53 @@ class ZcashCommandSender:
     @contextmanager
     def _hash_input_finalize_outputs(
         self,
-        change_or_shielded_path: str | None = None,
+        change_path: str | None = None,
     ) -> Generator[None, None, None]:
-        # pylint: disable=too-many-locals
         # Send outputs chunks
         outputs: list[dict] = self.tx_chunks["outputs"] # type: ignore
-        shielded_prefix: bytes = self.tx_chunks["shielded_prefix"] # type: ignore
-        shielded_chunks: list[bytes] = self.tx_chunks["shielded_chunks"] # type: ignore
         outputs_num = len(outputs)
         outputs_num_bytes = outputs_num.to_bytes(1, byteorder="big")
-        finalize_chunks: list[bytes] = []
 
-        if change_or_shielded_path:
+        if change_path:
             self.backend.exchange(
                 cla=CLA,
                 ins=InsType.HASH_INPUT_FINALIZE_FULL,
                 p1=P1.P1_FINALIZE_FULL_CHANGEINFO,
                 p2=P2.P2_FINALIZE_FULL_DEFAULT,
-                data=pack_derivation_path(change_or_shielded_path),
+                data=pack_derivation_path(change_path),
             )
 
-        for idx, out in enumerate(outputs):
+        for out in outputs[:-1]:
             value = out["value"]
             script = out["script"]
             script_len = len(script)
-            prefix = outputs_num_bytes if idx == 0 else b""
-            suffix = shielded_prefix if idx == len(outputs) - 1 else b""
 
-            finalize_chunks.append(
-                prefix + value + script_len.to_bytes(1, byteorder="big") + script + suffix
-            )
-
-        if not outputs:
-            finalize_chunks.append(outputs_num_bytes + shielded_prefix)
-
-        finalize_chunks.extend(shielded_chunks)
-
-        for chunk in finalize_chunks[:-1]:
             self.backend.exchange(
                 cla=CLA,
                 ins=InsType.HASH_INPUT_FINALIZE_FULL,
                 p1=P1.P1_FINALIZE_FULL_MORE,
                 p2=P2.P2_FINALIZE_FULL_DEFAULT,
-                data=chunk,
+                data=outputs_num_bytes
+                + value
+                + script_len.to_bytes(1, byteorder="big")
+                + script,
             )
+
+            outputs_num_bytes = b""
+
+        value = outputs[-1]["value"]
+        script = outputs[-1]["script"]
+        script_len = len(script)
 
         with self.backend.exchange_async(
             cla=CLA,
             ins=InsType.HASH_INPUT_FINALIZE_FULL,
             p1=P1.P1_FINALIZE_FULL_MORE,
             p2=P2.P2_FINALIZE_FULL_DEFAULT,
-            data=finalize_chunks[-1],
+            data=outputs_num_bytes
+            + value
+            + script_len.to_bytes(1, byteorder="big")
+            + script,
         ) as response:
             yield response
 
@@ -415,7 +405,7 @@ class ZcashCommandSender:
         self,
         transaction: bytes,
         trusted_inputs: list[bytes],
-        change_or_shielded_path: str | None = None,
+        change_path: str | None = None,
     ) -> Generator[None, None, None]:
         self.tx_chunks = split_tx_v5_for_hash_input(transaction)
         self.trusted_inputs = trusted_inputs
@@ -424,7 +414,7 @@ class ZcashCommandSender:
 
         self._send_trusted_inputs_and_header(continue_hashing=False)
 
-        with self._hash_input_finalize_outputs(change_or_shielded_path) as response:
+        with self._hash_input_finalize_outputs(change_path) as response:
             yield response
 
     def _pczt_optional_u32(self, value: int | None) -> bytes:
@@ -842,122 +832,33 @@ class ZcashCommandSender:
         ) as response:
             yield response
 
-    def _prepare_hash_sign(
-        self,
-        locktime: Optional[int],
-        expiry: Optional[int],
-        sighash_type: int,
-    ) -> None:
-        if self.pczt_transparent_inputs:
-            raise ValueError("Use pczt_sign_transparent for PCZT transparent signing")
-
-        if locktime is None or expiry is None:
-            raise ValueError("locktime and expiry are required when prepare=True")
-
+    def hash_sign(
+        self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01
+    ) -> RAPDU:
+        # Send extra header data
         self.backend.exchange(
             cla=CLA,
             ins=InsType.HASH_SIGN,
             p1=P1.P1_FIRST,
             p2=P2.P2_NONE,
             data=0x00.to_bytes(2, byteorder="big")
-            + self._hash_sign_trailer(locktime, expiry, sighash_type),
+            + locktime.to_bytes(4, byteorder="big")
+            + sighash_type.to_bytes(1, byteorder="big")
+            + expiry.to_bytes(4, byteorder="big"),
         )
 
         self._send_trusted_inputs_and_header(continue_hashing=True)
 
-    @staticmethod
-    def _hash_sign_trailer(locktime: int, expiry: int, sighash_type: int) -> bytes:
-        return (
-            locktime.to_bytes(4, byteorder="big")
-            + sighash_type.to_bytes(1, byteorder="big")
-            + expiry.to_bytes(4, byteorder="big")
-        )
-
-    @staticmethod
-    def _binding_sign_data(
-        binding_signing_key: Optional[bytes],
-        orchard_alpha: Optional[bytes],
-    ) -> bytes:
-        if binding_signing_key is None:
-            raise ValueError("binding_signing_key is required for BindingSig mode")
-        if len(binding_signing_key) != 32:
-            raise ValueError("binding_signing_key must be 32 bytes")
-        if orchard_alpha is not None:
-            raise ValueError("orchard_alpha is only supported for SpendAuthSig mode")
-
-        return binding_signing_key
-
-    @staticmethod
-    def _spend_auth_alpha(orchard_alpha: Optional[bytes]) -> bytes:
-        if orchard_alpha is None:
-            raise ValueError("orchard_alpha is required for SpendAuthSig mode")
-        if len(orchard_alpha) != 32:
-            raise ValueError("orchard_alpha must be 32 bytes")
-
-        return orchard_alpha
-
-    def _hash_sign_data(
-        self,
-        path: str,
-        locktime: Optional[int],
-        expiry: Optional[int],
-        sighash_type: int,
-        mode: HashSignMode,
-        binding_signing_key: Optional[bytes],
-        orchard_alpha: Optional[bytes],
-    ) -> bytes:
-        # pylint: disable=too-many-positional-arguments
-        if mode == HashSignMode.BindingSig:
-            return self._binding_sign_data(binding_signing_key, orchard_alpha)
-
-        sign_data = pack_derivation_path(path)
-        if mode == HashSignMode.SpendAuthSig:
-            return sign_data + self._spend_auth_alpha(orchard_alpha)
-        if orchard_alpha is not None:
-            raise ValueError("orchard_alpha is only supported for SpendAuthSig mode")
-        if locktime is None or expiry is None:
-            return sign_data
-
-        return sign_data + b"\x00" + self._hash_sign_trailer(
-            locktime,
-            expiry,
-            sighash_type,
-        )
-
-    def hash_sign(
-        self,
-        path: str,
-        locktime: Optional[int] = None,
-        expiry: Optional[int] = None,
-        sighash_type: int = 0x01,
-        mode: HashSignMode = HashSignMode.Sign,
-        prepare: bool = True,
-        binding_signing_key: Optional[bytes] = None,
-        orchard_alpha: Optional[bytes] = None,
-    ) -> RAPDU:
-        # pylint: disable=too-many-positional-arguments
-        if (locktime is None) != (expiry is None):
-            raise ValueError("locktime and expiry must be provided together")
-
-        if prepare:
-            self._prepare_hash_sign(locktime, expiry, sighash_type)
-
-        sign_data = self._hash_sign_data(
-            path,
-            locktime,
-            expiry,
-            sighash_type,
-            mode,
-            binding_signing_key,
-            orchard_alpha,
-        )
-
         return self.backend.exchange(
             cla=CLA,
             ins=InsType.HASH_SIGN,
-            p1=mode,
+            p1=P1.P1_FIRST,
             p2=P2.P2_NONE,
-            data=sign_data,
+            data=pack_derivation_path(path)
+            + 0x00.to_bytes(1, byteorder="big")
+            + locktime.to_bytes(4, byteorder="big")
+            + sighash_type.to_bytes(1, byteorder="big")
+            + expiry.to_bytes(4, byteorder="big"),
         )
 
     def forge_and_get_trusted_input(self, trusted_input_idx: int, send_amount: int) -> bytes:

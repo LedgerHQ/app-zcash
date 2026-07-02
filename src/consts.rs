@@ -6,7 +6,7 @@ pub const ZCASH_DECIMALS: u32 = 8;
 pub const ZCASH_DECIMALS_DIV: u64 = 10u64.pow(ZCASH_DECIMALS);
 
 pub const MAX_SCRIPT_SIZE: usize = 1024 * 2;
-// Limit the number of transparent outputs and orchard action in legacy parser due to device memory constraints.
+// Limit the number of transparent outputs in the legacy parser due to device memory constraints.
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
 pub const SIGHASH_ALL: u8 = 0x01;
 pub const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
@@ -98,29 +98,6 @@ impl TryFrom<u8> for P2ShieldedAddrMode {
         match value {
             0x00 => Ok(P2ShieldedAddrMode::UAddress),
             0x01 => Ok(P2ShieldedAddrMode::OrchardAddress),
-            _ => Err(AppSW::WrongP1P2),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-#[repr(u8)]
-pub enum P1HashSignMode {
-    Sign = 0x00,
-    Digest = 0x01,
-    SpendAuthSig = 0x02,
-    BindingSig = 0x03,
-}
-
-impl TryFrom<u8> for P1HashSignMode {
-    type Error = AppSW;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0x00 => Ok(P1HashSignMode::Sign),
-            0x01 => Ok(P1HashSignMode::Digest),
-            0x02 => Ok(P1HashSignMode::SpendAuthSig),
-            0x03 => Ok(P1HashSignMode::BindingSig),
             _ => Err(AppSW::WrongP1P2),
         }
     }

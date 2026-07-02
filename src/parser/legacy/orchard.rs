@@ -21,12 +21,10 @@ pub(crate) const ORCHARD_ACTIONS_NONCOMPACT_SIZE: usize =
     ORCHARD_NULLIFIER_SIZE + ORCHARD_CMX_SIZE + ORCHARD_OUT_CIPHERTEXT_SIZE + ORCHARD_ZKPROOF_SIZE;
 pub(crate) const ORCHARD_DIGEST_DATA_SIZE: usize =
     ORCHARD_FLAGS_SIZE + ORCHARD_BALANCE_SIZE + HASH_SIZE;
-pub(crate) const ORCHARD_MEMO_SIZE: usize = 512;
-
-impl Parser {
+impl LegacyParser {
     pub fn parse_orchard_compact(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         info!(
@@ -53,7 +51,7 @@ impl Parser {
                 .init_with_perso(ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION));
 
             // memo_size = 512 each APDU will contain quarter of the memo
-            self.state = ParserState::ProcessOrchardMemo {
+            self.state = LegacyParserState::ProcessOrchardMemo {
                 size: self.orchard_action_count * ORCHARD_MEMO_SIZE,
                 remaining_size: self.orchard_action_count * ORCHARD_MEMO_SIZE,
             };
@@ -64,7 +62,7 @@ impl Parser {
 
     pub fn parse_orchard_memo(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
         size: usize,
         remaining_size: usize,
@@ -82,9 +80,9 @@ impl Parser {
                 .init_with_perso(ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION));
 
             self.orchard_action_parsed_count = 0;
-            self.state = ParserState::ProcessOrchardNonCompact;
+            self.state = LegacyParserState::ProcessOrchardNonCompact;
         } else {
-            self.state = ParserState::ProcessOrchardMemo {
+            self.state = LegacyParserState::ProcessOrchardMemo {
                 size,
                 remaining_size: new_remaining_size,
             };
@@ -95,7 +93,7 @@ impl Parser {
 
     pub fn parse_orchard_noncompact(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         info!(
@@ -115,7 +113,7 @@ impl Parser {
 
         if self.orchard_action_parsed_count == self.orchard_action_count {
             info!("All orchard non-compact actions parsed");
-            self.state = ParserState::ProcessOrchardHashing;
+            self.state = LegacyParserState::ProcessOrchardHashing;
         }
 
         Ok(())
@@ -123,7 +121,7 @@ impl Parser {
 
     pub fn parse_orchard_hashing(
         &mut self,
-        ctx: &mut ParserCtx<'_>,
+        ctx: &mut LegacyParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
         info!("Finalizing orchard hashing");
@@ -159,7 +157,7 @@ impl Parser {
             "Not enough data for orchard digest data",
         )?;
 
-        self.state = ParserState::ProcessExtra;
+        self.state = LegacyParserState::ProcessExtra;
 
         Ok(())
     }

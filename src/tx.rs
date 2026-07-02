@@ -16,7 +16,7 @@ use crate::parser::personalization::{
     ZCASH_SAPLING_HASH_PERSONALIZATION, ZCASH_SEQUENCE_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
 };
-use crate::parser::{OutputParser, Parser, ParserMode, PcztParser};
+use crate::parser::{LegacyOutputParser, LegacyParser, LegacyParserMode, PcztParser};
 use crate::utils::blake2b_256_pers::Blake2b256Personalization as _;
 use orchard::bundle::commitments::ZCASH_ORCHARD_HASH_PERSONALIZATION;
 
@@ -113,14 +113,23 @@ pub enum TransferType {
     PrivateToPublic,
     // Orchard notes spent to Orchard recipients.
     PrivateToPrivate,
+    // Transfer with both public and private source or recipient pools.
+    Mixed,
 }
 
 impl TransferType {
     // Classifies the transfer from the source pool and the displayed outputs.
-    pub fn classify(from_private: bool, outputs: &[TxOutput]) -> Self {
+    pub fn classify(from_public: bool, from_private: bool, outputs: &[TxOutput]) -> Self {
+        let to_public = outputs
+            .iter()
+            .any(|output| !output.is_change && output.pool == TxPool::Transparent);
         let to_private = outputs
             .iter()
             .any(|output| !output.is_change && output.pool == TxPool::Orchard);
+
+        if (from_public && from_private) || (to_public && to_private) {
+            return TransferType::Mixed;
+        }
 
         match (from_private, to_private) {
             (false, false) => TransferType::PublicToPublic,
@@ -137,6 +146,7 @@ impl TransferType {
             TransferType::PublicToPrivate => "Transfer from public to private address",
             TransferType::PrivateToPublic => "Transfer from private to public address",
             TransferType::PrivateToPrivate => "Private transfer",
+            TransferType::Mixed => "Mixed pool transfer",
         }
     }
 }
@@ -221,9 +231,9 @@ pub struct TxContext<'a> {
     pub hashers: Hashers,
 
     pub home: NbglHomeAndSettings,
-    pub parser: Parser,
+    pub legacy_parser: LegacyParser,
     pub pczt_parser: PcztParser,
-    pub output_parser: OutputParser,
+    pub legacy_output_parser: LegacyOutputParser,
     pub vk_response: Option<PendingVkResponse>,
     pub is_vk_display_finished: bool,
     /// Swap parameters if running in swap mode.
@@ -232,11 +242,18 @@ pub struct TxContext<'a> {
 }
 
 impl<'s> TxContext<'s> {
+    // Initializes `TxContext` directly at `ptr` without materializing the whole
+    // context on the stack during a reset.
+    //
+    // # Safety
+    //
+    // `ptr` must be valid for writes, properly aligned, and point to storage
+    // for a `TxContext<'s>`.
     #[inline(never)]
     pub unsafe fn init_in_place(
         ptr: *mut TxContext<'s>,
         swap_params: Option<&'s CreateTxParams>,
-        mode: ParserMode,
+        mode: LegacyParserMode,
     ) {
         unsafe {
             addr_of_mut!((*ptr).is_extra_header_data_set).write(false);
@@ -244,11 +261,11 @@ impl<'s> TxContext<'s> {
             addr_of_mut!((*ptr).tx_signing_state).write(TxSigningState::default());
             addr_of_mut!((*ptr).tx_info).write(TxInfo::default());
             addr_of_mut!((*ptr).trusted_input_info).write(TrustedInputInfo::default());
-            // NOTE: We don't need to init hashers here because they will initialized before first use in parser.
+            addr_of_mut!((*ptr).hashers).write(Hashers::default());
             addr_of_mut!((*ptr).home).write(NbglHomeAndSettings::default());
-            addr_of_mut!((*ptr).parser).write(Parser::new(mode));
+            addr_of_mut!((*ptr).legacy_parser).write(LegacyParser::new(mode));
             addr_of_mut!((*ptr).pczt_parser).write(PcztParser::new());
-            addr_of_mut!((*ptr).output_parser).write(OutputParser::new());
+            addr_of_mut!((*ptr).legacy_output_parser).write(LegacyOutputParser::new());
             addr_of_mut!((*ptr).vk_response).write(None);
             addr_of_mut!((*ptr).is_vk_display_finished).write(false);
             addr_of_mut!((*ptr).swap_params).write(swap_params);
@@ -256,7 +273,7 @@ impl<'s> TxContext<'s> {
     }
 
     #[inline(never)]
-    pub fn reset(&mut self, mode: ParserMode) {
+    pub fn reset(&mut self, mode: LegacyParserMode) {
         // Don't reset home and swap params, they're not part of TX state
         self.is_extra_header_data_set = false;
         self.is_finished = false;
@@ -264,9 +281,9 @@ impl<'s> TxContext<'s> {
         self.tx_info = TxInfo::default();
         self.trusted_input_info = TrustedInputInfo::default();
         self.hashers = Hashers::default();
-        self.parser = Parser::new(mode);
+        self.legacy_parser = LegacyParser::new(mode);
         self.pczt_parser = PcztParser::new();
-        self.output_parser = OutputParser::new();
+        self.legacy_output_parser = LegacyOutputParser::new();
         self.vk_response = None;
         self.is_vk_display_finished = false;
     }

@@ -36,6 +36,14 @@ def test_wrong_p1p2(backend):
         backend.exchange(cla=CLA, ins=InsType.PCZT_SIGN_TRANSPARENT, p1=P1.P1_FIRST, p2=10)
     assert e.value.status == Errors.SW_WRONG_P1P2
 
+
+def test_hash_sign_rejects_legacy_shielded_modes(backend):
+    for mode in (0x02, 0x03):
+        with pytest.raises(ExceptionRAPDU) as e:
+            backend.exchange(cla=CLA, ins=InsType.HASH_SIGN, p1=mode, p2=0x00, data=b"\x00")
+        assert e.value.status == Errors.SW_WRONG_P1P2
+
+
 # Ensure the app returns an error when a bad data length is used
 def test_wrong_data_length(backend):
     # APDUs must be at least 4 bytes: CLA, INS, P1, P2.

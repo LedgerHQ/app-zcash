@@ -70,6 +70,7 @@ pub enum Error {
     InvalidKeyDiscarded,
     InvalidDiversifyHashPoint,
     UnsupportedSinsemillaDomain,
+    OutOfMemory,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

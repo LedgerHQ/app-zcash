@@ -17,80 +17,17 @@
 use ledger_device_sdk::ecc::{Secp256k1, SeedDerive as _};
 use ledger_device_sdk::io::Comm;
 use ledger_device_sdk::log::{debug, error, info};
-use ledger_device_sdk::random::{LedgerRng, rand_bytes};
+use ledger_device_sdk::random::LedgerRng;
 
 use crate::AppSW;
-use crate::consts::{P1HashSignMode, SIGHASH_ALL, UNHARDENED_MASK, ZIP32_PATH_LEN, ZIP32_PURPOSE};
-use crate::parser::orchard_decipher::OrchardDecipherKeys;
+use crate::consts::SIGHASH_ALL;
 use crate::parser::{
-    OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError,
-    compute_shielded_signature_digest,
+    LegacyOutputParserCtx, LegacyParser, LegacyParserCtx, LegacyParserMode, ParserSourceError,
 };
 use crate::tx::TxContext;
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
-use crate::zip32::{
-    derive_orchard_ask, derive_orchard_fvk, map_ledger_crypto_error, orchard_network,
-};
-
-const ORCHARD_BINDING_SIGNING_KEY_LEN: usize = 32;
-const ORCHARD_SPEND_ALPHA_LEN: usize = 32;
-
-fn is_zip32_orchard_path(path: &Bip32Path) -> bool {
-    path.as_slice().len() == ZIP32_PATH_LEN
-        && (path.as_slice()[0] & UNHARDENED_MASK) == ZIP32_PURPOSE
-}
-
-fn map_redpallas_error(err: ledger_zcash_crypto::redpallas::Error) -> AppSW {
-    match err {
-        ledger_zcash_crypto::redpallas::Error::MalformedSigningKey
-        | ledger_zcash_crypto::redpallas::Error::MalformedVerificationKey => AppSW::IncorrectData,
-        _ => map_ledger_crypto_error(ledger_zcash_crypto::Error::from(err)),
-    }
-}
-
-fn parse_orchard_alpha(data: &[u8]) -> Result<[u8; ORCHARD_SPEND_ALPHA_LEN], AppSW> {
-    if data.len() != ORCHARD_SPEND_ALPHA_LEN {
-        error!("Bad orchard alpha length");
-        return Err(AppSW::WrongApduLength);
-    }
-
-    let mut alpha = [0u8; ORCHARD_SPEND_ALPHA_LEN];
-    alpha.copy_from_slice(data);
-
-    ledger_zcash_crypto::pallas_scalar_from_repr(alpha).map_err(|err| match err {
-        ledger_zcash_crypto::Error::MalformedPallasScalar => AppSW::IncorrectData,
-        _ => AppSW::TechnicalProblem,
-    })?;
-
-    Ok(alpha)
-}
-
-fn prepare_spend_auth_signature_digest(ctx: &mut TxContext) -> Result<(), AppSW> {
-    compute_shielded_signature_digest(
-        &mut ctx.tx_info,
-        ctx.tx_signing_state.total_input_count,
-        ctx.output_parser.transparent_output_count(),
-    )
-    .map_err(|e| {
-        error!(
-            "Error preparing spend auth signature digest from transaction data: {:#?}",
-            e
-        );
-        match e.source {
-            ParserSourceError::Hash(_) => AppSW::TechnicalProblem,
-            ParserSourceError::AppSW(sw) => sw,
-            _ => AppSW::IncorrectData,
-        }
-    })?;
-
-    debug!(
-        "Prepared spend auth signature digest: {}",
-        HexSlice(&ctx.tx_info.signature_digest)
-    );
-
-    Ok(())
-}
+use crate::zip32::{derive_orchard_ask, map_ledger_crypto_error};
 
 pub fn handler_hash_input_start(
     comm: &mut Comm,
@@ -100,21 +37,21 @@ pub fn handler_hash_input_start(
 ) -> Result<(), AppSW> {
     if continue_hashing {
         info!("Reset parser");
-        ctx.parser = Parser::new(ParserMode::Signature);
+        ctx.legacy_parser = LegacyParser::new(LegacyParserMode::Signature);
         // Extract transparent output count from output parser on final state
-        ctx.parser
-            .set_transparent_output_count(ctx.output_parser.transparent_output_count());
+        ctx.legacy_parser
+            .set_transparent_output_count(ctx.legacy_output_parser.transparent_output_count());
     } else if first {
         info!("Reset TX context");
-        ctx.reset(ParserMode::Signature);
+        ctx.reset(LegacyParserMode::Signature);
     }
 
     // Try to get data from comm
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
-    ctx.parser
+    ctx.legacy_parser
         .parse(
-            &mut ParserCtx {
+            &mut LegacyParserCtx {
                 tx_state: &mut ctx.tx_signing_state,
                 tx_info: &mut ctx.tx_info,
                 trusted_input_info: &mut ctx.trusted_input_info,
@@ -145,28 +82,13 @@ pub fn handler_hash_input_finalize_full(
     }
 
     // Check processing states
-    if !ctx.parser.is_presign_ready() || ctx.output_parser.is_finished() {
+    if !ctx.legacy_parser.is_presign_ready() || ctx.legacy_output_parser.is_finished() {
         error!("Bad processing state");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
 
     if is_change_info {
         let path: Bip32Path = data.try_into()?;
-
-        if is_zip32_orchard_path(&path) {
-            if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
-                error!("Orchard decipher path not ZIP32 compliant");
-                return Err(AppSW::ConditionsOfUseNotSatisfied);
-            }
-
-            let orchard_fvk = derive_orchard_fvk(&path)?;
-            let network = orchard_network(&path);
-            ctx.tx_info.orchard_decipher_keys =
-                Some(OrchardDecipherKeys::from_fvk(&orchard_fvk, network)?);
-            info!("Orchard decipher keys prepared");
-
-            return Ok(());
-        }
 
         let public_key_with_cc = ExtendedPublicKey::try_from(&path)?;
 
@@ -188,9 +110,9 @@ pub fn handler_hash_input_finalize_full(
         return Ok(());
     }
 
-    ctx.output_parser
+    ctx.legacy_output_parser
         .parse(
-            &mut OutputParserCtx {
+            &mut LegacyOutputParserCtx {
                 tx_info: &mut ctx.tx_info,
                 hashers: &mut ctx.hashers,
                 swap_params: ctx.swap_params,
@@ -224,7 +146,7 @@ pub fn handler_hash_input_finalize_full(
             }
         })?;
 
-    if ctx.output_parser.is_finished() && !ctx.tx_signing_state.is_tx_parsed_once {
+    if ctx.legacy_output_parser.is_finished() && !ctx.tx_signing_state.is_tx_parsed_once {
         info!("Set TX parsed once flag");
         ctx.tx_signing_state.is_tx_parsed_once = true;
     }
@@ -256,11 +178,7 @@ fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
     Ok((locktime, sighash_type, expiry_height))
 }
 
-pub fn handler_hash_sign(
-    comm: &mut Comm,
-    ctx: &mut TxContext,
-    mode: P1HashSignMode,
-) -> Result<(), AppSW> {
+pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
     if data.is_empty() {
@@ -291,18 +209,9 @@ pub fn handler_hash_sign(
         return Ok(());
     }
 
-    if !ctx.parser.is_ready_to_sign() {
+    if !ctx.legacy_parser.is_ready_to_sign() {
         error!("Bad processing state for signing");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
-    }
-
-    if let P1HashSignMode::BindingSig = mode {
-        debug!("Returning orchard binding signature");
-
-        let binding_sig = orchard_binding_signature(data, &ctx.tx_info.signature_digest)?;
-        comm.append(&binding_sig);
-
-        return Ok(());
     }
 
     let path_len = data[0] as usize * 4 + 1; // Path segment 4 bytes + 1 byte length
@@ -318,26 +227,6 @@ pub fn handler_hash_sign(
     if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
         error!("Signing path not compliant");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
-    }
-
-    if let P1HashSignMode::Digest = mode {
-        debug!("Returning signature digest only");
-        comm.append(&ctx.tx_info.signature_digest);
-
-        return Ok(());
-    } else if let P1HashSignMode::SpendAuthSig = mode {
-        debug!("Returning spend auth signature for an orchard action");
-
-        let alpha = parse_orchard_alpha(&data[path_len..])?;
-        debug!("Orchard spend alpha received: {}", HexSlice(&alpha));
-
-        prepare_spend_auth_signature_digest(ctx)?;
-
-        let auth_sig =
-            orchard_spend_auth_signature_with_alpha(&path, &ctx.tx_info.signature_digest, alpha)?;
-        comm.append(&auth_sig);
-
-        return Ok(());
     }
 
     append_signature(
@@ -397,31 +286,6 @@ pub(crate) fn append_signature(
     comm.append(&[sighash_type]);
 
     Ok(())
-}
-
-// Returns a 64-byte Orchard binding signature. The APDU data must be the
-// canonical little-endian binding signing key scalar.
-fn orchard_binding_signature(data: &[u8], sig_hash: &[u8; 32]) -> Result<[u8; 64], AppSW> {
-    if data.len() != ORCHARD_BINDING_SIGNING_KEY_LEN {
-        error!("Invalid binding signing key length: {}", data.len());
-        return Err(AppSW::WrongApduLength);
-    }
-
-    let mut bsk_bytes = [0u8; ORCHARD_BINDING_SIGNING_KEY_LEN];
-    bsk_bytes.copy_from_slice(data);
-
-    let bsk = ledger_zcash_crypto::redpallas::binding_signing_key(bsk_bytes)
-        .map_err(map_redpallas_error)?;
-
-    let mut random_bytes = [0u8; 80];
-    rand_bytes(&mut random_bytes);
-
-    let binding_sig = ledger_zcash_crypto::redpallas::binding_sign(&bsk, &random_bytes, sig_hash)
-        .map_err(map_redpallas_error)?;
-
-    debug!("Orchard binding signature: {}", HexSlice(&binding_sig));
-
-    Ok(binding_sig)
 }
 
 pub(crate) fn orchard_spend_auth_signature_with_alpha(

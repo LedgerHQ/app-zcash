@@ -1,7 +1,7 @@
 use crate::{
     AppSW,
     consts::TRUSTED_INPUT_SIZE,
-    parser::{ParserCtx, ParserMode, ParserSourceError},
+    parser::{LegacyParserCtx, LegacyParserMode, ParserSourceError},
     settings::Settings,
     tx::TxContext,
     utils::{Endianness, HexSlice, read_u32},
@@ -25,7 +25,7 @@ pub fn handler_get_trusted_input(
 
     if first {
         info!("Reset TX context");
-        ctx.reset(ParserMode::TrustedInput);
+        ctx.reset(LegacyParserMode::TrustedInput);
 
         let transaction_trusted_input_idx = read_u32(data, Endianness::Big, false)?;
         data = &data[4..];
@@ -34,9 +34,9 @@ pub fn handler_get_trusted_input(
         info!("Trusted input idx: {}", transaction_trusted_input_idx);
     }
 
-    ctx.parser
+    ctx.legacy_parser
         .parse(
-            &mut ParserCtx {
+            &mut LegacyParserCtx {
                 tx_state: &mut ctx.tx_signing_state,
                 tx_info: &mut ctx.tx_info,
                 trusted_input_info: &mut ctx.trusted_input_info,
@@ -52,7 +52,7 @@ pub fn handler_get_trusted_input(
             }
         })?;
 
-    if ctx.parser.is_finished() {
+    if ctx.legacy_parser.is_finished() {
         if !ctx.trusted_input_info.is_input_processed {
             error!("Trusted input index was not processed");
             return Err(AppSW::IncorrectData);
