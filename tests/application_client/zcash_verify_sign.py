@@ -36,14 +36,12 @@ PALLAS_SCALAR_MODULUS = int(
     "40000000000000000000000000000000224698fc0994a8dd8c46eb2100000001", 16
 )
 PALLAS_B = 5
-# fmt: off
 ORCHARD_BINDINGSIG_BASEPOINT_BYTES = bytes(
     [
         145, 90, 60, 136, 104, 198, 195, 14, 47, 128, 144, 238, 69, 215, 110, 64,
         72, 32, 141, 234, 91, 35, 102, 79, 187, 9, 164, 15, 85, 68, 244, 7,
     ]
 )
-# fmt: on
 
 
 def check_tx_v5_signature_validity(
@@ -67,9 +65,7 @@ def check_tx_v5_signature_validity(
     )
 
     pk = VerifyingKey.from_string(public_key, curve=SECP256k1)
-    return pk.verify_digest(
-        signature=signature, digest=sighash, sigdecode=sigdecode_der
-    )
+    return pk.verify_digest(signature=signature, digest=sighash, sigdecode=sigdecode_der)
 
 
 def check_orchard_binding_signature_validity(
@@ -152,7 +148,9 @@ def _nu5_txid_digests(tx: dict) -> dict[str, bytes]:
     outputs_hash = _blake2b_256(
         ZCASH_OUTPUTS_HASH_PERSONALIZATION,
         b"".join(
-            out["value"] + _write_compactsize(len(out["script"])) + out["script"]
+            out["value"]
+            + _write_compactsize(len(out["script"]))
+            + out["script"]
             for out in outputs
         ),
     )
@@ -208,7 +206,9 @@ def _nu5_signature_digests(
     outputs_hash = _blake2b_256(
         ZCASH_OUTPUTS_HASH_PERSONALIZATION,
         b"".join(
-            out["value"] + _write_compactsize(len(out["script"])) + out["script"]
+            out["value"]
+            + _write_compactsize(len(out["script"]))
+            + out["script"]
             for out in outputs
         ),
     )
@@ -218,9 +218,7 @@ def _nu5_signature_digests(
     )
     scripts_hash = _blake2b_256(
         ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
-        b"".join(
-            _write_compactsize(len(inp["script"])) + inp["script"] for inp in inputs
-        ),
+        b"".join(_write_compactsize(len(inp["script"])) + inp["script"] for inp in inputs),
     )
 
     if input_index is None:
@@ -243,7 +241,10 @@ def _nu5_signature_digests(
         )
 
     if no_transparent_inputs and no_transparent_outputs:
-        transparent_digest = _blake2b_256(ZCASH_TRANSPARENT_HASH_PERSONALIZATION, b"")
+        transparent_digest = _blake2b_256(
+            ZCASH_TRANSPARENT_HASH_PERSONALIZATION,
+            b""
+        )
     elif no_transparent_inputs:
         transparent_digest = _blake2b_256(
             ZCASH_TRANSPARENT_HASH_PERSONALIZATION,
@@ -321,9 +322,7 @@ def _final_digest(
     sapling_digest: bytes,
     orchard_digest: bytes,
 ) -> bytes:
-    personal = ZCASH_TX_PERSONALIZATION_PREFIX + branch_id.to_bytes(
-        4, byteorder="little"
-    )
+    personal = ZCASH_TX_PERSONALIZATION_PREFIX + branch_id.to_bytes(4, byteorder="little")
     return _blake2b_256(
         personal,
         header_digest + transparent_digest + sapling_digest + orchard_digest,
@@ -426,10 +425,7 @@ def _mod_sqrt(value: int) -> int:
         q //= 2
 
     z = 2
-    while (
-        pow(z, (PALLAS_BASE_MODULUS - 1) // 2, PALLAS_BASE_MODULUS)
-        != PALLAS_BASE_MODULUS - 1
-    ):
+    while pow(z, (PALLAS_BASE_MODULUS - 1) // 2, PALLAS_BASE_MODULUS) != PALLAS_BASE_MODULUS - 1:
         z += 1
 
     m = s
@@ -535,11 +531,11 @@ def _write_compactsize(value: int) -> bytes:
     if value < 0xFD:
         return value.to_bytes(1, byteorder="little")
     if value <= 0xFFFF:
-        return b"\xfd" + value.to_bytes(2, byteorder="little")
+        return b"\xFD" + value.to_bytes(2, byteorder="little")
     if value <= 0xFFFFFFFF:
-        return b"\xfe" + value.to_bytes(4, byteorder="little")
+        return b"\xFE" + value.to_bytes(4, byteorder="little")
     if value <= 0xFFFFFFFFFFFFFFFF:
-        return b"\xff" + value.to_bytes(8, byteorder="little")
+        return b"\xFF" + value.to_bytes(8, byteorder="little")
     raise ValueError(f"CompactSize value too large: {value}")
 
 
