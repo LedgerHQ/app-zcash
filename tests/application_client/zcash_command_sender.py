@@ -35,6 +35,7 @@ MAX_APDU_LEN: int = 255
 
 CLA: int = 0xE0
 
+
 class P1(IntEnum):
     # Parameter 1 for first APDU number.
     P1_FIRST = 0x00
@@ -62,11 +63,13 @@ class P1(IntEnum):
     # Parameter 1 for change information for HASH_INPUT_FINALIZE_FULL.
     P1_FINALIZE_FULL_CHANGEINFO = 0xFF
 
+
 class HashSignMode(IntEnum):
     Sign = 0x00
     Digest = 0x01
     SpendAuthSig = 0x02
     BindingSig = 0x03
+
 
 class P2(IntEnum):
     # Parameter 2 default value
@@ -85,6 +88,7 @@ class P2(IntEnum):
     # Parameter 2 for the last PCZT data APDU.
     P2_PCZT_FINISHED = 0x01
 
+
 class InsType(IntEnum):
     GET_VERSION = 0xC4
     GET_APP_NAME = 0x04
@@ -102,13 +106,16 @@ class InsType(IntEnum):
     PCZT_ORCHARD_ACTION = 0x56
     PCZT_SIGN_ORCHARD = 0x57
 
+
 class GetVkMode(IntEnum):
     UFVK = 0x00
     ORCHARD_FVK = 0x01
 
+
 class GetShieldedAddressMode(IntEnum):
     UADDRESS = 0x00
     ORCHARD_RAW_ADDRESS = 0x01
+
 
 class Errors(IntEnum):
     SW_DENY = 0x6985
@@ -125,11 +132,12 @@ class Errors(IntEnum):
     SW_TX_HASH_FAIL = 0xB006
     SW_BAD_STATE = 0xB007
     SW_SIGNATURE_FAIL = 0xB008
-    SW_INVALID_TRANSACTION = 0X6A80
+    SW_INVALID_TRANSACTION = 0x6A80
 
 
 def split_message(message: bytes, max_size: int) -> List[bytes]:
     return [message[x : x + max_size] for x in range(0, len(message), max_size)]
+
 
 @dataclass
 class ForgeTxParams:
@@ -145,6 +153,7 @@ class ForgeTxParams:
 class ApduResponse:
     status: int
     data: bytes
+
 
 class ZcashCommandSender:
     def __init__(self, backend: BackendInterface) -> None:
@@ -194,7 +203,9 @@ class ZcashCommandSender:
             data=pack_derivation_path(path),
         )
 
-    def get_shielded_address(self, path: str, mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS) -> RAPDU:
+    def get_shielded_address(
+        self, path: str, mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS
+    ) -> RAPDU:
         return self.backend.exchange(
             cla=CLA,
             ins=InsType.GET_SHIELDED_ADDRESS,
@@ -281,10 +292,8 @@ class ZcashCommandSender:
             yield response
 
     def get_trusted_input(
-        self, transaction: bytes,
-        trusted_input_idx: int,
-        is_v4_nu6: bool = False
-    )  -> RAPDU:
+        self, transaction: bytes, trusted_input_idx: int, is_v4_nu6: bool = False
+    ) -> RAPDU:
         chunks = split_tx_to_chunks(transaction, is_v4_nu6)
         # convert trusted-input index to 4 bytes big endian
         trusted_idx = pack(">I", trusted_input_idx)
@@ -360,9 +369,9 @@ class ZcashCommandSender:
     ) -> Generator[None, None, None]:
         # pylint: disable=too-many-locals
         # Send outputs chunks
-        outputs: list[dict] = self.tx_chunks["outputs"] # type: ignore
-        shielded_prefix: bytes = self.tx_chunks["shielded_prefix"] # type: ignore
-        shielded_chunks: list[bytes] = self.tx_chunks["shielded_chunks"] # type: ignore
+        outputs: list[dict] = self.tx_chunks["outputs"]  # type: ignore
+        shielded_prefix: bytes = self.tx_chunks["shielded_prefix"]  # type: ignore
+        shielded_chunks: list[bytes] = self.tx_chunks["shielded_chunks"]  # type: ignore
         outputs_num = len(outputs)
         outputs_num_bytes = outputs_num.to_bytes(1, byteorder="big")
         finalize_chunks: list[bytes] = []
@@ -384,7 +393,11 @@ class ZcashCommandSender:
             suffix = shielded_prefix if idx == len(outputs) - 1 else b""
 
             finalize_chunks.append(
-                prefix + value + script_len.to_bytes(1, byteorder="big") + script + suffix
+                prefix
+                + value
+                + script_len.to_bytes(1, byteorder="big")
+                + script
+                + suffix
             )
 
         if not outputs:
@@ -433,7 +446,9 @@ class ZcashCommandSender:
         return b"\x01" + value.to_bytes(4, byteorder="little")
 
     def _compressed_pubkey_from_path(self, path: str) -> bytes:
-        public_key, _ = calculate_public_key_and_chaincode(CurveChoice.Secp256k1, path=path)
+        public_key, _ = calculate_public_key_and_chaincode(
+            CurveChoice.Secp256k1, path=path
+        )
         pubkey = bytes.fromhex(public_key)
 
         if len(pubkey) != 65:
@@ -512,7 +527,11 @@ class ZcashCommandSender:
             sequence = int.from_bytes(inp.sequence, byteorder="little")
             packet.extend(self._pczt_optional_u32(sequence))
             packet.extend(inp.value.to_bytes(8, byteorder="little"))
-            packets.append(self._checked_pczt_packet(bytes(packet), "transparent input small fields"))
+            packets.append(
+                self._checked_pczt_packet(
+                    bytes(packet), "transparent input small fields"
+                )
+            )
 
             packets.extend(
                 self._split_pczt_field_packet(
@@ -613,7 +632,9 @@ class ZcashCommandSender:
                     "orchard action spend small fields",
                 )
             )
-            packets.append(self._build_pczt_zip32_derivation_packet(action.signing_path))
+            packets.append(
+                self._build_pczt_zip32_derivation_packet(action.signing_path)
+            )
             packets.append(
                 self._checked_pczt_packet(
                     action.cmx + action.ephemeral_key,
@@ -650,7 +671,9 @@ class ZcashCommandSender:
         trailer.extend(abs(value_balance).to_bytes(8, byteorder="little"))
         trailer.extend((1 if value_balance < 0 else 0).to_bytes(1, byteorder="little"))
         trailer.extend(orchard_bundle.anchor)
-        packets.append(self._checked_pczt_packet(bytes(trailer), "orchard bundle trailer"))
+        packets.append(
+            self._checked_pczt_packet(bytes(trailer), "orchard bundle trailer")
+        )
 
         return packets
 
@@ -661,7 +684,9 @@ class ZcashCommandSender:
             return P1.P1_LAST
         return P1.P1_NEXT
 
-    def _pczt_chunk_p2(self, idx: int, total_chunks: int, pczt_finished: bool = False) -> P2:
+    def _pczt_chunk_p2(
+        self, idx: int, total_chunks: int, pczt_finished: bool = False
+    ) -> P2:
         if pczt_finished and idx == total_chunks - 1:
             return P2.P2_PCZT_FINISHED
         return P2.P2_NONE
@@ -918,10 +943,14 @@ class ZcashCommandSender:
         if locktime is None or expiry is None:
             return sign_data
 
-        return sign_data + b"\x00" + self._hash_sign_trailer(
-            locktime,
-            expiry,
-            sighash_type,
+        return (
+            sign_data
+            + b"\x00"
+            + self._hash_sign_trailer(
+                locktime,
+                expiry,
+                sighash_type,
+            )
         )
 
     def hash_sign(
@@ -960,26 +989,28 @@ class ZcashCommandSender:
             data=sign_data,
         )
 
-    def forge_and_get_trusted_input(self, trusted_input_idx: int, send_amount: int) -> bytes:
+    def forge_and_get_trusted_input(
+        self, trusted_input_idx: int, send_amount: int
+    ) -> bytes:
         amount_hex = send_amount.to_bytes(8, byteorder="little").hex()
 
         tx = bytes.fromhex(
-            "050000800a27a726b4d0d6c2" + "0000000000000000" + "01" +
-            "7acad6b8eec3158ecee566c0f08ff721d94d44b0cf66ee220ad4f9d1692d2ab5000000006a" +
-            "47304402200d6900cafe4189b9dfebaa965584f39e07cf6086ed5a97c84a5a76035dddcf7302206263c8b7202227e0ab33dd" +
-            "263e04f7a4384d34daa9279bfdebb03bf4b62123590121023e7c3ab4b4a42466f2c72c79afd426a0714fed74f884cd11abb4" +
-            "d76a72fa4a6900000000" +
-            "01" +
-            amount_hex + "1976a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac" +
-            "000000"
+            "050000800a27a726b4d0d6c2"
+            + "0000000000000000"
+            + "01"
+            + "7acad6b8eec3158ecee566c0f08ff721d94d44b0cf66ee220ad4f9d1692d2ab5000000006a"
+            + "47304402200d6900cafe4189b9dfebaa965584f39e07cf6086ed5a97c84a5a76035dddcf7302206263c8b7202227e0ab33dd"
+            + "263e04f7a4384d34daa9279bfdebb03bf4b62123590121023e7c3ab4b4a42466f2c72c79afd426a0714fed74f884cd11abb4"
+            + "d76a72fa4a6900000000"
+            + "01"
+            + amount_hex
+            + "1976a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"
+            + "000000"
         )
 
         return self.get_trusted_input(tx, trusted_input_idx=trusted_input_idx).data
 
-    def forge_tx_v5(
-        self,
-        params: ForgeTxParams
-    ) -> bytes:
+    def forge_tx_v5(self, params: ForgeTxParams) -> bytes:
         # Zcash NU5 header fields
         version = 0x80000005
         version_group_id = 0x26A7270A
@@ -987,10 +1018,16 @@ class ZcashCommandSender:
         locktime = params.locktime
         expiry = params.expiry
 
-        script_pubkey_in = bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
+        script_pubkey_in = bytes.fromhex(
+            "76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"
+        )
         sequence = bytes.fromhex("00000000")
 
-        script_pubkey_out = bytes.fromhex("76a914") + bytes.fromhex(params.recipient_publickey) + bytes.fromhex("88ac")
+        script_pubkey_out = (
+            bytes.fromhex("76a914")
+            + bytes.fromhex(params.recipient_publickey)
+            + bytes.fromhex("88ac")
+        )
 
         tx = b""
         tx += struct.pack("<I", version)
