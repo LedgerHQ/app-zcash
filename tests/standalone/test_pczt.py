@@ -8,12 +8,14 @@ from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
 from application_client.zcash_command_sender import (
     Errors,
+    ZcashCommandSender,
+)
+from application_client.pczt import (
     PcztGlobal,
     PcztOrchardAction,
     PcztOrchardBundle,
     PcztTransparentInput,
     PcztTransparentOutput,
-    ZcashCommandSender,
 )
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
 from application_client.zcash_utils import write_varint
@@ -237,18 +239,26 @@ def test_pczt_sign_tx_v5_simple(
     PCZT_GLOBAL = PcztGlobal()
     PATH = "m/44'/133'/0'/0/2"
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_txid=bytes.fromhex(
+            "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+        ),
         prevout_index=0,
         value=81630485,
-        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        script_pubkey=bytes.fromhex(
+            "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"
+        ),
         sequence=bytes.fromhex("00000000"),
         signing_path="m/44'/133'/0'/0/2",
     )
     TRANSPARENT_OUTPUT = PcztTransparentOutput(
         value=81628565,
-        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+        script_pubkey=bytes.fromhex(
+            "76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"
+        ),
     )
-    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], [TRANSPARENT_OUTPUT])
+    TX_BYTES = _pczt_transaction_bytes(
+        PCZT_GLOBAL, [TRANSPARENT_INPUT], [TRANSPARENT_OUTPUT]
+    )
 
     client = ZcashCommandSender(backend)
 
@@ -281,16 +291,22 @@ def test_pczt_sign_tx_v5_old(
     EXPECTED_SIG = "304402202b22627d88f9ecebf2ab586ffa970232cddad6eabb3289fa1359b2bc9f5554bc02207cfba5db7c01b89c5d540dcb1ada67d485ab1638c2151eaa78b4d368059c007801"
     PCZT_GLOBAL = PcztGlobal()
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_txid=bytes.fromhex(
+            "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+        ),
         prevout_index=0,
         value=81630485,
-        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        script_pubkey=bytes.fromhex(
+            "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"
+        ),
         sequence=bytes.fromhex("00000000"),
         signing_path="m/44'/133'/0'/0/2",
     )
     TRANSPARENT_OUTPUT = PcztTransparentOutput(
         value=81628565,
-        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+        script_pubkey=bytes.fromhex(
+            "76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"
+        ),
     )
 
     client = ZcashCommandSender(backend)
@@ -315,24 +331,34 @@ def test_pczt_sign_tx_v5_change(
     PATH = "m/44'/133'/0'/0/0"
     CHANGE_PATH = "m/44'/133'/0'/1/0"
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_txid=bytes.fromhex(
+            "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+        ),
         prevout_index=0,
         value=81630485,
-        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        script_pubkey=bytes.fromhex(
+            "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"
+        ),
         sequence=bytes.fromhex("00000000"),
         signing_path="m/44'/133'/0'/0/0",
     )
     RECIPIENT_OUTPUT = PcztTransparentOutput(
         value=40000000,
-        script_pubkey=bytes.fromhex("76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"),
+        script_pubkey=bytes.fromhex(
+            "76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"
+        ),
     )
     CHANGE_OUTPUT = PcztTransparentOutput(
         value=41622465,
-        script_pubkey=bytes.fromhex("76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"),
+        script_pubkey=bytes.fromhex(
+            "76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"
+        ),
         signing_path=CHANGE_PATH,
     )
     TRANSPARENT_OUTPUTS = [RECIPIENT_OUTPUT, CHANGE_OUTPUT]
-    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
+    TX_BYTES = _pczt_transaction_bytes(
+        PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS
+    )
 
     client = ZcashCommandSender(backend)
 
@@ -375,10 +401,14 @@ def test_pczt_sign_tx_v5_change_hash_not_sticky(
     PATH = "m/44'/133'/0'/0/0"
     CHANGE_PATH = "m/44'/133'/0'/1/0"
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_txid=bytes.fromhex(
+            "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+        ),
         prevout_index=0,
         value=81630485,
-        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        script_pubkey=bytes.fromhex(
+            "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"
+        ),
         sequence=bytes.fromhex("00000000"),
         signing_path=PATH,
     )
@@ -386,17 +416,23 @@ def test_pczt_sign_tx_v5_change_hash_not_sticky(
     # CHANGE_PATH (which derives address H = adee44a1...e339f5).
     RECIPIENT_WITH_CHANGE_DERIVATION = PcztTransparentOutput(
         value=40000000,
-        script_pubkey=bytes.fromhex("76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"),
+        script_pubkey=bytes.fromhex(
+            "76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"
+        ),
         signing_path=CHANGE_PATH,
     )
     # Output paying the change address H, with NO derivation of its own. Must not inherit
     # the previous output's change classification.
     PAYMENT_TO_CHANGE_ADDRESS = PcztTransparentOutput(
         value=41628565,
-        script_pubkey=bytes.fromhex("76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"),
+        script_pubkey=bytes.fromhex(
+            "76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"
+        ),
     )
     TRANSPARENT_OUTPUTS = [RECIPIENT_WITH_CHANGE_DERIVATION, PAYMENT_TO_CHANGE_ADDRESS]
-    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
+    TX_BYTES = _pczt_transaction_bytes(
+        PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS
+    )
 
     client = ZcashCommandSender(backend)
 
@@ -429,9 +465,13 @@ def test_pczt_rejects_transparent_output_derivation_pubkey_path_mismatch(
 
     OUTPUT = PcztTransparentOutput(
         value=41628565,
-        script_pubkey=bytes.fromhex("76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"),
+        script_pubkey=bytes.fromhex(
+            "76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"
+        ),
         signing_path="m/44'/133'/0'/1/0",
-        bip32_derivation_pubkey=client._compressed_pubkey_from_path("m/44'/133'/0'/0/0"),
+        bip32_derivation_pubkey=client._compressed_pubkey_from_path(
+            "m/44'/133'/0'/0/0"
+        ),
     )
 
     client._send_pczt_header(PcztGlobal())
@@ -450,16 +490,22 @@ def test_pczt_sign_tx_refuse(
 ):
     PCZT_GLOBAL = PcztGlobal()
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_txid=bytes.fromhex(
+            "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+        ),
         prevout_index=0,
         value=81630485,
-        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        script_pubkey=bytes.fromhex(
+            "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"
+        ),
         sequence=bytes.fromhex("00000000"),
         signing_path="m/44'/133'/0'/0/2",
     )
     TRANSPARENT_OUTPUT = PcztTransparentOutput(
         value=81628565,
-        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+        script_pubkey=bytes.fromhex(
+            "76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"
+        ),
     )
 
     client = ZcashCommandSender(backend)
@@ -488,39 +534,57 @@ def test_pczt_sign_tx_v5_mult_inputs(
     PCZT_GLOBAL = PcztGlobal()
     TRANSPARENT_INPUTS = [
         PcztTransparentInput(
-            prevout_txid=bytes.fromhex("9484c71dd0b3690b6b7d018577e253143139e70bc2ed5aafbc34ea88f6a157ab"),
+            prevout_txid=bytes.fromhex(
+                "9484c71dd0b3690b6b7d018577e253143139e70bc2ed5aafbc34ea88f6a157ab"
+            ),
             prevout_index=0,
             value=81624725,
-            script_pubkey=bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"),
+            script_pubkey=bytes.fromhex(
+                "76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"
+            ),
             sequence=bytes.fromhex("00000000"),
             signing_path="m/44'/133'/2'/0/2",
         ),
         PcztTransparentInput(
-            prevout_txid=bytes.fromhex("28ca5b91000f74b9adbb3f467adf1088caf7f334192895e59a540067531d7136"),
+            prevout_txid=bytes.fromhex(
+                "28ca5b91000f74b9adbb3f467adf1088caf7f334192895e59a540067531d7136"
+            ),
             prevout_index=0,
             value=1776650,
-            script_pubkey=bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"),
+            script_pubkey=bytes.fromhex(
+                "76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"
+            ),
             sequence=bytes.fromhex("00000000"),
             signing_path="m/44'/133'/2'/0/2",
         ),
         PcztTransparentInput(
-            prevout_txid=bytes.fromhex("0b2218186261dda6d04db9c41c5aff38a75548ad85170a7ba530a30cec0d1da8"),
+            prevout_txid=bytes.fromhex(
+                "0b2218186261dda6d04db9c41c5aff38a75548ad85170a7ba530a30cec0d1da8"
+            ),
             prevout_index=0,
             value=2988680,
-            script_pubkey=bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"),
+            script_pubkey=bytes.fromhex(
+                "76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"
+            ),
             sequence=bytes.fromhex("00000000"),
             signing_path="m/44'/133'/2'/0/2",
         ),
     ]
     TRANSPARENT_OUTPUT = PcztTransparentOutput(
         value=86385175,
-        script_pubkey=bytes.fromhex("76a9147340a80cad7353cff25bad918e73837c2e2863eb88ac"),
+        script_pubkey=bytes.fromhex(
+            "76a9147340a80cad7353cff25bad918e73837c2e2863eb88ac"
+        ),
     )
-    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, TRANSPARENT_INPUTS, [TRANSPARENT_OUTPUT])
+    TX_BYTES = _pczt_transaction_bytes(
+        PCZT_GLOBAL, TRANSPARENT_INPUTS, [TRANSPARENT_OUTPUT]
+    )
 
     client = ZcashCommandSender(backend)
     public_keys = [
-        unpack_get_public_key_response(client.get_public_key(path=inp.signing_path).data)[0]
+        unpack_get_public_key_response(
+            client.get_public_key(path=inp.signing_path).data
+        )[0]
         for inp in TRANSPARENT_INPUTS
     ]
 
@@ -559,25 +623,35 @@ def test_pczt_sign_tx_v5_transparent_input_no_replay(
     PCZT_GLOBAL = PcztGlobal()
     TRANSPARENT_INPUTS = [
         PcztTransparentInput(
-            prevout_txid=bytes.fromhex("9484c71dd0b3690b6b7d018577e253143139e70bc2ed5aafbc34ea88f6a157ab"),
+            prevout_txid=bytes.fromhex(
+                "9484c71dd0b3690b6b7d018577e253143139e70bc2ed5aafbc34ea88f6a157ab"
+            ),
             prevout_index=0,
             value=81624725,
-            script_pubkey=bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"),
+            script_pubkey=bytes.fromhex(
+                "76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"
+            ),
             sequence=bytes.fromhex("00000000"),
             signing_path="m/44'/133'/2'/0/2",
         ),
         PcztTransparentInput(
-            prevout_txid=bytes.fromhex("28ca5b91000f74b9adbb3f467adf1088caf7f334192895e59a540067531d7136"),
+            prevout_txid=bytes.fromhex(
+                "28ca5b91000f74b9adbb3f467adf1088caf7f334192895e59a540067531d7136"
+            ),
             prevout_index=0,
             value=1776650,
-            script_pubkey=bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"),
+            script_pubkey=bytes.fromhex(
+                "76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"
+            ),
             sequence=bytes.fromhex("00000000"),
             signing_path="m/44'/133'/2'/0/2",
         ),
     ]
     TRANSPARENT_OUTPUT = PcztTransparentOutput(
         value=83399455,
-        script_pubkey=bytes.fromhex("76a9147340a80cad7353cff25bad918e73837c2e2863eb88ac"),
+        script_pubkey=bytes.fromhex(
+            "76a9147340a80cad7353cff25bad918e73837c2e2863eb88ac"
+        ),
     )
 
     client = ZcashCommandSender(backend)
@@ -587,7 +661,9 @@ def test_pczt_sign_tx_v5_transparent_input_no_replay(
         transparent_inputs=TRANSPARENT_INPUTS,
         transparent_outputs=[TRANSPARENT_OUTPUT],
     ):
-        _review_approve(scenario_navigator, "test_sign_tx_v5_transparent_input_no_replay")
+        _review_approve(
+            scenario_navigator, "test_sign_tx_v5_transparent_input_no_replay"
+        )
 
     # First signature for input #0 succeeds.
     first_signature = client.pczt_sign_transparent(input_index=0).data
@@ -608,16 +684,22 @@ def test_pczt_sign_tx_orchard_action_count_limit(
     # signing-records vector (heap-exhaustion guard on a ~24 KB-RAM device).
     PCZT_GLOBAL = PcztGlobal()
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_txid=bytes.fromhex(
+            "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+        ),
         prevout_index=0,
         value=81630485,
-        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        script_pubkey=bytes.fromhex(
+            "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"
+        ),
         sequence=bytes.fromhex("00000000"),
         signing_path="m/44'/133'/0'/0/2",
     )
     TRANSPARENT_OUTPUT = PcztTransparentOutput(
         value=81628565,
-        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+        script_pubkey=bytes.fromhex(
+            "76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"
+        ),
     )
 
     def _dummy_orchard_action() -> PcztOrchardAction:
@@ -750,7 +832,9 @@ def test_pczt_sign_tx_orchard_cv_net_mismatch_rejected(
     orchard_bundle = PcztOrchardBundle(
         actions=[
             PcztOrchardAction(
-                cv_net=bytes.fromhex("39ceba3e81ae3415fb4a519978f4bbc75e5a1d101ce0d6bc91d035f614a9f68b"),
+                cv_net=bytes.fromhex(
+                    "39ceba3e81ae3415fb4a519978f4bbc75e5a1d101ce0d6bc91d035f614a9f68b"
+                ),
                 nullifier=PCZT_ORCHARD_ACCOUNT0_SPEND_NULLIFIER,
                 spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
                 spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
@@ -907,7 +991,9 @@ def test_pczt_sign_tx_orchard_dummy_cmx_mismatch_rejected(
         ],
         flags=3,
         value_balance=300000,
-        anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
+        anchor=bytes.fromhex(
+            "699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"
+        ),
     )
 
     client = ZcashCommandSender(backend)
@@ -963,7 +1049,9 @@ def test_pczt_sign_tx_orchard_dummy_bad_rseed_rejected(
         ],
         flags=3,
         value_balance=300000,
-        anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
+        anchor=bytes.fromhex(
+            "699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"
+        ),
     )
 
     client = ZcashCommandSender(backend)
@@ -1019,7 +1107,9 @@ def test_pczt_sign_tx_orchard_nullifier_mismatch_rejected(
             transparent_outputs=[],
             orchard_bundle=orchard_bundle,
         ):
-            pytest.fail("Device accepted a PCZT Orchard action with mismatched nullifier")
+            pytest.fail(
+                "Device accepted a PCZT Orchard action with mismatched nullifier"
+            )
 
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
@@ -1033,24 +1123,34 @@ def test_pczt_sign_tx_v5_mult_outputs(
     PATH = "m/44'/133'/2'/0/2"
     CHANGE_PATH = "m/44'/133'/2'/1/0"
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("9484c71dd0b3690b6b7d018577e253143139e70bc2ed5aafbc34ea88f6a157ab"),
+        prevout_txid=bytes.fromhex(
+            "9484c71dd0b3690b6b7d018577e253143139e70bc2ed5aafbc34ea88f6a157ab"
+        ),
         prevout_index=0,
         value=81624725,
-        script_pubkey=bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"),
+        script_pubkey=bytes.fromhex(
+            "76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"
+        ),
         sequence=bytes.fromhex("00000000"),
         signing_path="m/44'/133'/2'/0/2",
     )
     RECIPIENT_OUTPUT = PcztTransparentOutput(
         value=40000000,
-        script_pubkey=bytes.fromhex("76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"),
+        script_pubkey=bytes.fromhex(
+            "76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"
+        ),
     )
     CHANGE_OUTPUT = PcztTransparentOutput(
         value=41622465,
-        script_pubkey=bytes.fromhex("76a91456464df31771790b77502f55895a396a64e74da588ac"),
+        script_pubkey=bytes.fromhex(
+            "76a91456464df31771790b77502f55895a396a64e74da588ac"
+        ),
         signing_path=CHANGE_PATH,
     )
     TRANSPARENT_OUTPUTS = [RECIPIENT_OUTPUT, CHANGE_OUTPUT]
-    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
+    TX_BYTES = _pczt_transaction_bytes(
+        PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS
+    )
 
     client = ZcashCommandSender(backend)
 
@@ -1080,12 +1180,18 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    TX_PREVOUT_BYTES = bytes.fromhex("050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000")
+    TX_PREVOUT_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000"
+    )
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"),
+        prevout_txid=bytes.fromhex(
+            "cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"
+        ),
         prevout_index=0,
         value=100000,
-        script_pubkey=bytes.fromhex("76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"),
+        script_pubkey=bytes.fromhex(
+            "76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"
+        ),
         sequence=bytes.fromhex("ffffffff"),
         signing_path="m/44'/133'/0'/0/2",
     )
@@ -1110,10 +1216,14 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
         actions=[_strict_orchard_action(ORCHARD_ACTION)],
         flags=3,
         value_balance=-90000,
-        anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
+        anchor=bytes.fromhex(
+            "ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"
+        ),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("171b6a25fb8b85647d24241c03ebdf3516851bcfa4304eaf0d7f95add52b1322728ef868a593706eb5a3e514adec600dc510532c2e051061ef1db50b19746d2d")
+    EXPECTED_AUTH_SIG = bytes.fromhex(
+        "171b6a25fb8b85647d24241c03ebdf3516851bcfa4304eaf0d7f95add52b1322728ef868a593706eb5a3e514adec600dc510532c2e051061ef1db50b19746d2d"
+    )
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1132,12 +1242,18 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_memo(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    TX_PREVOUT_BYTES = bytes.fromhex("050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000")
+    TX_PREVOUT_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000"
+    )
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"),
+        prevout_txid=bytes.fromhex(
+            "cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"
+        ),
         prevout_index=0,
         value=100000,
-        script_pubkey=bytes.fromhex("76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"),
+        script_pubkey=bytes.fromhex(
+            "76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"
+        ),
         sequence=bytes.fromhex("ffffffff"),
         signing_path="m/44'/133'/0'/0/2",
     )
@@ -1163,10 +1279,14 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_memo(
         actions=[_strict_orchard_action(ORCHARD_ACTION)],
         flags=3,
         value_balance=-90000,
-        anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
+        anchor=bytes.fromhex(
+            "ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"
+        ),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("b025728484071c6ed9c09e97a23441fde3e4237cb91f4657fa2867de27f117a6d4c02862cc37207198305425c277409a5b41d0e61da5fd6a016f5e3bb6815710")
+    EXPECTED_AUTH_SIG = bytes.fromhex(
+        "b025728484071c6ed9c09e97a23441fde3e4237cb91f4657fa2867de27f117a6d4c02862cc37207198305425c277409a5b41d0e61da5fd6a016f5e3bb6815710"
+    )
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1185,12 +1305,18 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    TX_PREVOUT_BYTES = bytes.fromhex("050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000")
+    TX_PREVOUT_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000"
+    )
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"),
+        prevout_txid=bytes.fromhex(
+            "cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"
+        ),
         prevout_index=0,
         value=100000,
-        script_pubkey=bytes.fromhex("76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"),
+        script_pubkey=bytes.fromhex(
+            "76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"
+        ),
         sequence=bytes.fromhex("ffffffff"),
         signing_path="m/44'/133'/0'/0/2",
     )
@@ -1234,10 +1360,14 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
         ],
         flags=3,
         value_balance=-95000,
-        anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
+        anchor=bytes.fromhex(
+            "ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"
+        ),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("8f9ab26095562afef67e8903e7ea30173acdfd1d2bb5853056f6c5275e24de935c6973318b8becf517c6aed42de16954dc0019a2e57dfdf83aa452cad56cd91f")
+    EXPECTED_AUTH_SIG = bytes.fromhex(
+        "8f9ab26095562afef67e8903e7ea30173acdfd1d2bb5853056f6c5275e24de935c6973318b8becf517c6aed42de16954dc0019a2e57dfdf83aa452cad56cd91f"
+    )
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1256,12 +1386,18 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_self_transfer_displays_internal(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    TX_PREVOUT_BYTES = bytes.fromhex("050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000")
+    TX_PREVOUT_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000"
+    )
     TRANSPARENT_INPUT = PcztTransparentInput(
-        prevout_txid=bytes.fromhex("cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"),
+        prevout_txid=bytes.fromhex(
+            "cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"
+        ),
         prevout_index=0,
         value=100000,
-        script_pubkey=bytes.fromhex("76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"),
+        script_pubkey=bytes.fromhex(
+            "76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"
+        ),
         sequence=bytes.fromhex("ffffffff"),
         signing_path="m/44'/133'/0'/0/2",
     )
@@ -1286,10 +1422,14 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_self_transfer_displays_internal(
         actions=[_strict_orchard_action(CHANGE_ORCHARD_ACTION)],
         flags=3,
         value_balance=-5000,
-        anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
+        anchor=bytes.fromhex(
+            "ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"
+        ),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("3f952782bdcebc010a34fb4f5fd0315ca4a8e081a5145d2b93d2824244eb15a63238557b3f270892ab6474f73d8e1384676280f4eb50ab1667e2e60c5cd6aa11")
+    EXPECTED_AUTH_SIG = bytes.fromhex(
+        "3f952782bdcebc010a34fb4f5fd0315ca4a8e081a5145d2b93d2824244eb15a63238557b3f270892ab6474f73d8e1384676280f4eb50ab1667e2e60c5cd6aa11"
+    )
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1311,7 +1451,9 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_simple(
     TRANSPARENT_OUTPUTS = [
         PcztTransparentOutput(
             value=290000,
-            script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+            script_pubkey=bytes.fromhex(
+                "76a914424242424242424242424242424242424242424288ac"
+            ),
         ),
     ]
     ORCHARD_ACTION = {
@@ -1334,10 +1476,14 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_simple(
         actions=[_strict_orchard_action(ORCHARD_ACTION)],
         flags=3,
         value_balance=300000,
-        anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
+        anchor=bytes.fromhex(
+            "699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"
+        ),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("c9c9c463d2e9b29fd40cdf442913115e64bfb2fb52a6873486f191f0062bcd3783304527181d6ed316281d1680ebb4da4dd0822932091ab36676a1440e7f0820")
+    EXPECTED_AUTH_SIG = bytes.fromhex(
+        "c9c9c463d2e9b29fd40cdf442913115e64bfb2fb52a6873486f191f0062bcd3783304527181d6ed316281d1680ebb4da4dd0822932091ab36676a1440e7f0820"
+    )
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1349,6 +1495,7 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_simple(
         ORCHARD_BUNDLE,
     )
 
+
 def test_pczt_sign_tx_v5_orchard_to_transparent_with_change(
     backend,
     scenario_navigator: NavigateWithScenario,
@@ -1356,7 +1503,9 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_change(
     TRANSPARENT_OUTPUTS = [
         PcztTransparentOutput(
             value=290000,
-            script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+            script_pubkey=bytes.fromhex(
+                "76a914424242424242424242424242424242424242424288ac"
+            ),
         ),
     ]
     CHANGE_ORCHARD_ACTION = {
@@ -1379,10 +1528,14 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_change(
         actions=[_strict_orchard_action(CHANGE_ORCHARD_ACTION)],
         flags=3,
         value_balance=295000,
-        anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
+        anchor=bytes.fromhex(
+            "699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"
+        ),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("8d1572632d414bbc6028a263ca52f28aae838c2728f0d6f772e528a4a24193130d34e1c1d949dbc519e5c62345f38d627ff0e6987bb60c8a1920f0b707dd5331")
+    EXPECTED_AUTH_SIG = bytes.fromhex(
+        "8d1572632d414bbc6028a263ca52f28aae838c2728f0d6f772e528a4a24193130d34e1c1d949dbc519e5c62345f38d627ff0e6987bb60c8a1920f0b707dd5331"
+    )
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1394,6 +1547,7 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_change(
         ORCHARD_BUNDLE,
     )
 
+
 def test_pczt_sign_tx_v5_orchard_to_transparent_self_transfer_displays_internal(
     backend,
     scenario_navigator: NavigateWithScenario,
@@ -1401,7 +1555,9 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_self_transfer_displays_internal(
     TRANSPARENT_OUTPUTS = [
         PcztTransparentOutput(
             value=5000,
-            script_pubkey=bytes.fromhex("76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"),
+            script_pubkey=bytes.fromhex(
+                "76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"
+            ),
             signing_path="m/44'/133'/0'/1/0",
         ),
     ]
@@ -1425,10 +1581,14 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_self_transfer_displays_internal(
         actions=[_strict_orchard_action(ORCHARD_ACTION)],
         flags=3,
         value_balance=300000,
-        anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
+        anchor=bytes.fromhex(
+            "699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"
+        ),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("921b4aeb91bbf22745cac4523f5a780c839dd999bb5a4629e232f639d33cec16f07dcb235432a39b694fdfc7783dc8fd3ca3e7eb753773c26483691d6c945c1e")
+    EXPECTED_AUTH_SIG = bytes.fromhex(
+        "921b4aeb91bbf22745cac4523f5a780c839dd999bb5a4629e232f639d33cec16f07dcb235432a39b694fdfc7783dc8fd3ca3e7eb753773c26483691d6c945c1e"
+    )
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1440,6 +1600,7 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_self_transfer_displays_internal(
         ORCHARD_BUNDLE,
     )
 
+
 def test_pczt_sign_tx_v5_orchard_to_transparent_with_transparent_change(
     backend,
     scenario_navigator: NavigateWithScenario,
@@ -1447,11 +1608,15 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_transparent_change(
     TRANSPARENT_OUTPUTS = [
         PcztTransparentOutput(
             value=290000,
-            script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+            script_pubkey=bytes.fromhex(
+                "76a914424242424242424242424242424242424242424288ac"
+            ),
         ),
         PcztTransparentOutput(
             value=5000,
-            script_pubkey=bytes.fromhex("76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"),
+            script_pubkey=bytes.fromhex(
+                "76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"
+            ),
             signing_path="m/44'/133'/0'/1/0",
         ),
     ]
@@ -1475,10 +1640,14 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_transparent_change(
         actions=[_strict_orchard_action(ORCHARD_ACTION)],
         flags=3,
         value_balance=300000,
-        anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
+        anchor=bytes.fromhex(
+            "699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"
+        ),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("082db120e7231c0ae1deef3644b22520efa27830b7af56ba6d98fe53ed52da8f5304969c04047adc11901c33408cc4dff466487aeca5b94fa0f788bc5f956f1c")
+    EXPECTED_AUTH_SIG = bytes.fromhex(
+        "082db120e7231c0ae1deef3644b22520efa27830b7af56ba6d98fe53ed52da8f5304969c04047adc11901c33408cc4dff466487aeca5b94fa0f788bc5f956f1c"
+    )
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1490,6 +1659,7 @@ def test_pczt_sign_tx_v5_orchard_to_transparent_with_transparent_change(
         ORCHARD_BUNDLE,
     )
 
+
 def test_pczt_sign_tx_v5_orchard_to_orchard_unrecoverable_output_rejected(
     backend,
 ):
@@ -1499,16 +1669,28 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_unrecoverable_output_rejected(
     ORCHARD_BUNDLE = PcztOrchardBundle(
         actions=[
             PcztOrchardAction(
-                cv_net=bytes.fromhex("0ce5eae9c123a3373634630e258b5e534b3e7c6148ca5a6c04c61bbfa76663b0"),
-                nullifier=bytes.fromhex("d68cef8d52a164d092d8bd4a616458187f7703ce6ce5ee9ded3fde2df4c56912"),
+                cv_net=bytes.fromhex(
+                    "0ce5eae9c123a3373634630e258b5e534b3e7c6148ca5a6c04c61bbfa76663b0"
+                ),
+                nullifier=bytes.fromhex(
+                    "d68cef8d52a164d092d8bd4a616458187f7703ce6ce5ee9ded3fde2df4c56912"
+                ),
                 spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
                 spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
                 spend_rseed=PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED,
                 rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("9db7163d3fa5a001ba00b42c73589b9791682089f2ef0a14f4ea0d7790cf1e01"),
-                ephemeral_key=bytes.fromhex("b8734861bcf115a70efbcb60f711782e71a8ebc0e5ebc1a7b9f97e1c20f5c22e"),
-                enc_ciphertext=bytes.fromhex("2e90cfc9aea8db3cd1a2ba6f05d5776f98f9f4f88aba54edb4f5726e9b83b48b6c32bba462fedcc4f7169f785bbc88bb1d99a393f9548b9bce5648c802b993a4525fc75d4cbd4765a841bd8ea6ff745db31ec35f53924049b5246dfc34f6f4f2cd222ff54cd895d7d040bc97a2d8546901ea4ff93f7b09c704329cd621c136889b2f76fe2cc0bcbf23683e81ff7b010fc549ac82773a05d5684482fe9d18408b51656cfe4bb7e7807de829f41c43f26c92f9029e737642c3b3ef0c78c44ee29f0412591603774de7d60096d8e3de1f2635858fcd3c4b9da1c48c287c9a1dc82731e4582db0c9320935b5d10d40c76ab1a17126876c8426f3f007c9e5f7e4b3f52fd4457dc12dfdbc9e2929f362c5f31aa1922bb7aa9f3a988e5f2d86c2b45b0762cae8a2788df8f97766347a65b57fbf2e5699d16bd9a534d3efb8b0e7ccf903f366dab7c8b79f1e7e6df4051ec617e73c7c90caf9ddec1933f3db3d0fbce8dd46ac2d5b9c405c517f14b26f7f24800757ca71d7efb7cc59e46723400e5755b7c87618c97d1367218705121cafb95066caf710e1edf4f7eadba33518e950ae6dfec59c276cc76fbace4bf09ba248e831484c5fc87a1565563727f1f17efdd0a3a498747a867c033c013d3989170bcc95c36a94ad0ab0bfa48623dd124009abbad78251eb4e884a6446938240d025ea877416442cba30a78871ed2baf0af149c15306171f88e2dfb7dc4d0b555f0636bee0d97c9a7afd1e40f4a04bd4c39fa1b307717ce1af12ade0598579e9121a61d6195c58c952b18e1a014df59f729b40283438235b"),
-                out_ciphertext=bytes.fromhex("f3795cfffb3ae4fd4c5e28ad5034e2565e4ad326e72458a799cc34f11226fa19ae7b68f1aaf0e1495a6f9b8b41ef2d6b2af71372725172043233b519c1363d0648dda6fc5154a882cc717524d93e7c3c"),
+                cmx=bytes.fromhex(
+                    "9db7163d3fa5a001ba00b42c73589b9791682089f2ef0a14f4ea0d7790cf1e01"
+                ),
+                ephemeral_key=bytes.fromhex(
+                    "b8734861bcf115a70efbcb60f711782e71a8ebc0e5ebc1a7b9f97e1c20f5c22e"
+                ),
+                enc_ciphertext=bytes.fromhex(
+                    "2e90cfc9aea8db3cd1a2ba6f05d5776f98f9f4f88aba54edb4f5726e9b83b48b6c32bba462fedcc4f7169f785bbc88bb1d99a393f9548b9bce5648c802b993a4525fc75d4cbd4765a841bd8ea6ff745db31ec35f53924049b5246dfc34f6f4f2cd222ff54cd895d7d040bc97a2d8546901ea4ff93f7b09c704329cd621c136889b2f76fe2cc0bcbf23683e81ff7b010fc549ac82773a05d5684482fe9d18408b51656cfe4bb7e7807de829f41c43f26c92f9029e737642c3b3ef0c78c44ee29f0412591603774de7d60096d8e3de1f2635858fcd3c4b9da1c48c287c9a1dc82731e4582db0c9320935b5d10d40c76ab1a17126876c8426f3f007c9e5f7e4b3f52fd4457dc12dfdbc9e2929f362c5f31aa1922bb7aa9f3a988e5f2d86c2b45b0762cae8a2788df8f97766347a65b57fbf2e5699d16bd9a534d3efb8b0e7ccf903f366dab7c8b79f1e7e6df4051ec617e73c7c90caf9ddec1933f3db3d0fbce8dd46ac2d5b9c405c517f14b26f7f24800757ca71d7efb7cc59e46723400e5755b7c87618c97d1367218705121cafb95066caf710e1edf4f7eadba33518e950ae6dfec59c276cc76fbace4bf09ba248e831484c5fc87a1565563727f1f17efdd0a3a498747a867c033c013d3989170bcc95c36a94ad0ab0bfa48623dd124009abbad78251eb4e884a6446938240d025ea877416442cba30a78871ed2baf0af149c15306171f88e2dfb7dc4d0b555f0636bee0d97c9a7afd1e40f4a04bd4c39fa1b307717ce1af12ade0598579e9121a61d6195c58c952b18e1a014df59f729b40283438235b"
+                ),
+                out_ciphertext=bytes.fromhex(
+                    "f3795cfffb3ae4fd4c5e28ad5034e2565e4ad326e72458a799cc34f11226fa19ae7b68f1aaf0e1495a6f9b8b41ef2d6b2af71372725172043233b519c1363d0648dda6fc5154a882cc717524d93e7c3c"
+                ),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
                 spend_value=100000,
@@ -1517,16 +1699,28 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_unrecoverable_output_rejected(
                 rcv=bytes(32),
             ),
             PcztOrchardAction(
-                cv_net=bytes.fromhex("1a88eb3f897cda9bf68454c33f627e0150f974f22af9cd961d04ebc9036bc895"),
-                nullifier=bytes.fromhex("fc3ea087e60269ff25114682610a6b0d716f191fbf2acf767d2de63de4b95a00"),
+                cv_net=bytes.fromhex(
+                    "1a88eb3f897cda9bf68454c33f627e0150f974f22af9cd961d04ebc9036bc895"
+                ),
+                nullifier=bytes.fromhex(
+                    "fc3ea087e60269ff25114682610a6b0d716f191fbf2acf767d2de63de4b95a00"
+                ),
                 spend_recipient=PCZT_ORCHARD_ACCOUNT0_SPEND_RECIPIENT,
                 spend_rho=PCZT_ORCHARD_ACCOUNT0_SPEND_RHO,
                 spend_rseed=PCZT_ORCHARD_ACCOUNT0_SPEND_RSEED,
                 rk=PCZT_ORCHARD_RK_ALPHA_1,
-                cmx=bytes.fromhex("e185cf8de2955a4298f602e4bcf508f55a68cc6c79a5379dda08cab1fec7f628"),
-                ephemeral_key=bytes.fromhex("0ddc203d51b8edd935c9445d9c808d2e53585bc1eeaebf5823c9a5e70eb05b12"),
-                enc_ciphertext=bytes.fromhex("b35968123a64513c8bf026ae9e1f8c583c3a7807c785632475c220cb9f02316004c1d6a76906f5de4a4f63dcb8777f68a1a4c6f2be9a0094814e13cf6916da676168a3b924e4c043f1c868069ace284843795f0d83ff10bd763ece39246b5ab27fc67c86ec2f5320415f6489a910a72879a92eb9fa832eed9cb6f71cc24fadf4ed44496f706cf1c21ed78046fce7ad3a01b9b17050e587a7daf6a41ef2134c1bc2c1fe16deaba223e227505c7b0491fa6fbc7baf22017c8726569152dde1b735aed3b786d296825b3cb9c074db032be356ab8151a5f01209e53cdf107c9ad0c1b2152209b77aee5a58759ad670d440602e8852336a53dda64eeef8751243afd4052d564bbda0e69c5f66af4ac2d13740f788bb835de948b34b193e8d2731d7abb1e79de14e088c49b007283857fd6b127c3e7c5c585c616a968fd18895988a572fc02d2e859dd584f9fa1ed872794cf349f543f1a3e3516371fddc2a7f294c5c1dce2f35b1fd6e3ca23f8baebca46c1042def754f639f63073d410e8d46fb22a9cf3e8ed46144f78de1f53b9e773d46b9ce22e7887b7d3adcc791e797248e30ca9b950399f9dfb9a5c6bad17882f74e4c4ab21cc52dd6b1e4e8a81edc96fe06710e17fcaad305d94bb384a8c92858da56539745c23e29b33e0bad34599df32bacf36aa29c7b0446e1b669358c5da0c065c0313bd67dcbfe6a68f5aae445b168f95436874e18be427a78dce3e42f463045fd00197bdbd686adc41802fc558a1de5e195542deb4096374c6fa91ab7c51b798a863fd17f0ada698de32cf5d544d90c09baf32"),
-                out_ciphertext=bytes.fromhex("1b301923172c05ed37d0ce897cd69922ac249175c1e5e0e718ba94390a7fbe9d74dc128f391595899a3553339b9fe083b7e298091fb0c6d8a813b748f92ecd4d0767efb694d6a230181801226d7351b2"),
+                cmx=bytes.fromhex(
+                    "e185cf8de2955a4298f602e4bcf508f55a68cc6c79a5379dda08cab1fec7f628"
+                ),
+                ephemeral_key=bytes.fromhex(
+                    "0ddc203d51b8edd935c9445d9c808d2e53585bc1eeaebf5823c9a5e70eb05b12"
+                ),
+                enc_ciphertext=bytes.fromhex(
+                    "b35968123a64513c8bf026ae9e1f8c583c3a7807c785632475c220cb9f02316004c1d6a76906f5de4a4f63dcb8777f68a1a4c6f2be9a0094814e13cf6916da676168a3b924e4c043f1c868069ace284843795f0d83ff10bd763ece39246b5ab27fc67c86ec2f5320415f6489a910a72879a92eb9fa832eed9cb6f71cc24fadf4ed44496f706cf1c21ed78046fce7ad3a01b9b17050e587a7daf6a41ef2134c1bc2c1fe16deaba223e227505c7b0491fa6fbc7baf22017c8726569152dde1b735aed3b786d296825b3cb9c074db032be356ab8151a5f01209e53cdf107c9ad0c1b2152209b77aee5a58759ad670d440602e8852336a53dda64eeef8751243afd4052d564bbda0e69c5f66af4ac2d13740f788bb835de948b34b193e8d2731d7abb1e79de14e088c49b007283857fd6b127c3e7c5c585c616a968fd18895988a572fc02d2e859dd584f9fa1ed872794cf349f543f1a3e3516371fddc2a7f294c5c1dce2f35b1fd6e3ca23f8baebca46c1042def754f639f63073d410e8d46fb22a9cf3e8ed46144f78de1f53b9e773d46b9ce22e7887b7d3adcc791e797248e30ca9b950399f9dfb9a5c6bad17882f74e4c4ab21cc52dd6b1e4e8a81edc96fe06710e17fcaad305d94bb384a8c92858da56539745c23e29b33e0bad34599df32bacf36aa29c7b0446e1b669358c5da0c065c0313bd67dcbfe6a68f5aae445b168f95436874e18be427a78dce3e42f463045fd00197bdbd686adc41802fc558a1de5e195542deb4096374c6fa91ab7c51b798a863fd17f0ada698de32cf5d544d90c09baf32"
+                ),
+                out_ciphertext=bytes.fromhex(
+                    "1b301923172c05ed37d0ce897cd69922ac249175c1e5e0e718ba94390a7fbe9d74dc128f391595899a3553339b9fe083b7e298091fb0c6d8a813b748f92ecd4d0767efb694d6a230181801226d7351b2"
+                ),
                 alpha=ORCHARD_ALPHA,
                 signing_path=ORCHARD_SIGNING_PATH,
                 spend_value=200000,
@@ -1537,7 +1731,9 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_unrecoverable_output_rejected(
         ],
         flags=3,
         value_balance=20000,
-        anchor=bytes.fromhex("c5e1408579e67cf16b5d19479408fa035a7db4fe3060123d139eba8523bc9633"),
+        anchor=bytes.fromhex(
+            "c5e1408579e67cf16b5d19479408fa035a7db4fe3060123d139eba8523bc9633"
+        ),
     )
     PCZT_GLOBAL = PcztGlobal()
 
@@ -1552,6 +1748,7 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_unrecoverable_output_rejected(
             pass
 
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
 
 def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
     backend,
@@ -1597,10 +1794,14 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
         ],
         flags=3,
         value_balance=10000,
-        anchor=bytes.fromhex("c5e1408579e67cf16b5d19479408fa035a7db4fe3060123d139eba8523bc9633"),
+        anchor=bytes.fromhex(
+            "c5e1408579e67cf16b5d19479408fa035a7db4fe3060123d139eba8523bc9633"
+        ),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("920a50c9903cd33fdd143bb10d4baaaa6d064f0a9db6c4a5f3c6bdabf870ad8831ce35ebb5cf06a6f49dfd3b51b52e1d9b28d2da5b0bfacd5c3fe530fe18880b")
+    EXPECTED_AUTH_SIG = bytes.fromhex(
+        "920a50c9903cd33fdd143bb10d4baaaa6d064f0a9db6c4a5f3c6bdabf870ad8831ce35ebb5cf06a6f49dfd3b51b52e1d9b28d2da5b0bfacd5c3fe530fe18880b"
+    )
 
     _assert_pczt_orchard_sign_digest(
         backend,
