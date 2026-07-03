@@ -1,24 +1,19 @@
 # pylint: disable=too-many-lines
 
+import struct
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import IntEnum
-import struct
-from typing import Callable, Generator, List, Optional, Tuple
-from contextlib import contextmanager
 from struct import pack
 
-from ragger.backend.interface import BackendInterface, RAPDU
+from ragger.backend.interface import RAPDU, BackendInterface
 from ragger.bip import (
     CurveChoice,
     calculate_public_key_and_chaincode,
     pack_derivation_path,
 )
 
-from application_client.zcash_transaction import (
-    split_tx_to_chunks,
-    split_tx_v5_for_hash_input,
-)
-from application_client.zcash_utils import write_varint
 from application_client.pczt import (
     PCZT_DEFAULT_SEED_FINGERPRINT,
     PcztGlobal,
@@ -27,6 +22,11 @@ from application_client.pczt import (
     PcztTransparentOutput,
     pczt_orchard_bundle_from_raw_tx,
 )
+from application_client.zcash_transaction import (
+    split_tx_to_chunks,
+    split_tx_v5_for_hash_input,
+)
+from application_client.zcash_utils import write_varint
 
 MAGIC_TRUSTED_INPUT: int = 0x32
 
@@ -127,7 +127,7 @@ class Errors(IntEnum):
     SW_INVALID_TRANSACTION = 0x6A80
 
 
-def split_message(message: bytes, max_size: int) -> List[bytes]:
+def split_message(message: bytes, max_size: int) -> list[bytes]:
     return [message[x : x + max_size] for x in range(0, len(message), max_size)]
 
 
@@ -154,9 +154,9 @@ class ZcashCommandSender:
         self.trusted_inputs: list[bytes] = []
         self.pczt_transparent_inputs: list[PcztTransparentInput] = []
         self.pczt_transparent_outputs: list[PcztTransparentOutput] = []
-        self.last_response: Optional[ApduResponse | RAPDU] = None
+        self.last_response: ApduResponse | RAPDU | None = None
 
-    def exchange_raw(self, data: str) -> Tuple[int, bytes]:
+    def exchange_raw(self, data: str) -> tuple[int, bytes]:
         data_bytes = bytes.fromhex(data)
         res = self.backend.exchange_raw(data_bytes)
         return res.status, res.data
@@ -177,14 +177,10 @@ class ZcashCommandSender:
         )
 
     def get_version(self) -> RAPDU:
-        return self.backend.exchange(
-            cla=CLA, ins=InsType.GET_VERSION, p1=P1.P1_FIRST, p2=P2.P2_NONE, data=b""
-        )
+        return self.backend.exchange(cla=CLA, ins=InsType.GET_VERSION, p1=P1.P1_FIRST, p2=P2.P2_NONE, data=b"")
 
     def get_app_name(self) -> RAPDU:
-        return self.backend.exchange(
-            cla=CLA, ins=InsType.GET_APP_NAME, p1=P1.P1_FIRST, p2=P2.P2_NONE, data=b""
-        )
+        return self.backend.exchange(cla=CLA, ins=InsType.GET_APP_NAME, p1=P1.P1_FIRST, p2=P2.P2_NONE, data=b"")
 
     def get_public_key(self, path: str) -> RAPDU:
         return self.backend.exchange(
@@ -195,9 +191,7 @@ class ZcashCommandSender:
             data=pack_derivation_path(path),
         )
 
-    def get_shielded_address(
-        self, path: str, mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS
-    ) -> RAPDU:
+    def get_shielded_address(self, path: str, mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS) -> RAPDU:
         return self.backend.exchange(
             cla=CLA,
             ins=InsType.GET_SHIELDED_ADDRESS,
@@ -237,7 +231,7 @@ class ZcashCommandSender:
         path: str,
         navigate: Callable[[], None],
         mode: GetVkMode = GetVkMode.UFVK,
-    ) -> Generator[Optional[ApduResponse | RAPDU], None, None]:
+    ) -> Generator[ApduResponse | RAPDU | None, None, None]:
         self.last_response = None
 
         with self.backend.exchange_async(
@@ -256,9 +250,7 @@ class ZcashCommandSender:
         yield self.last_response
 
     @contextmanager
-    def get_public_key_with_confirmation(
-        self, path: str
-    ) -> Generator[None, None, None]:
+    def get_public_key_with_confirmation(self, path: str) -> Generator[None, None, None]:
         with self.backend.exchange_async(
             cla=CLA,
             ins=InsType.GET_WALLET_PUBLIC_KEY,
@@ -283,9 +275,7 @@ class ZcashCommandSender:
         ) as response:
             yield response
 
-    def get_trusted_input(
-        self, transaction: bytes, trusted_input_idx: int, is_v4_nu6: bool = False
-    ) -> RAPDU:
+    def get_trusted_input(self, transaction: bytes, trusted_input_idx: int, is_v4_nu6: bool = False) -> RAPDU:
         chunks = split_tx_to_chunks(transaction, is_v4_nu6)
         # convert trusted-input index to 4 bytes big endian
         trusted_idx = pack(">I", trusted_input_idx)
@@ -295,9 +285,7 @@ class ZcashCommandSender:
         p1 = P1.P1_FIRST
 
         for c in chunks[:-1]:
-            self.backend.exchange(
-                cla=CLA, ins=InsType.GET_TRUSTED_INPUT, p1=p1, p2=P2.P2_NONE, data=c
-            )
+            self.backend.exchange(cla=CLA, ins=InsType.GET_TRUSTED_INPUT, p1=p1, p2=P2.P2_NONE, data=c)
             p1 = P1.P1_NEXT
 
         return self.backend.exchange(
@@ -318,11 +306,7 @@ class ZcashCommandSender:
             cla=CLA,
             ins=InsType.HASH_INPUT_START,
             p1=P1.P1_FIRST,
-            p2=(
-                P2.P2_HASH_INPUT_START_CONTINUE
-                if continue_hashing
-                else P2.P2_HASH_INPUT_START_SAPLING
-            ),
+            p2=(P2.P2_HASH_INPUT_START_CONTINUE if continue_hashing else P2.P2_HASH_INPUT_START_SAPLING),
             data=header + inputs_num.to_bytes(1, byteorder="big"),
         )
 
@@ -383,10 +367,7 @@ class ZcashCommandSender:
                 ins=InsType.HASH_INPUT_FINALIZE_FULL,
                 p1=P1.P1_FINALIZE_FULL_MORE,
                 p2=P2.P2_FINALIZE_FULL_DEFAULT,
-                data=outputs_num_bytes
-                + value
-                + script_len.to_bytes(1, byteorder="big")
-                + script,
+                data=outputs_num_bytes + value + script_len.to_bytes(1, byteorder="big") + script,
             )
 
             outputs_num_bytes = b""
@@ -400,10 +381,7 @@ class ZcashCommandSender:
             ins=InsType.HASH_INPUT_FINALIZE_FULL,
             p1=P1.P1_FINALIZE_FULL_MORE,
             p2=P2.P2_FINALIZE_FULL_DEFAULT,
-            data=outputs_num_bytes
-            + value
-            + script_len.to_bytes(1, byteorder="big")
-            + script,
+            data=outputs_num_bytes + value + script_len.to_bytes(1, byteorder="big") + script,
         ) as response:
             yield response
 
@@ -430,9 +408,7 @@ class ZcashCommandSender:
         return b"\x01" + value.to_bytes(4, byteorder="little")
 
     def _compressed_pubkey_from_path(self, path: str) -> bytes:
-        public_key, _ = calculate_public_key_and_chaincode(
-            CurveChoice.Secp256k1, path=path
-        )
+        public_key, _ = calculate_public_key_and_chaincode(CurveChoice.Secp256k1, path=path)
         pubkey = bytes.fromhex(public_key)
 
         if len(pubkey) != 65:
@@ -511,22 +487,13 @@ class ZcashCommandSender:
             sequence = int.from_bytes(inp.sequence, byteorder="little")
             packet.extend(self._pczt_optional_u32(sequence))
             packet.extend(inp.value.to_bytes(8, byteorder="little"))
-            packets.append(
-                self._checked_pczt_packet(
-                    bytes(packet), "transparent input small fields"
-                )
-            )
+            packets.append(self._checked_pczt_packet(bytes(packet), "transparent input small fields"))
 
-            packets.extend(
-                self._split_pczt_field_packet(
-                    write_varint(len(inp.script_pubkey)) + inp.script_pubkey
-                )
-            )
+            packets.extend(self._split_pczt_field_packet(write_varint(len(inp.script_pubkey)) + inp.script_pubkey))
 
             packets.append(
                 self._checked_pczt_packet(
-                    inp.sighash_type.to_bytes(1, byteorder="little")
-                    + self._build_pczt_bip32_derivation_packet(inp.signing_path),
+                    inp.sighash_type.to_bytes(1, byteorder="little") + self._build_pczt_bip32_derivation_packet(inp.signing_path),
                     "transparent input sighash and bip32_derivation",
                 )
             )
@@ -551,11 +518,7 @@ class ZcashCommandSender:
                     "transparent output value",
                 )
             )
-            packets.extend(
-                self._split_pczt_field_packet(
-                    write_varint(len(out.script_pubkey)) + out.script_pubkey
-                )
-            )
+            packets.extend(self._split_pczt_field_packet(write_varint(len(out.script_pubkey)) + out.script_pubkey))
             packets.append(
                 self._build_pczt_bip32_derivation_packet(
                     out.signing_path,
@@ -616,30 +579,16 @@ class ZcashCommandSender:
                     "orchard action spend small fields",
                 )
             )
-            packets.append(
-                self._build_pczt_zip32_derivation_packet(action.signing_path)
-            )
+            packets.append(self._build_pczt_zip32_derivation_packet(action.signing_path))
             packets.append(
                 self._checked_pczt_packet(
                     action.cmx + action.ephemeral_key,
                     "orchard action output small fields",
                 )
             )
-            packets.extend(
-                self._split_pczt_field_packet(
-                    write_varint(len(action.enc_ciphertext)) + action.enc_ciphertext
-                )
-            )
-            packets.extend(
-                self._split_pczt_field_packet(
-                    write_varint(len(action.out_ciphertext)) + action.out_ciphertext
-                )
-            )
-            output_metadata = (
-                action.recipient
-                + action.value.to_bytes(8, byteorder="little")
-                + action.rseed
-            )
+            packets.extend(self._split_pczt_field_packet(write_varint(len(action.enc_ciphertext)) + action.enc_ciphertext))
+            packets.extend(self._split_pczt_field_packet(write_varint(len(action.out_ciphertext)) + action.out_ciphertext))
+            output_metadata = action.recipient + action.value.to_bytes(8, byteorder="little") + action.rseed
             if include_rcv:
                 output_metadata += action.rcv
             packets.append(
@@ -655,9 +604,7 @@ class ZcashCommandSender:
         trailer.extend(abs(value_balance).to_bytes(8, byteorder="little"))
         trailer.extend((1 if value_balance < 0 else 0).to_bytes(1, byteorder="little"))
         trailer.extend(orchard_bundle.anchor)
-        packets.append(
-            self._checked_pczt_packet(bytes(trailer), "orchard bundle trailer")
-        )
+        packets.append(self._checked_pczt_packet(bytes(trailer), "orchard bundle trailer"))
 
         return packets
 
@@ -668,9 +615,7 @@ class ZcashCommandSender:
             return P1.P1_LAST
         return P1.P1_NEXT
 
-    def _pczt_chunk_p2(
-        self, idx: int, total_chunks: int, pczt_finished: bool = False
-    ) -> P2:
+    def _pczt_chunk_p2(self, idx: int, total_chunks: int, pczt_finished: bool = False) -> P2:
         if pczt_finished and idx == total_chunks - 1:
             return P2.P2_PCZT_FINISHED
         return P2.P2_NONE
@@ -851,9 +796,7 @@ class ZcashCommandSender:
         ) as response:
             yield response
 
-    def hash_sign(
-        self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01
-    ) -> RAPDU:
+    def hash_sign(self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01) -> RAPDU:
         # Send extra header data
         self.backend.exchange(
             cla=CLA,
@@ -880,9 +823,7 @@ class ZcashCommandSender:
             + expiry.to_bytes(4, byteorder="big"),
         )
 
-    def forge_and_get_trusted_input(
-        self, trusted_input_idx: int, send_amount: int
-    ) -> bytes:
+    def forge_and_get_trusted_input(self, trusted_input_idx: int, send_amount: int) -> bytes:
         amount_hex = send_amount.to_bytes(8, byteorder="little").hex()
 
         tx = bytes.fromhex(
@@ -909,16 +850,10 @@ class ZcashCommandSender:
         locktime = params.locktime
         expiry = params.expiry
 
-        script_pubkey_in = bytes.fromhex(
-            "76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"
-        )
+        script_pubkey_in = bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
         sequence = bytes.fromhex("00000000")
 
-        script_pubkey_out = (
-            bytes.fromhex("76a914")
-            + bytes.fromhex(params.recipient_publickey)
-            + bytes.fromhex("88ac")
-        )
+        script_pubkey_out = bytes.fromhex("76a914") + bytes.fromhex(params.recipient_publickey) + bytes.fromhex("88ac")
 
         tx = b""
         tx += struct.pack("<I", version)
@@ -945,5 +880,5 @@ class ZcashCommandSender:
 
         return tx
 
-    def get_async_response(self) -> Optional[ApduResponse | RAPDU]:
+    def get_async_response(self) -> ApduResponse | RAPDU | None:
         return self.last_response or self.backend.last_async_response

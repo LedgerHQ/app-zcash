@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import tomli
 from application_client.zcash_command_sender import ZcashCommandSender
 from application_client.zcash_response_unpacker import unpack_get_version_response
