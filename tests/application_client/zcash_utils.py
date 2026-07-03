@@ -1,6 +1,6 @@
 import hashlib
 from io import BytesIO
-from typing import Optional, Literal
+from typing import Literal
 
 import base58  # type: ignore[import-not-found]
 
@@ -45,7 +45,7 @@ def write_varint(n: int) -> bytes:
     raise ValueError(f"Can't write to varint: '{n}'!")
 
 
-def read_varint(buf: BytesIO, prefix: Optional[bytes] = None) -> int:
+def read_varint(buf: BytesIO, prefix: bytes | None = None) -> int:
     b: bytes = prefix if prefix else buf.read(1)
 
     if not b:
@@ -70,9 +70,7 @@ def read(buf: BytesIO, size: int) -> bytes:
     return b
 
 
-def read_uint(
-    buf: BytesIO, bit_len: int, byteorder: Literal["big", "little"] = "little"
-) -> int:
+def read_uint(buf: BytesIO, bit_len: int, byteorder: Literal["big", "little"] = "little") -> int:
     size: int = bit_len // 8
     b: bytes = buf.read(size)
 

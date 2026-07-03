@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 from struct import pack
+
 from .zcash_utils import UINT64_MAX, read_compactsize, write_varint
 
 
@@ -69,8 +70,8 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
     # pylint: disable=R0914 disable=R0915 disable=R0912
 
     i = 0
-    locktime = bytes()
-    expiry = bytes()
+    locktime = b""
+    expiry = b""
     chunks = []
 
     header_v5_size = 4 * 5
@@ -162,9 +163,7 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
         # Orchard actions: compact part
         for _ in range(orch):
             compact_start = i
-            i += (
-                32 + 32 + 32 + 52
-            )  # nullifier + cmx + ephemeral_key + enc_ciphertext[..52]
+            i += 32 + 32 + 32 + 52  # nullifier + cmx + ephemeral_key + enc_ciphertext[..52]
             chunks.append(buf[compact_start:i])
 
         # Orchard memos (512 bytes per action), split into 128-byte chunks
@@ -327,9 +326,7 @@ def _extract_raw_tx_v5_outputs(buf: bytes) -> list[dict[str, bytes]]:
     return outputs
 
 
-def convert_raw_tx_v5_orchard_to_app_format(
-    buf: bytes, prevout_txs: bytes | list[bytes]
-) -> bytes:
+def convert_raw_tx_v5_orchard_to_app_format(buf: bytes, prevout_txs: bytes | list[bytes]) -> bytes:
     """Convert a raw NU5 Orchard transaction into the app parser's digest-oriented layout."""
     # pylint: disable=too-many-locals,R0915
     prevout_tx_list = [prevout_txs] if isinstance(prevout_txs, bytes) else prevout_txs
@@ -377,12 +374,8 @@ def convert_raw_tx_v5_orchard_to_app_format(
     sapling_outputs, i = read_compactsize(buf, i)
     orchard_actions, i = read_compactsize(buf, i)
 
-    assert sapling_spends == 0, (
-        "Raw Sapling spends are not supported in this converter!"
-    )
-    assert sapling_outputs == 0, (
-        "Raw Sapling outputs are not supported in this converter!"
-    )
+    assert sapling_spends == 0, "Raw Sapling spends are not supported in this converter!"
+    assert sapling_outputs == 0, "Raw Sapling outputs are not supported in this converter!"
 
     tx.extend(write_varint(sapling_spends))
     tx.extend(write_varint(sapling_outputs))

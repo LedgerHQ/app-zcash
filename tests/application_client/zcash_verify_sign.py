@@ -1,10 +1,11 @@
 import hashlib
 from io import BytesIO
 
-from application_client.zcash_utils import read_varint
 from ecdsa.curves import SECP256k1
 from ecdsa.keys import VerifyingKey
 from ecdsa.util import sigdecode_der
+
+from application_client.zcash_utils import read_varint
 
 # pylint: disable=R0914, R0917
 
@@ -29,12 +30,8 @@ ORCHARD_ACTION_NONCOMPACT_SIZE = 32 + 32 + 16 + 80
 ORCHARD_MEMO_SIZE = 512
 ORCHARD_DIGEST_DATA_SIZE = 1 + 8 + 32
 
-PALLAS_BASE_MODULUS = int(
-    "40000000000000000000000000000000224698fc094cf91b992d30ed00000001", 16
-)
-PALLAS_SCALAR_MODULUS = int(
-    "40000000000000000000000000000000224698fc0994a8dd8c46eb2100000001", 16
-)
+PALLAS_BASE_MODULUS = int("40000000000000000000000000000000224698fc094cf91b992d30ed00000001", 16)
+PALLAS_SCALAR_MODULUS = int("40000000000000000000000000000000224698fc0994a8dd8c46eb2100000001", 16)
 PALLAS_B = 5
 ORCHARD_BINDINGSIG_BASEPOINT_BYTES = bytes(
     [
@@ -95,9 +92,7 @@ def check_tx_v5_signature_validity(
     )
 
     pk = VerifyingKey.from_string(public_key, curve=SECP256k1)
-    return pk.verify_digest(
-        signature=signature, digest=sighash, sigdecode=sigdecode_der
-    )
+    return pk.verify_digest(signature=signature, digest=sighash, sigdecode=sigdecode_der)
 
 
 def check_orchard_binding_signature_validity(
@@ -179,10 +174,7 @@ def _nu5_txid_digests(tx: dict) -> dict[str, bytes]:
     )
     outputs_hash = _blake2b_256(
         ZCASH_OUTPUTS_HASH_PERSONALIZATION,
-        b"".join(
-            out["value"] + _write_compactsize(len(out["script"])) + out["script"]
-            for out in outputs
-        ),
+        b"".join(out["value"] + _write_compactsize(len(out["script"])) + out["script"] for out in outputs),
     )
 
     header_digest = _header_digest(tx)
@@ -235,10 +227,7 @@ def _nu5_signature_digests(
     )
     outputs_hash = _blake2b_256(
         ZCASH_OUTPUTS_HASH_PERSONALIZATION,
-        b"".join(
-            out["value"] + _write_compactsize(len(out["script"])) + out["script"]
-            for out in outputs
-        ),
+        b"".join(out["value"] + _write_compactsize(len(out["script"])) + out["script"] for out in outputs),
     )
     amounts_hash = _blake2b_256(
         ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION,
@@ -246,9 +235,7 @@ def _nu5_signature_digests(
     )
     scripts_hash = _blake2b_256(
         ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
-        b"".join(
-            _write_compactsize(len(inp["script"])) + inp["script"] for inp in inputs
-        ),
+        b"".join(_write_compactsize(len(inp["script"])) + inp["script"] for inp in inputs),
     )
 
     if input_index is None:
@@ -349,9 +336,7 @@ def _final_digest(
     sapling_digest: bytes,
     orchard_digest: bytes,
 ) -> bytes:
-    personal = ZCASH_TX_PERSONALIZATION_PREFIX + branch_id.to_bytes(
-        4, byteorder="little"
-    )
+    personal = ZCASH_TX_PERSONALIZATION_PREFIX + branch_id.to_bytes(4, byteorder="little")
     return _blake2b_256(
         personal,
         header_digest + transparent_digest + sapling_digest + orchard_digest,
@@ -454,10 +439,7 @@ def _mod_sqrt(value: int) -> int:
         q //= 2
 
     z = 2
-    while (
-        pow(z, (PALLAS_BASE_MODULUS - 1) // 2, PALLAS_BASE_MODULUS)
-        != PALLAS_BASE_MODULUS - 1
-    ):
+    while pow(z, (PALLAS_BASE_MODULUS - 1) // 2, PALLAS_BASE_MODULUS) != PALLAS_BASE_MODULUS - 1:
         z += 1
 
     m = s

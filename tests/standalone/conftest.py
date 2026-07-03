@@ -1,5 +1,5 @@
-from ragger.conftest import configuration
 import pytest
+from ragger.conftest import configuration
 
 ###########################
 ### CONFIGURATION START ###
