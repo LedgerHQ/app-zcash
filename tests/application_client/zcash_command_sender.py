@@ -115,6 +115,7 @@ class Errors(IntEnum):
     SW_INS_NOT_SUPPORTED = 0x6D00
     SW_CLA_NOT_SUPPORTED = 0x6E00
     SW_WRONG_APDU_LENGTH = 0x6E03
+    SW_APP_WRONG_APDU_LENGTH = 0x6700
     SW_WRONG_RESPONSE_LENGTH = 0xB000
     SW_DISPLAY_BIP32_PATH_FAIL = 0xB001
     SW_DISPLAY_ADDRESS_FAIL = 0xB002
@@ -191,13 +192,25 @@ class ZcashCommandSender:
             data=pack_derivation_path(path),
         )
 
-    def get_shielded_address(self, path: str, mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS) -> RAPDU:
+    @staticmethod
+    def _pack_derivation_paths(path: str, transparent_path: str | None = None) -> bytes:
+        data = pack_derivation_path(path)
+        if transparent_path is not None:
+            data += pack_derivation_path(transparent_path)
+        return data
+
+    def get_shielded_address(
+        self,
+        path: str,
+        mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS,
+        transparent_path: str | None = None,
+    ) -> RAPDU:
         return self.backend.exchange(
             cla=CLA,
             ins=InsType.GET_SHIELDED_ADDRESS,
             p1=P1.P1_FIRST,
             p2=mode,
-            data=pack_derivation_path(path),
+            data=self._pack_derivation_paths(path, transparent_path),
         )
 
     def _collect_ufvk_response(
@@ -231,6 +244,7 @@ class ZcashCommandSender:
         path: str,
         navigate: Callable[[], None],
         mode: GetVkMode = GetVkMode.UFVK,
+        transparent_path: str | None = None,
     ) -> Generator[ApduResponse | RAPDU | None, None, None]:
         self.last_response = None
 
@@ -239,7 +253,7 @@ class ZcashCommandSender:
             ins=InsType.GET_VK,
             p1=P1.P1_GET_VK_FIRST,
             p2=mode,
-            data=pack_derivation_path(path),
+            data=self._pack_derivation_paths(path, transparent_path),
         ):
             navigate()
 
@@ -265,13 +279,14 @@ class ZcashCommandSender:
         self,
         path: str,
         mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS,
+        transparent_path: str | None = None,
     ) -> Generator[None, None, None]:
         with self.backend.exchange_async(
             cla=CLA,
             ins=InsType.GET_SHIELDED_ADDRESS,
             p1=P1.P1_GET_PUBLIC_KEY_DISPLAY,
             p2=mode,
-            data=pack_derivation_path(path),
+            data=self._pack_derivation_paths(path, transparent_path),
         ) as response:
             yield response
 

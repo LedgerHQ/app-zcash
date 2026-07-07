@@ -140,13 +140,16 @@ def _pczt_transaction_bytes(
     return bytes(tx)
 
 
-def _sign_remaining_orchard_actions(
+def _sign_all_orchard_actions(
     client: ZcashCommandSender,
     orchard_bundle: PcztOrchardBundle,
-) -> None:
-    for action_index in range(1, len(orchard_bundle.actions)):
+) -> list[bytes]:
+    auth_sigs = []
+    for action_index in range(len(orchard_bundle.actions)):
         auth_sig = client.pczt_sign_orchard(action_index=action_index).data
         assert len(auth_sig) == 64
+        auth_sigs.append(auth_sig)
+    return auth_sigs
 
 
 def _assert_pczt_orchard_sign_digest(
@@ -154,7 +157,7 @@ def _assert_pczt_orchard_sign_digest(
     scenario_navigator: NavigateWithScenario,
     snapshot_test_name: str,
     pczt_global: PcztGlobal,
-    expected_auth_sig: bytes,
+    expected_auth_sigs: bytes | list[bytes],
     transparent_outputs: list[PcztTransparentOutput],
     orchard_bundle: PcztOrchardBundle,
     transparent_input: PcztTransparentInput | None = None,
@@ -162,9 +165,18 @@ def _assert_pczt_orchard_sign_digest(
 ) -> None:
     client = ZcashCommandSender(backend)
     transparent_inputs = [] if transparent_input is None else [transparent_input]
+    input_amounts = [txin.value for txin in transparent_inputs]
+    expected_auth_sigs = (
+        [expected_auth_sigs] if isinstance(expected_auth_sigs, bytes) else expected_auth_sigs
+    )
     if prevout_tx is not None:
         # Temporary RNG alignment with the legacy HASH_SIGN flow.
         _ = client.get_trusted_input(prevout_tx, 0).data
+    transparent_public_keys = []
+    for txin in transparent_inputs:
+        response = client.get_public_key(path=txin.signing_path).data
+        public_key, _, _ = unpack_get_public_key_response(response)
+        transparent_public_keys.append(public_key)
 
     with client.send_pczt(
         pczt_global=pczt_global,
@@ -174,35 +186,32 @@ def _assert_pczt_orchard_sign_digest(
     ):
         _review_approve(scenario_navigator, snapshot_test_name)
 
-    if transparent_input is None or prevout_tx is not None:
-        auth_sig = client.pczt_sign_orchard(action_index=0).data
-        assert auth_sig == expected_auth_sig, auth_sig.hex()
-        _sign_remaining_orchard_actions(client, orchard_bundle)
-        if transparent_input is None:
-            return
-        transparent_sig = client.pczt_sign_transparent(input_index=0).data
-    else:
-        transparent_sig = client.pczt_sign_transparent(input_index=0).data
-        auth_sig = client.pczt_sign_orchard(action_index=0).data
-        assert auth_sig == expected_auth_sig, auth_sig.hex()
-        _sign_remaining_orchard_actions(client, orchard_bundle)
-
-    response = client.get_public_key(path=transparent_input.signing_path).data
-    public_key, _, _ = unpack_get_public_key_response(response)
     tx_bytes = _pczt_transaction_bytes(
         pczt_global,
-        [transparent_input],
+        transparent_inputs,
         transparent_outputs,
         orchard_bundle,
     )
+    transparent_sigs = [
+        client.pczt_sign_transparent(input_index=input_index).data
+        for input_index, _ in enumerate(transparent_inputs)
+    ]
+    auth_sigs = _sign_all_orchard_actions(client, orchard_bundle)
 
-    assert check_tx_v5_signature_validity(
-        public_key,
-        transparent_sig[:-1],
-        tx_bytes,
-        input_index=0,
-        input_amounts=[transparent_input.value],
-    )
+    assert [sig.hex() for sig in auth_sigs] == [
+        sig.hex() for sig in expected_auth_sigs
+    ], [sig.hex() for sig in auth_sigs]
+
+    for input_index, (txin, transparent_sig) in enumerate(
+        zip(transparent_inputs, transparent_sigs)
+    ):
+        assert check_tx_v5_signature_validity(
+            transparent_public_keys[input_index],
+            transparent_sig[:-1],
+            tx_bytes,
+            input_index=input_index,
+            input_amounts=input_amounts,
+        )
 
 
 def test_pczt_rejects_wrong_coin_type(
@@ -1074,9 +1083,7 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex(
-        "171b6a25fb8b85647d24241c03ebdf3516851bcfa4304eaf0d7f95add52b1322728ef868a593706eb5a3e514adec600dc510532c2e051061ef1db50b19746d2d"
-    )
+    EXPECTED_AUTH_SIG = bytes.fromhex("0e38d98b744da4e7eb6d22d7b983eb6e44c770f957ab9b8764b2c530f69cbaba389c2a3fffbb6f63a208ad1c74fce78c978371759aae2bbdcb2c9b26a6a09e29")
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1131,9 +1138,7 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_memo(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex(
-        "b025728484071c6ed9c09e97a23441fde3e4237cb91f4657fa2867de27f117a6d4c02862cc37207198305425c277409a5b41d0e61da5fd6a016f5e3bb6815710"
-    )
+    EXPECTED_AUTH_SIG = bytes.fromhex("57093ab792c148469efb524cd831d78bd10c0b521c258c79dd57f8b6db87fd0f4137669b31f8918364598cea985dd4b9cbe88e704a77eb23aa69821924195708")
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1206,9 +1211,10 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex(
-        "8f9ab26095562afef67e8903e7ea30173acdfd1d2bb5853056f6c5275e24de935c6973318b8becf517c6aed42de16954dc0019a2e57dfdf83aa452cad56cd91f"
-    )
+    EXPECTED_AUTH_SIG = [
+        bytes.fromhex("13da39bb4da9bd165c34cfcaf5da58871ad44af34f525e5c046abf113d42343b635f12a78bf1e7acbe69472c80865baeee36a5d1f064d5795425add4312d6826"),
+        bytes.fromhex("265af45c8582ec76713ee193c782c0afccc059561311d5589b07dd795102bd854ceb59d47ba21b53e9a1244559a1e31a4af9928e048db7122e38cd09e39cfe05"),
+    ]
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1262,9 +1268,7 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_self_transfer_displays_internal(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex(
-        "3f952782bdcebc010a34fb4f5fd0315ca4a8e081a5145d2b93d2824244eb15a63238557b3f270892ab6474f73d8e1384676280f4eb50ab1667e2e60c5cd6aa11"
-    )
+    EXPECTED_AUTH_SIG = bytes.fromhex("96b54456684a5fbcd1b36bdddc5d8a00a83d7ad085899136004b483ef34b54035e91e3bd47fa70ba47c0bb75216bfd8c241e168b6ea02028cc462cfe9e56c12c")
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1596,9 +1600,10 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
         anchor=bytes.fromhex("c5e1408579e67cf16b5d19479408fa035a7db4fe3060123d139eba8523bc9633"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex(
-        "920a50c9903cd33fdd143bb10d4baaaa6d064f0a9db6c4a5f3c6bdabf870ad8831ce35ebb5cf06a6f49dfd3b51b52e1d9b28d2da5b0bfacd5c3fe530fe18880b"
-    )
+    EXPECTED_AUTH_SIG = [
+        bytes.fromhex("920a50c9903cd33fdd143bb10d4baaaa6d064f0a9db6c4a5f3c6bdabf870ad8831ce35ebb5cf06a6f49dfd3b51b52e1d9b28d2da5b0bfacd5c3fe530fe18880b"),
+        bytes.fromhex("0c47298136a564936f911eb85e4e89718b9242ecdfe963668aebf70da10aff284dc0037af3c1c0e3f103c76933264132f979d3cef32e78566561c7d772387117"),
+    ]
 
     _assert_pczt_orchard_sign_digest(
         backend,

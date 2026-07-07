@@ -1,17 +1,21 @@
 import pytest
+
 from application_client.zcash_command_sender import (
-    Errors,
+    CLA,
     GetShieldedAddressMode,
-    GetVkMode,
     ZcashCommandSender,
+    Errors,
+    GetVkMode,
+    InsType,
+    P1,
 )
 from application_client.zcash_response_unpacker import (
     unpack_get_public_key_response,
     unpack_len_prefixed_utf8_response,
 )
-from application_client.zcash_utils import t_address_from_pubkey
-from ragger.bip import CurveChoice, calculate_public_key_and_chaincode
+from ragger.bip import calculate_public_key_and_chaincode, CurveChoice, pack_derivation_path
 from ragger.error import ExceptionRAPDU
+from application_client.zcash_utils import t_address_from_pubkey
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
@@ -104,6 +108,7 @@ def test_get_ufvk_confirm_accepted(backend, scenario_navigator):
 
     with client.get_vk_with_confirmation(
         path="m/32'/133'/0'",
+        transparent_path="m/44'/133'/0'",
         mode=GetVkMode.UFVK,
         navigate=scenario_navigator.review_approve_ufvk,
     ) as response:
@@ -119,6 +124,7 @@ def test_get_ufvk_confirm_accepted_acc1(backend, scenario_navigator):
     client = ZcashCommandSender(backend)
     with client.get_vk_with_confirmation(
         path="m/32'/133'/1'",
+        transparent_path="m/44'/133'/1'",
         mode=GetVkMode.UFVK,
         navigate=scenario_navigator.review_approve_ufvk,
     ) as response:
@@ -134,12 +140,41 @@ def test_get_ufvk_confirm_refused(backend, scenario_navigator):
     with pytest.raises(ExceptionRAPDU) as e:
         with client.get_vk_with_confirmation(
             path="m/32'/133'/0'",
+            transparent_path="m/44'/133'/0'",
             mode=GetVkMode.UFVK,
             navigate=scenario_navigator.address_review_reject,
         ):
             pass
 
     assert e.value.status == Errors.SW_DENY
+    assert len(e.value.data) == 0
+
+
+def test_get_ufvk_requires_transparent_path(backend):
+    with pytest.raises(ExceptionRAPDU) as e:
+        backend.exchange(
+            cla=CLA,
+            ins=InsType.GET_VK,
+            p1=P1.P1_GET_VK_FIRST,
+            p2=GetVkMode.UFVK,
+            data=pack_derivation_path("m/32'/133'/0'"),
+        )
+
+    assert e.value.status == Errors.SW_APP_WRONG_APDU_LENGTH
+    assert len(e.value.data) == 0
+
+
+def test_get_ufvk_account_mismatch(backend):
+    with pytest.raises(ExceptionRAPDU) as e:
+        backend.exchange(
+            cla=CLA,
+            ins=InsType.GET_VK,
+            p1=P1.P1_GET_VK_FIRST,
+            p2=GetVkMode.UFVK,
+            data=pack_derivation_path("m/32'/133'/0'") + pack_derivation_path("m/44'/133'/1'"),
+        )
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
     assert len(e.value.data) == 0
 
 
@@ -218,12 +253,20 @@ def test_get_orchard_uaddress_no_confirm(backend):
     )
 
     client = ZcashCommandSender(backend)
-    response = client.get_shielded_address(path="m/32'/133'/0'", mode=GetShieldedAddressMode.UADDRESS).data
+    response = client.get_shielded_address(
+        path="m/32'/133'/0'",
+        transparent_path="m/44'/133'/0'/0/0",
+        mode=GetShieldedAddressMode.UADDRESS,
+    ).data
     orchard_address = unpack_len_prefixed_utf8_response(response)
     assert orchard_address == REF_ORCHARD_ADDRESS_ACC_0
 
     client = ZcashCommandSender(backend)
-    response = client.get_shielded_address(path="m/32'/133'/1'", mode=GetShieldedAddressMode.UADDRESS).data
+    response = client.get_shielded_address(
+        path="m/32'/133'/1'",
+        transparent_path="m/44'/133'/1'/0/0",
+        mode=GetShieldedAddressMode.UADDRESS,
+    ).data
     orchard_address = unpack_len_prefixed_utf8_response(response)
     assert orchard_address == REF_ORCHARD_ADDRESS_ACC_1
 
@@ -236,7 +279,11 @@ def test_get_orchard_uaddress_confirm_accepted(backend, scenario_navigator):
     client = ZcashCommandSender(backend)
     path = "m/32'/133'/0'"
 
-    with client.get_shielded_address_with_confirmation(path=path, mode=GetShieldedAddressMode.UADDRESS):
+    with client.get_shielded_address_with_confirmation(
+        path=path,
+        transparent_path="m/44'/133'/0'/0/0",
+        mode=GetShieldedAddressMode.UADDRESS,
+    ):
         scenario_navigator.address_review_approve()
 
     response = client.get_async_response().data
@@ -249,8 +296,36 @@ def test_get_orchard_uaddress_confirm_refused(backend, scenario_navigator):
     path = "m/32'/133'/0'"
 
     with pytest.raises(ExceptionRAPDU) as e:
-        with client.get_shielded_address_with_confirmation(path=path, mode=GetShieldedAddressMode.UADDRESS):
+        with client.get_shielded_address_with_confirmation(
+            path=path,
+            transparent_path="m/44'/133'/0'/0/0",
+            mode=GetShieldedAddressMode.UADDRESS,
+        ):
             scenario_navigator.address_review_reject()
 
     assert e.value.status == Errors.SW_DENY
+    assert len(e.value.data) == 0
+
+
+def test_get_orchard_uaddress_requires_transparent_path(backend):
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.get_shielded_address(path="m/32'/133'/0'", mode=GetShieldedAddressMode.UADDRESS)
+
+    assert e.value.status == Errors.SW_APP_WRONG_APDU_LENGTH
+    assert len(e.value.data) == 0
+
+
+def test_get_orchard_uaddress_account_mismatch(backend):
+    with pytest.raises(ExceptionRAPDU) as e:
+        backend.exchange(
+            cla=CLA,
+            ins=InsType.GET_SHIELDED_ADDRESS,
+            p1=P1.P1_GET_PUBLIC_KEY_NO_DISPLAY,
+            p2=GetShieldedAddressMode.UADDRESS,
+            data=pack_derivation_path("m/32'/133'/0'") + pack_derivation_path("m/44'/133'/1'/0/0"),
+        )
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
     assert len(e.value.data) == 0

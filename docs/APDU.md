@@ -64,7 +64,8 @@ with an empty response.
   - `0x00`: unified full viewing key
   - `0x01`: Orchard full viewing key bytes
 - Data:
-  - P1 `0x00`: BIP32 account path.
+  - P1 `0x00`, P2 `0x00`: Orchard BIP32 account path followed by transparent BIP32 account path.
+  - P1 `0x00`, P2 `0x01`: Orchard BIP32 account path.
   - P1 `0x80`: empty.
 - Response:
   - P2 `0x00`: string response containing the UFVK.
@@ -86,7 +87,9 @@ the first response chunk. User rejection returns `Deny` with an empty response.
 - P2:
   - `0x00`: unified address string response
   - `0x01`: raw Orchard address bytes
-- Data: BIP32 account path.
+- Data:
+  - P2 `0x00`: Orchard BIP32 account path followed by transparent BIP32 address path.
+  - P2 `0x01`: Orchard BIP32 account path.
 - Response:
   - P2 `0x00`: string response containing the unified address.
   - P2 `0x01`: raw Orchard address bytes.

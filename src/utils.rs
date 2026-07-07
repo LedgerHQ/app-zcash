@@ -164,6 +164,7 @@ pub fn check_output_displayable(
 pub enum Bip44CheckMode {
     Full { is_change_path: bool },
     OnlyCoinType,
+    Zip32Only,
 }
 
 pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
@@ -204,6 +205,11 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
 
         return true;
     } else {
+        if let Bip44CheckMode::Zip32Only = mode {
+            error!("Path is not a ZIP32 path");
+            return false;
+        }
+
         if path.len() != BIP44_PATH_LEN {
             error!("Bad Bip44 path len");
             return false;
