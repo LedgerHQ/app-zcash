@@ -29,16 +29,6 @@ pub fn orchard_network(path: &Bip32Path) -> NetworkType {
     NetworkType::Main
 }
 
-pub fn convert_orchard_path_to_transparent_path(path: &Bip32Path) -> Result<Bip32Path, AppSW> {
-    // Convert from m/32'/<coin_type>'/<account>' to m/44'/<coin_type>'/<account>'
-    let mut path = path.as_slice().to_vec();
-    if let Some(path0) = path.get_mut(0) {
-        *path0 = 44 + 0x8000_0000;
-    }
-
-    Bip32Path::try_from(path.as_slice())
-}
-
 // Derives the Orchard FullViewingKey bytes for the given coin type and account.
 pub fn derive_orchard_fvk_bytes(sk: Secret<32>) -> Result<OrchardFvk, AppSW> {
     let sk = OrchardSk::ledger_from_bytes(sk.as_ref().try_into().unwrap())

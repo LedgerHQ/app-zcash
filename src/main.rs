@@ -341,6 +341,11 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
         {
             (true, StatusType::Transaction)
         }
+        (Instruction::PcztOrchardAction { .. }, AppSW::Deny)
+        | (
+            Instruction::PcztSignTransparent { .. } | Instruction::PcztSignOrchard { .. },
+            AppSW::Ok,
+        ) if tx_ctx.is_finished() => (true, StatusType::Transaction),
         (_, _) => (false, StatusType::Transaction),
     };
 

@@ -19,6 +19,23 @@ impl Bip32Path {
         &self.path[..self.path_len as usize]
     }
 
+    pub fn from_prefixed_bytes(data: &[u8]) -> Result<(Self, &[u8]), AppSW> {
+        if data.is_empty() {
+            return Err(AppSW::WrongApduLength);
+        }
+
+        let path_len = data[0] as usize;
+        let encoded_len = 1 + path_len * BIP32_BYTES_PER_SEGMENT;
+
+        if data.len() < encoded_len || path_len > MAX_ZCASH_BIP32_PATH {
+            return Err(AppSW::WrongApduLength);
+        }
+
+        let path = Self::from_dpath(path_len, &data[1..encoded_len])?;
+
+        Ok((path, &data[encoded_len..]))
+    }
+
     pub fn from_dpath(dpath_len: usize, dpath: &[u8]) -> Result<Self, AppSW> {
         if dpath.len() < dpath_len * BIP32_BYTES_PER_SEGMENT || dpath_len > MAX_ZCASH_BIP32_PATH {
             return Err(AppSW::WrongApduLength);
@@ -63,28 +80,12 @@ impl TryFrom<&[u8]> for Bip32Path {
     /// but CANNOT be used in swap's `check_address` or `get_printable_amount` due to
     /// BSS memory sharing with the Exchange app.
     fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        if data.is_empty() {
+        let (path, remaining) = Self::from_prefixed_bytes(data)?;
+        if !remaining.is_empty() {
             return Err(AppSW::WrongApduLength);
         }
 
-        let path_len = data[0] as usize;
-        let body = &data[1..];
-
-        if body.len() != path_len * 4 || path_len > MAX_ZCASH_BIP32_PATH {
-            return Err(AppSW::WrongApduLength);
-        }
-
-        let (chunks, _) = body.as_chunks::<4>();
-
-        let mut path = [0u32; MAX_ZCASH_BIP32_PATH];
-        for (i, chunk) in chunks.iter().enumerate() {
-            path[i] = u32::from_be_bytes(*chunk);
-        }
-
-        Ok(Bip32Path {
-            path,
-            path_len: path_len as u8,
-        })
+        Ok(path)
     }
 }
 

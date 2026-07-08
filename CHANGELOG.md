@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.8.0
+
+- Extend private address flow with public address
+
 ## 3.7.0
 
 - Various security fixes

@@ -18,7 +18,7 @@
 use alloc::borrow::Cow;
 use alloc::string::String;
 
-use ledger_device_sdk::nbgl::NbglAddressReview;
+use ledger_device_sdk::nbgl::{Field, NbglAddressReview};
 
 use crate::{AppSW, app_ui::load_glyph};
 
@@ -35,9 +35,21 @@ pub fn ui_display_pk(addr: &str) -> Result<bool, AppSW> {
     display_address("Verify address", addr)
 }
 
-pub fn ui_display_unified_address(addr: &str) -> Result<bool, AppSW> {
-    // Display the unified address confirmation screen.
-    display_address("Verify Orchard UAddress", addr)
+pub fn ui_display_shielded_address(
+    shielded_addr: &str,
+    transparent_addr: &str,
+) -> Result<bool, AppSW> {
+    let public_address = [Field {
+        name: "Public Address",
+        value: transparent_addr,
+    }];
+
+    Ok(NbglAddressReview::new()
+        .glyph(load_glyph())
+        .review_title("Verify Zcash addresses")
+        .review_subtitle("Private address")
+        .set_tag_value_list(&public_address)
+        .show(shielded_addr))
 }
 
 // Viewing keys can be long, shorten them for better display.
