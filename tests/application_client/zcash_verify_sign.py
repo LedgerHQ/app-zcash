@@ -20,6 +20,55 @@ ZCASH_TX_PERSONALIZATION_PREFIX = b"ZcashTxHash_"
 ZCASH_SAPLING_HASH_PERSONALIZATION = b"ZTxIdSaplingHash"
 ZCASH_ORCHARD_HASH_PERSONALIZATION = b"ZTxIdOrchardHash"
 
+def nu5_txid_digests(tx_bytes: bytes) -> dict:
+    """Compute ZIP-244 transaction ID digests for a V5 transparent-only transaction."""
+    tx = _parse_v5_tx(tx_bytes)
+    inputs = tx["inputs"]
+    outputs = tx["outputs"]
+
+    prevouts_hash = _blake2b_256(
+        ZCASH_PREVOUTS_HASH_PERSONALIZATION,
+        b"".join(inp["prev_txid"] + inp["prev_vout"] for inp in inputs),
+    )
+    sequence_hash = _blake2b_256(
+        ZCASH_SEQUENCE_HASH_PERSONALIZATION,
+        b"".join(inp["sequence"] for inp in inputs),
+    )
+    outputs_hash = _blake2b_256(
+        ZCASH_OUTPUTS_HASH_PERSONALIZATION,
+        b"".join(
+            out["value"] + _write_compactsize(len(out["script"])) + out["script"]
+            for out in outputs
+        ),
+    )
+    transparent_digest = _blake2b_256(
+        ZCASH_TRANSPARENT_HASH_PERSONALIZATION,
+        prevouts_hash + sequence_hash + outputs_hash,
+    )
+    header_digest = _blake2b_256(
+        ZCASH_HEADERS_HASH_PERSONALIZATION,
+        tx["version"]
+        + tx["branch_id"].to_bytes(4, byteorder="little")
+        + tx["locktime"].to_bytes(4, byteorder="little")
+        + tx["expiry"].to_bytes(4, byteorder="little"),
+    )
+    sapling_digest = _blake2b_256(ZCASH_SAPLING_HASH_PERSONALIZATION, b"")
+    orchard_digest = _blake2b_256(ZCASH_ORCHARD_HASH_PERSONALIZATION, b"")
+
+    personal = ZCASH_TX_PERSONALIZATION_PREFIX + tx["branch_id"].to_bytes(4, byteorder="little")
+    final_digest = _blake2b_256(
+        personal,
+        header_digest + transparent_digest + sapling_digest + orchard_digest,
+    )
+    return {
+        "final_digest": final_digest,
+        "header_digest": header_digest,
+        "transparent_digest": transparent_digest,
+        "sapling_digest": sapling_digest,
+        "orchard_digest": orchard_digest,
+    }
+
+
 def check_tx_v5_signature_validity(
     public_key: bytes,
     signature: bytes,
