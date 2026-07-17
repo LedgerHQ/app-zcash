@@ -67,6 +67,10 @@ debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
 
 legacy_path = []
 
+# Gates all Ironwood / NU6.3 code until the network upgrade is ratified.
+# Personalization strings and consensus constants are draft values that may change.
+zcash_unstable = []
+
 [package.metadata.ledger]
 curve = ["secp256k1", "jubjub"]
 path = ["44'/133'", "32'/133'"]

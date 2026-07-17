@@ -1,0 +1,1077 @@
+// Ironwood bundle parsing for PCZT V2 transactions (V6/NU6.3).
+//
+// Wire layout mirrors Orchard exactly; only the personalization strings and
+// sighash construction differ. Action fields use the same types, so signing
+// records are aliased rather than duplicated.
+
+#![cfg(feature = "zcash_unstable")]
+
+use super::*;
+use crate::parser::personalization::{
+    ZCASH_IRONWOOD_ACTIONS_COMPACT_HASH_PERSONALIZATION,
+    ZCASH_IRONWOOD_ACTIONS_MEMOS_HASH_PERSONALIZATION,
+    ZCASH_IRONWOOD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION, ZCASH_IRONWOOD_HASH_PERSONALIZATION,
+};
+
+impl PcztParser {
+    pub(super) fn parse_ironwood_actions_start(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        debug!("PCZT ironwood actions start");
+
+        let action_count: usize = ok!(CompactSize::read_t(&mut *reader));
+
+        if action_count == 0 {
+            return Err(ParserError::from_str(
+                "Ironwood bundle with zero actions is invalid",
+            ));
+        }
+
+        if action_count > MAX_PCZT_IRONWOOD_ACTIONS_NUMBER {
+            return Err(ParserError::from_str("Too many PCZT ironwood actions"));
+        }
+
+        debug!("PCZT ironwood action count: {}", action_count);
+
+        if reader.remaining_len() != 0 {
+            return Err(ParserError::from_str(
+                "Unexpected PCZT ironwood action data after action count",
+            ));
+        }
+
+        self.pczt_finished = false;
+        self.has_ironwood_bundle = true;
+        self.is_v6_tx = true;
+
+        self.reset_ironwood_bundle_state(action_count);
+
+        ok!(ctx
+            .hashers
+            .tx_compact_hasher
+            .init_with_perso(ZCASH_IRONWOOD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
+        ok!(ctx
+            .hashers
+            .tx_memo_hasher
+            .init_with_perso(ZCASH_IRONWOOD_ACTIONS_MEMOS_HASH_PERSONALIZATION));
+        ok!(ctx
+            .hashers
+            .tx_non_compact_hasher
+            .init_with_perso(ZCASH_IRONWOOD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION));
+        ok!(ctx
+            .hashers
+            .ironwood_hasher
+            .init_with_perso(ZCASH_IRONWOOD_HASH_PERSONALIZATION));
+
+        self.state = PcztParserState::WaitIronwoodAction;
+
+        Ok(())
+    }
+
+    pub(super) fn parse_ironwood_action(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        ok!(reader.read_exact(&mut self.current_ironwood_cv_net));
+        ok!(ctx
+            .hashers
+            .tx_non_compact_hasher
+            .update(&self.current_ironwood_cv_net));
+        debug!(
+            "PCZT ironwood action #{} cv_net: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&self.current_ironwood_cv_net)
+        );
+
+        ok!(reader.read_exact(&mut self.current_ironwood_nullifier));
+        ok!(ctx
+            .hashers
+            .tx_compact_hasher
+            .update(&self.current_ironwood_nullifier));
+        debug!(
+            "PCZT ironwood action #{} nullifier: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&self.current_ironwood_nullifier)
+        );
+
+        ok!(reader.read_exact(&mut self.current_ironwood_rk));
+        ok!(ctx
+            .hashers
+            .tx_non_compact_hasher
+            .update(&self.current_ironwood_rk));
+        debug!(
+            "PCZT ironwood action #{} rk: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&self.current_ironwood_rk)
+        );
+
+        ok!(reader.read_exact(&mut self.current_ironwood_spend_recipient));
+        debug!(
+            "PCZT ironwood action #{} spend recipient: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&self.current_ironwood_spend_recipient)
+        );
+
+        self.current_ironwood_spend_value = self.read_orchard_value(
+            reader,
+            "Bad PCZT ironwood spend value",
+            "PCZT ironwood spend value out of range",
+        )?;
+        debug!(
+            "PCZT ironwood action #{} spend value: {}",
+            self.ironwood_action_parsed_count, self.current_ironwood_spend_value
+        );
+
+        ok!(reader.read_exact(&mut self.current_ironwood_spend_rho));
+        debug!(
+            "PCZT ironwood action #{} spend rho: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&self.current_ironwood_spend_rho)
+        );
+
+        ok!(reader.read_exact(&mut self.current_ironwood_spend_rseed));
+        debug!(
+            "PCZT ironwood action #{} spend rseed: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&self.current_ironwood_spend_rseed)
+        );
+
+        let mut alpha = [0u8; 32];
+        ok!(reader.read_exact(&mut alpha));
+        debug!(
+            "PCZT ironwood action #{} alpha: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&alpha)
+        );
+        self.current_ironwood_alpha = Some(alpha);
+
+        Self::ensure_orchard_apdu_group_end(reader)?;
+        self.state = PcztParserState::WaitIronwoodZip32Derivation;
+
+        Ok(())
+    }
+
+    pub(super) fn parse_ironwood_output(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        ok!(reader.read_exact(&mut self.current_ironwood_cmx));
+        ok!(ctx
+            .hashers
+            .tx_compact_hasher
+            .update(&self.current_ironwood_cmx));
+        debug!(
+            "PCZT ironwood action #{} cmx: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&self.current_ironwood_cmx)
+        );
+
+        ok!(reader.read_exact(&mut self.current_ironwood_ephemeral_key));
+        ok!(ctx
+            .hashers
+            .tx_compact_hasher
+            .update(&self.current_ironwood_ephemeral_key));
+        debug!(
+            "PCZT ironwood action #{} ephemeral_key: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&self.current_ironwood_ephemeral_key)
+        );
+
+        Self::ensure_orchard_apdu_group_end(reader)?;
+        self.state = PcztParserState::WaitIronwoodEncCiphertextLen;
+
+        Ok(())
+    }
+
+    pub(super) fn parse_ironwood_output_metadata(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        const OUTPUT_METADATA_WITHOUT_RCV_LEN: usize = ORCHARD_RAW_ADDRESS_SIZE + 8 + 32;
+        const OUTPUT_METADATA_WITH_RCV_LEN: usize = OUTPUT_METADATA_WITHOUT_RCV_LEN + 32;
+
+        match reader.remaining_len() {
+            OUTPUT_METADATA_WITHOUT_RCV_LEN => {
+                return Err(ParserError::from_str("Missing PCZT ironwood rcv"));
+            }
+            OUTPUT_METADATA_WITH_RCV_LEN => {}
+            _ => {
+                return Err(ParserError::from_str(
+                    "Bad PCZT ironwood output metadata length",
+                ));
+            }
+        }
+
+        ok!(reader.read_exact(&mut self.current_ironwood_output_recipient));
+        debug!(
+            "PCZT ironwood action #{} recipient: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&self.current_ironwood_output_recipient)
+        );
+
+        self.current_ironwood_output_value = self.read_orchard_value(
+            reader,
+            "Bad PCZT ironwood output value",
+            "PCZT ironwood output value out of range",
+        )?;
+        debug!(
+            "PCZT ironwood action #{} output value: {}",
+            self.ironwood_action_parsed_count, self.current_ironwood_output_value
+        );
+
+        let mut rseed = [0u8; 32];
+        ok!(reader.read_exact(&mut rseed));
+        debug!(
+            "PCZT ironwood action #{} output rseed: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&rseed)
+        );
+        self.current_ironwood_output_rseed = Some(rseed);
+
+        let mut rcv = [0u8; 32];
+        ok!(reader.read_exact(&mut rcv));
+        debug!(
+            "PCZT ironwood action #{} rcv: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(&rcv)
+        );
+        self.current_ironwood_rcv = Some(rcv);
+
+        Self::ensure_orchard_apdu_group_end(reader)?;
+        self.finish_current_ironwood_action(ctx)
+    }
+
+    pub(super) fn parse_ironwood_enc_ciphertext_len(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let size: usize = ok!(CompactSize::read_t(&mut *reader));
+
+        if size != ORCHARD_ENC_CIPHERTEXT_SIZE {
+            return Err(ParserError::from_str(
+                "Bad PCZT ironwood enc_ciphertext size",
+            ));
+        }
+
+        debug!(
+            "PCZT ironwood action #{} enc_ciphertext size: {}",
+            self.ironwood_action_parsed_count, size
+        );
+
+        self.state = PcztParserState::ProcessIronwoodEncCiphertext;
+        if reader.remaining_len() == 0 {
+            return Err(ParserError::from_str(
+                "Missing PCZT ironwood enc_ciphertext bytes",
+            ));
+        }
+
+        self.parse_ironwood_enc_ciphertext(ctx, reader)
+    }
+
+    pub(super) fn parse_ironwood_enc_ciphertext(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let Some(bytes) = self.read_large_orchard_vec(reader, ORCHARD_ENC_CIPHERTEXT_SIZE)? else {
+            return Ok(());
+        };
+
+        self.finish_ironwood_enc_ciphertext(ctx, bytes)?;
+        Self::ensure_orchard_apdu_group_end(reader)
+    }
+
+    pub(super) fn parse_ironwood_out_ciphertext_len(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let size: usize = ok!(CompactSize::read_t(&mut *reader));
+
+        if size != ORCHARD_OUT_CIPHERTEXT_SIZE {
+            return Err(ParserError::from_str(
+                "Bad PCZT ironwood out_ciphertext size",
+            ));
+        }
+
+        debug!(
+            "PCZT ironwood action #{} out_ciphertext size: {}",
+            self.ironwood_action_parsed_count, size
+        );
+
+        self.state = PcztParserState::ProcessIronwoodOutCiphertext;
+        if reader.remaining_len() == 0 {
+            return Err(ParserError::from_str(
+                "Missing PCZT ironwood out_ciphertext bytes",
+            ));
+        }
+
+        self.parse_ironwood_out_ciphertext(ctx, reader)
+    }
+
+    pub(super) fn parse_ironwood_out_ciphertext(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let Some(bytes) = self.read_large_orchard_vec(reader, ORCHARD_OUT_CIPHERTEXT_SIZE)? else {
+            return Ok(());
+        };
+
+        self.finish_ironwood_out_ciphertext(ctx, bytes)?;
+        Self::ensure_orchard_apdu_group_end(reader)
+    }
+
+    pub(super) fn parse_ironwood_trailer(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        use zcash_primitives::transaction::components::orchard as orchard_component;
+
+        let flags = ok!(orchard_component::read_flags(&mut *reader));
+        self.current_ironwood_flags = flags.to_byte();
+        debug!("PCZT ironwood flags: {:02x}", self.current_ironwood_flags);
+
+        self.current_ironwood_value_sum_magnitude = ok!(reader.read_u64_le());
+        debug!(
+            "PCZT ironwood value_sum magnitude: {}",
+            self.current_ironwood_value_sum_magnitude
+        );
+
+        self.finish_ironwood_value_sum_sign(ok!(reader.read_u8()))?;
+
+        let mut anchor = [0u8; 32];
+        ok!(reader.read_exact(&mut anchor));
+        Self::ensure_orchard_apdu_group_end(reader)?;
+        self.finish_ironwood_anchor(ctx, &anchor)
+    }
+
+    pub(super) fn parse_ironwood_zip32_derivation(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
+        let derivation_len = {
+            let derivation = reader.remaining_slice();
+            if derivation.is_empty() {
+                return Err(ParserError::from_str(
+                    "Missing PCZT ironwood zip32 derivation bytes",
+                ));
+            }
+
+            let derivation_len = derivation.len();
+            self.finish_ironwood_zip32_derivation(ctx, derivation)?;
+            derivation_len
+        };
+        ok!(reader.advance(derivation_len));
+
+        if reader.remaining_len() != 0 {
+            return Err(ParserError::from_str(
+                "Unexpected data after PCZT ironwood zip32 derivation",
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn finish_ironwood_zip32_derivation(
+        &mut self,
+        _ctx: &mut PcztParserCtx<'_>,
+        derivation: &[u8],
+    ) -> Result<(), ParserError> {
+        let path =
+            Bip32Path::try_from(derivation.get(ZIP32_SEED_FINGERPRINT_SIZE..).unwrap_or(&[]))
+                .map_err(|_| ParserError::from_str("Bad PCZT ironwood zip32 derivation path"))?;
+        let seed_fingerprint = &derivation[..ZIP32_SEED_FINGERPRINT_SIZE];
+
+        if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
+            return Err(ParserError::from_str(
+                "PCZT ironwood signing path not compliant",
+            ));
+        }
+
+        debug!(
+            "PCZT ironwood action #{} zip32 seed fingerprint: {}",
+            self.ironwood_action_parsed_count,
+            HexSlice(seed_fingerprint)
+        );
+        debug!(
+            "PCZT ironwood action #{} signing path: {:?}",
+            self.ironwood_action_parsed_count, path
+        );
+
+        let orchard_fvk = ok!(derive_orchard_fvk(&path));
+        self.verify_current_ironwood_rk(&path)?;
+
+        self.current_ironwood_path = Some(path);
+        self.current_ironwood_fvk = Some(orchard_fvk);
+        self.state = PcztParserState::WaitIronwoodOutput;
+
+        Ok(())
+    }
+
+    fn finish_ironwood_enc_ciphertext(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        enc_ciphertext: Vec<u8>,
+    ) -> Result<(), ParserError> {
+        if enc_ciphertext.len() != ORCHARD_ENC_CIPHERTEXT_SIZE {
+            return Err(ParserError::from_str(
+                "Bad PCZT ironwood enc_ciphertext length",
+            ));
+        }
+
+        ok!(ctx
+            .hashers
+            .tx_compact_hasher
+            .update(&enc_ciphertext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]));
+        ok!(ctx.hashers.tx_memo_hasher.update(
+            &enc_ciphertext[ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE..ORCHARD_ENC_CIPHERTEXT_TAG_OFFSET]
+        ));
+        ok!(ctx
+            .hashers
+            .tx_non_compact_hasher
+            .update(&enc_ciphertext[ORCHARD_ENC_CIPHERTEXT_TAG_OFFSET..]));
+
+        debug!(
+            "PCZT ironwood action #{} enc_ciphertext data hashed",
+            self.ironwood_action_parsed_count
+        );
+
+        self.current_ironwood_enc_ciphertext = enc_ciphertext;
+        self.state = PcztParserState::WaitIronwoodOutCiphertextLen;
+
+        Ok(())
+    }
+
+    fn finish_ironwood_out_ciphertext(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        out_ciphertext: Vec<u8>,
+    ) -> Result<(), ParserError> {
+        if out_ciphertext.len() != ORCHARD_OUT_CIPHERTEXT_SIZE {
+            return Err(ParserError::from_str(
+                "Bad PCZT ironwood out_ciphertext length",
+            ));
+        }
+
+        let out_ciphertext: [u8; ORCHARD_OUT_CIPHERTEXT_SIZE] = out_ciphertext
+            .as_slice()
+            .try_into()
+            .map_err(|_| ParserError::from_str("Bad PCZT ironwood out_ciphertext length"))?;
+
+        ok!(ctx.hashers.tx_non_compact_hasher.update(&out_ciphertext));
+
+        self.current_ironwood_out_ciphertext = Some(out_ciphertext);
+        self.state = PcztParserState::WaitIronwoodOutputMetadata;
+
+        Ok(())
+    }
+
+    fn finish_current_ironwood_action(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+    ) -> Result<(), ParserError> {
+        let out_ciphertext = self
+            .current_ironwood_out_ciphertext
+            .ok_or_else(|| ParserError::from_str("Missing PCZT ironwood out_ciphertext"))?;
+
+        self.verify_current_ironwood_cv_net()?;
+        let ironwood_fvk = self
+            .current_ironwood_fvk
+            .as_ref()
+            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+        self.verify_current_ironwood_spend_nullifier(ironwood_fvk)?;
+        self.validate_current_ironwood_output(ctx, out_ciphertext)?;
+
+        self.ironwood_spend_value_sum = self
+            .ironwood_spend_value_sum
+            .checked_add(self.current_ironwood_spend_value)
+            .ok_or_else(|| ParserError::from_str("PCZT ironwood spend value sum overflow"))?;
+        self.ironwood_output_value_sum = self
+            .ironwood_output_value_sum
+            .checked_add(self.current_ironwood_output_value)
+            .ok_or_else(|| ParserError::from_str("PCZT ironwood output value sum overflow"))?;
+
+        debug!(
+            "PCZT ironwood action #{} non-compact data hashed",
+            self.ironwood_action_parsed_count
+        );
+
+        let alpha = self
+            .current_ironwood_alpha
+            .take()
+            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+        let path = self
+            .current_ironwood_path
+            .take()
+            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+
+        self.ironwood_signing_records
+            .push(PcztIronwoodActionSigningRecord {
+                alpha,
+                path,
+                signed: false,
+            });
+        self.reset_current_ironwood_action();
+        self.ironwood_action_parsed_count = self.ironwood_action_parsed_count.saturating_add(1);
+
+        if self.ironwood_action_parsed_count == self.ironwood_action_count {
+            self.state = PcztParserState::WaitIronwoodTrailer;
+        } else {
+            self.state = PcztParserState::WaitIronwoodAction;
+        }
+
+        Ok(())
+    }
+
+    fn validate_current_ironwood_output(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        out_ciphertext: [u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
+    ) -> Result<(), ParserError> {
+        if self.validate_current_ironwood_dummy_output()? {
+            return Ok(());
+        }
+
+        // Try to decipher using available Orchard keys (same wire format).
+        if self.current_ironwood_output_value != 0 {
+            // Non-dummy output that could not be validated as a dummy: try deciphering.
+            use crate::parser::orchard_decipher::{
+                OrchardActionCiphertext, OrchardCompactAction, decipher_compact_value,
+                decipher_value_with_ovk,
+            };
+            use ::orchard::note::TransmittedNoteCiphertext;
+
+            let Some(keys) = ctx.tx_info.orchard_decipher_keys.as_ref() else {
+                return Err(ParserError::from_str(
+                    "PCZT ironwood output could not be decrypted (no keys)",
+                ));
+            };
+
+            if self.current_ironwood_enc_ciphertext.len() != ORCHARD_ENC_CIPHERTEXT_SIZE {
+                return Err(ParserError::from_str(
+                    "Missing PCZT ironwood enc_ciphertext for decryption",
+                ));
+            }
+
+            let enc_ciphertext: [u8; ORCHARD_ENC_CIPHERTEXT_SIZE] = self
+                .current_ironwood_enc_ciphertext
+                .as_slice()
+                .try_into()
+                .map_err(|_| ParserError::from_str("Bad PCZT ironwood enc_ciphertext length"))?;
+
+            let mut enc_ciphertext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
+            enc_ciphertext_prefix
+                .copy_from_slice(&enc_ciphertext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
+
+            let compact = OrchardCompactAction {
+                nullifier: self.current_ironwood_nullifier,
+                cmx: self.current_ironwood_cmx,
+                ephemeral_key: self.current_ironwood_ephemeral_key,
+                enc_ciphertext_prefix,
+            };
+
+            let network = keys.network;
+
+            match decipher_compact_value(&keys.internal_ivk, &compact) {
+                Ok(Some(output)) => {
+                    if output.value == self.current_ironwood_output_value
+                        && output.raw_address == self.current_ironwood_output_recipient
+                    {
+                        self.push_ironwood_output(
+                            ctx,
+                            output.value,
+                            output.raw_address,
+                            network,
+                            true,
+                        )?;
+                        return Ok(());
+                    }
+                    return Err(ParserError::from_str("PCZT ironwood output value mismatch"));
+                }
+                Ok(None) => debug!("PCZT ironwood internal IVK decryption did not match"),
+                Err(ledger_zcash_crypto::Error::OutOfMemory) => {
+                    return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+                }
+                Err(err) => debug!("PCZT ironwood compact decryption failed: {:?}", err),
+            }
+
+            let note_ciphertext = TransmittedNoteCiphertext {
+                epk_bytes: self.current_ironwood_ephemeral_key,
+                enc_ciphertext,
+                out_ciphertext,
+            };
+            let action = OrchardActionCiphertext {
+                compact,
+                rk: self.current_ironwood_rk,
+                cv_net: self.current_ironwood_cv_net,
+                enc_ciphertext: &note_ciphertext.enc_ciphertext,
+                out_ciphertext: note_ciphertext.out_ciphertext,
+            };
+
+            match decipher_value_with_ovk(&keys.external_ovk, &action) {
+                Ok(Some(output)) => {
+                    if output.value == self.current_ironwood_output_value
+                        && output.raw_address == self.current_ironwood_output_recipient
+                    {
+                        self.push_ironwood_output(
+                            ctx,
+                            output.value,
+                            output.raw_address,
+                            network,
+                            false,
+                        )?;
+                        return Ok(());
+                    }
+                    return Err(ParserError::from_str("PCZT ironwood output value mismatch"));
+                }
+                Ok(None) => debug!("PCZT ironwood external OVK recovery did not match"),
+                Err(ledger_zcash_crypto::Error::OutOfMemory) => {
+                    return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+                }
+                Err(err) => debug!("PCZT ironwood OVK recovery failed: {:?}", err),
+            }
+
+            Err(ParserError::from_str(
+                "PCZT ironwood output could not be decrypted",
+            ))
+        } else {
+            Err(ParserError::from_str(
+                "PCZT ironwood output could not be validated",
+            ))
+        }
+    }
+
+    fn validate_current_ironwood_dummy_output(&self) -> Result<bool, ParserError> {
+        if self.current_ironwood_output_value != 0 {
+            return Ok(false);
+        }
+
+        let Some(rseed) = self.current_ironwood_output_rseed else {
+            return Err(ParserError::from_str("Missing PCZT ironwood output rseed"));
+        };
+
+        let expected_cmx = ledger_zcash_crypto::orchard_note_commitment_bytes(
+            &self.current_ironwood_output_recipient,
+            self.current_ironwood_output_value,
+            &self.current_ironwood_nullifier,
+            &rseed,
+        )
+        .map_err(|err| match err {
+            ledger_zcash_crypto::Error::MalformedPallasBase => {
+                ParserError::from_str("Bad PCZT ironwood dummy nullifier")
+            }
+            ledger_zcash_crypto::Error::MalformedPallasPoint
+            | ledger_zcash_crypto::Error::InvalidDiversifyHashPoint => {
+                ParserError::from_str("Bad PCZT ironwood output recipient")
+            }
+            ledger_zcash_crypto::Error::MalformedPallasScalar
+            | ledger_zcash_crypto::Error::InvalidKeyDiscarded => {
+                ParserError::from_str("Bad PCZT ironwood output rseed")
+            }
+            _ => ParserError::from_sw(AppSW::TechnicalProblem),
+        })?;
+
+        if expected_cmx != self.current_ironwood_cmx {
+            debug!(
+                "PCZT ironwood dummy output cmx mismatch: expected {}, actual {}",
+                HexSlice(&expected_cmx),
+                HexSlice(&self.current_ironwood_cmx)
+            );
+            return Err(ParserError::from_str(
+                "PCZT ironwood dummy output cmx mismatch",
+            ));
+        }
+
+        debug!("PCZT ironwood dummy output accepted");
+        Ok(true)
+    }
+
+    fn push_ironwood_output(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        value: u64,
+        raw_address: [u8; ORCHARD_RAW_ADDRESS_SIZE],
+        network: zcash_protocol::consensus::NetworkType,
+        is_change: bool,
+    ) -> Result<(), ParserError> {
+        use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
+
+        if is_change && ctx.tx_info.is_change_found {
+            return Err(ParserError::from_str("Multiple change outputs detected"));
+        }
+
+        let address = UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(raw_address)])
+            .map(|address| address.encode(&network))
+            .unwrap_or_else(|_| format!("ironwood:{}", HexSlice(&raw_address)));
+
+        debug!(
+            "PCZT ironwood output address: {}, amount: {}, change: {}",
+            address, value, is_change
+        );
+
+        ctx.tx_info.outputs.push(TxOutput {
+            amount: value,
+            address,
+            is_change,
+            memo: None,
+            pool: TxPool::Orchard,
+        });
+
+        if is_change {
+            ctx.tx_info.is_change_found = true;
+        }
+
+        Ok(())
+    }
+
+    fn verify_current_ironwood_cv_net(&self) -> Result<(), ParserError> {
+        let Some(rcv_bytes) = self.current_ironwood_rcv else {
+            return Err(ParserError::from_str("Missing PCZT ironwood rcv"));
+        };
+
+        let value_net = i128::from(self.current_ironwood_spend_value)
+            - i128::from(self.current_ironwood_output_value);
+        let value_net = i64::try_from(value_net)
+            .map_err(|_| ParserError::from_str("PCZT ironwood cv_net value out of range"))?;
+        let expected_cv_net = ledger_zcash_crypto::orchard_value_commitment_bytes(
+            value_net, &rcv_bytes,
+        )
+        .map_err(|err| match err {
+            ledger_zcash_crypto::Error::MalformedPallasScalar => {
+                ParserError::from_str("Bad PCZT ironwood rcv")
+            }
+            _ => ParserError::from_sw(AppSW::TechnicalProblem),
+        })?;
+
+        if expected_cv_net != self.current_ironwood_cv_net {
+            debug!(
+                "PCZT ironwood cv_net mismatch: expected {}, actual {}",
+                HexSlice(&expected_cv_net),
+                HexSlice(&self.current_ironwood_cv_net)
+            );
+            return Err(ParserError::from_str("PCZT ironwood cv_net mismatch"));
+        }
+
+        Ok(())
+    }
+
+    fn verify_current_ironwood_spend_nullifier(&self, fvk: &OrchardFvk) -> Result<(), ParserError> {
+        let mut diversifier = [0u8; 11];
+        diversifier.copy_from_slice(&self.current_ironwood_spend_recipient[..11]);
+
+        let mut claimed_pk_d = [0u8; 32];
+        claimed_pk_d.copy_from_slice(&self.current_ironwood_spend_recipient[11..]);
+
+        if !self.is_current_ironwood_spend_recipient_in_fvk(fvk, &diversifier, &claimed_pk_d)? {
+            return Err(ParserError::from_str(
+                "PCZT ironwood spend does not belong to signing key",
+            ));
+        }
+
+        let fvk_bytes = fvk.to_bytes();
+        let nk: [u8; 32] = fvk_bytes[32..64]
+            .try_into()
+            .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
+        let expected_nullifier = ledger_zcash_crypto::orchard_spend_nullifier_bytes(
+            &nk,
+            &self.current_ironwood_spend_recipient,
+            self.current_ironwood_spend_value,
+            &self.current_ironwood_spend_rho,
+            &self.current_ironwood_spend_rseed,
+        )
+        .map_err(|err| match err {
+            ledger_zcash_crypto::Error::MalformedPallasBase => {
+                ParserError::from_str("Bad PCZT ironwood spend rho")
+            }
+            ledger_zcash_crypto::Error::MalformedPallasPoint
+            | ledger_zcash_crypto::Error::InvalidDiversifyHashPoint => {
+                ParserError::from_str("Bad PCZT ironwood spend recipient")
+            }
+            ledger_zcash_crypto::Error::InvalidKeyDiscarded => {
+                ParserError::from_str("Bad PCZT ironwood spend rseed")
+            }
+            _ => ParserError::from_sw(AppSW::TechnicalProblem),
+        })?;
+
+        if expected_nullifier != self.current_ironwood_nullifier {
+            debug!(
+                "PCZT ironwood nullifier mismatch: expected {}, actual {}",
+                HexSlice(&expected_nullifier),
+                HexSlice(&self.current_ironwood_nullifier)
+            );
+            return Err(ParserError::from_str("PCZT ironwood nullifier mismatch"));
+        }
+
+        Ok(())
+    }
+
+    fn is_current_ironwood_spend_recipient_in_fvk(
+        &self,
+        fvk: &OrchardFvk,
+        diversifier: &[u8; 11],
+        claimed_pk_d: &[u8; 32],
+    ) -> Result<bool, ParserError> {
+        use ::orchard::keys::Scope as OrchardScope;
+
+        let g_d = ledger_zcash_crypto::diversify_hash_ledger(diversifier)
+            .map_err(|_| ParserError::from_str("Bad PCZT ironwood spend recipient"))?;
+
+        for scope in [OrchardScope::External, OrchardScope::Internal] {
+            let ivk = fvk
+                .to_ivk_ledger(scope)
+                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
+            let ivk_bytes = ivk.to_bytes();
+            let ivk_bytes: [u8; 32] = ivk_bytes[32..64]
+                .try_into()
+                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
+            let expected_pk_d = ledger_zcash_crypto::orchard_pk_d(&ivk_bytes, &g_d)
+                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
+
+            if &expected_pk_d == claimed_pk_d {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn verify_current_ironwood_rk(&self, path: &Bip32Path) -> Result<(), ParserError> {
+        use ::orchard::primitives::redpallas::{
+            SpendAuth, VerificationKey as RedpallasVerificationKey,
+        };
+
+        let alpha = self
+            .current_ironwood_alpha
+            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+
+        let alpha = ledger_zcash_crypto::pallas_scalar_from_repr(alpha)
+            .map_err(|_| ParserError::from_str("Bad PCZT ironwood alpha"))?;
+
+        let ask = ok!(derive_orchard_ask(path));
+        let randomized_ask = ask
+            .randomize_ledger(&alpha)
+            .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
+        let expected_rk: [u8; 32] =
+            (&RedpallasVerificationKey::<SpendAuth>::from(&randomized_ask)).into();
+
+        if expected_rk != self.current_ironwood_rk {
+            return Err(ParserError::from_str(
+                "PCZT ironwood rk does not match alpha and signing key",
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn finish_ironwood_value_sum_sign(&mut self, sign_byte: u8) -> Result<(), ParserError> {
+        let magnitude = i64::try_from(self.current_ironwood_value_sum_magnitude)
+            .map_err(|_| ParserError::from_str("PCZT ironwood value_sum out of range"))?;
+
+        self.ironwood_value_balance = match sign_byte {
+            0 => magnitude,
+            1 => -magnitude,
+            _ => return Err(ParserError::from_str("Bad PCZT ironwood value_sum sign")),
+        };
+
+        debug!(
+            "PCZT ironwood value balance: {}",
+            self.ironwood_value_balance
+        );
+
+        let expected_value_balance =
+            i128::from(self.ironwood_spend_value_sum) - i128::from(self.ironwood_output_value_sum);
+        if expected_value_balance != i128::from(self.ironwood_value_balance) {
+            debug!(
+                "PCZT ironwood value balance mismatch: spend_sum={}, output_sum={}, value_balance={}",
+                self.ironwood_spend_value_sum,
+                self.ironwood_output_value_sum,
+                self.ironwood_value_balance
+            );
+            return Err(ParserError::from_str("PCZT ironwood value_sum mismatch"));
+        }
+
+        Ok(())
+    }
+
+    fn finish_ironwood_anchor(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        anchor: &[u8; 32],
+    ) -> Result<(), ParserError> {
+        debug!("PCZT ironwood anchor: {}", HexSlice(anchor));
+
+        let ironwood_compact_digest = finalize_and_log_hash(
+            &mut ctx.hashers.tx_compact_hasher,
+            "PCZT ironwood compact digest",
+        )?;
+        let ironwood_memo_digest =
+            finalize_and_log_hash(&mut ctx.hashers.tx_memo_hasher, "PCZT ironwood memo digest")?;
+        let ironwood_non_compact_digest = finalize_and_log_hash(
+            &mut ctx.hashers.tx_non_compact_hasher,
+            "PCZT ironwood non compact digest",
+        )?;
+
+        ok!(ctx.hashers.ironwood_hasher.update(&ironwood_compact_digest));
+        ok!(ctx.hashers.ironwood_hasher.update(&ironwood_memo_digest));
+        ok!(ctx
+            .hashers
+            .ironwood_hasher
+            .update(&ironwood_non_compact_digest));
+        ok!(ctx
+            .hashers
+            .ironwood_hasher
+            .update(&[self.current_ironwood_flags]));
+        ok!(ctx
+            .hashers
+            .ironwood_hasher
+            .update(&self.ironwood_value_balance.to_le_bytes()));
+        // The anchor goes to the authorizing-data digest; it is excluded from the
+        // txid commitment hasher (same rule as Orchard V6).
+        ok!(ctx
+            .hashers
+            .ironwood_hasher
+            .finalize(&mut ctx.tx_info.ironwood_digest));
+
+        debug!(
+            "PCZT ironwood digest: {}",
+            HexSlice(&ctx.tx_info.ironwood_digest)
+        );
+
+        self.finalize_ironwood_actions(ctx)
+    }
+
+    fn finalize_ironwood_actions(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+    ) -> Result<(), ParserError> {
+        debug!("PCZT ironwood actions hashing done");
+
+        self.state = PcztParserState::IronwoodActionsDone;
+        // Both Orchard and Ironwood bundles are now fully parsed; compute fees.
+        self.review_outputs(ctx)?;
+
+        Ok(())
+    }
+
+    pub(super) fn reset_current_ironwood_action(&mut self) {
+        self.current_ironwood_cv_net = [0; 32];
+        self.current_ironwood_nullifier = [0; 32];
+        self.current_ironwood_rk = [0; 32];
+        self.current_ironwood_spend_value = 0;
+        self.current_ironwood_spend_recipient = [0; ORCHARD_RAW_ADDRESS_SIZE];
+        self.current_ironwood_spend_rho = [0; 32];
+        self.current_ironwood_spend_rseed = [0; 32];
+        self.current_ironwood_rcv = None;
+        self.current_ironwood_output_rseed = None;
+        self.current_ironwood_cmx = [0; 32];
+        self.current_ironwood_ephemeral_key = [0; 32];
+        self.current_ironwood_out_ciphertext = None;
+        self.current_ironwood_output_recipient = [0; ORCHARD_RAW_ADDRESS_SIZE];
+        self.current_ironwood_output_value = 0;
+        self.current_ironwood_enc_ciphertext.clear();
+        self.current_ironwood_alpha = None;
+        self.current_ironwood_path = None;
+        self.current_ironwood_fvk = None;
+    }
+
+    pub(super) fn reset_ironwood_bundle_state(&mut self, action_count: usize) {
+        self.ironwood_action_count = action_count;
+        self.ironwood_action_parsed_count = 0;
+        self.ironwood_signing_records.clear();
+        self.ironwood_signed_action_count = 0;
+        self.ironwood_signature_digest = None;
+        self.ironwood_value_balance = 0;
+        self.ironwood_spend_value_sum = 0;
+        self.ironwood_output_value_sum = 0;
+        self.current_ironwood_flags = 0;
+        self.current_ironwood_value_sum_magnitude = 0;
+        self.reset_current_ironwood_action();
+        self.orchard_field_bytes.clear();
+    }
+
+    pub fn ensure_signature_digest_for_ironwood(
+        &mut self,
+        tx_info: &mut TxInfo,
+        action_index: usize,
+    ) -> Result<(), ParserError> {
+        if !self.is_finished() {
+            return Err(ParserError::from_sw(AppSW::BadState));
+        }
+
+        let action = self
+            .ironwood_signing_records
+            .get(action_index)
+            .ok_or_else(|| ParserError::from_str("Bad PCZT ironwood action index"))?;
+
+        if action.signed {
+            return Err(ParserError::from_str("PCZT ironwood action already signed"));
+        }
+
+        if let Some(signature_digest) = self.ironwood_signature_digest {
+            tx_info.signature_digest = signature_digest;
+        } else {
+            compute_shielded_signature_digest(
+                tx_info,
+                self.transparent_input_count,
+                self.transparent_output_count,
+            )?;
+            self.ironwood_signature_digest = Some(tx_info.signature_digest);
+        }
+
+        debug!(
+            "Computed PCZT shielded signature digest for Ironwood action #{} signing: {}",
+            action_index,
+            HexSlice(&tx_info.signature_digest)
+        );
+
+        Ok(())
+    }
+
+    pub fn ironwood_action_signing_data(
+        &self,
+        action_index: usize,
+    ) -> Result<(&Bip32Path, [u8; 32]), ParserError> {
+        if !self.is_ready_to_sign() {
+            return Err(ParserError::from_sw(AppSW::BadState));
+        }
+
+        let action = self
+            .ironwood_signing_records
+            .get(action_index)
+            .ok_or_else(|| ParserError::from_str("Bad PCZT ironwood action index"))?;
+
+        Ok((&action.path, action.alpha))
+    }
+
+    pub fn ironwood_signature_count(&self) -> usize {
+        self.ironwood_action_count
+    }
+
+    pub fn mark_ironwood_action_signed(
+        &mut self,
+        action_index: usize,
+    ) -> Result<usize, ParserError> {
+        let action = self
+            .ironwood_signing_records
+            .get_mut(action_index)
+            .ok_or_else(|| ParserError::from_str("Bad PCZT ironwood action index"))?;
+
+        action.signed = true;
+
+        self.ironwood_signed_action_count = self.ironwood_signed_action_count.saturating_add(1);
+
+        Ok(self.ironwood_signed_action_count)
+    }
+
+    pub fn are_ironwood_signatures_done(&self) -> bool {
+        self.ironwood_signed_action_count >= self.ironwood_signature_count()
+    }
+}

@@ -30,13 +30,29 @@ impl PcztParser {
         let tx_version = ok!(reader.read_u32_le());
         let version_group_id = ok!(reader.read_u32_le());
 
-        if tx_version != V5_TX_VERSION || version_group_id != V5_VERSION_GROUP_ID {
+        #[cfg(feature = "zcash_unstable")]
+        let is_v6 = tx_version == crate::consts::V6_TX_VERSION
+            && version_group_id == crate::consts::V6_VERSION_GROUP_ID;
+        #[cfg(not(feature = "zcash_unstable"))]
+        let is_v6 = false;
+
+        let is_v5 = tx_version == V5_TX_VERSION && version_group_id == V5_VERSION_GROUP_ID;
+
+        if !is_v5 && !is_v6 {
             return Err(ParserError::from_str(
                 "Unsupported PCZT transaction version",
             ));
         }
 
-        let consensus_branch_id = ok!(BranchId::try_from(ok!(reader.read_u32_le())));
+        let raw_branch_id = ok!(reader.read_u32_le());
+        let consensus_branch_id = if is_v6 {
+            // NU6.3 branch ID may not be recognised by zcash_protocol; use Nu5 as a
+            // structural stand-in so the type system is satisfied. The actual branch
+            // ID bytes are stored separately in branch_id_raw.
+            BranchId::Nu5
+        } else {
+            ok!(BranchId::try_from(raw_branch_id))
+        };
         let fallback_lock_time = self.read_optional_u32(reader)?;
         let expiry_height = ok!(reader.read_u32_le());
         let coin_type = ok!(reader.read_u32_le());
@@ -59,6 +75,8 @@ impl PcztParser {
 
         ctx.tx_info.tx_version = Some(TxVersion::V5);
         ctx.tx_info.branch_id = Some(consensus_branch_id);
+        ctx.tx_info.branch_id_raw = raw_branch_id;
+        ctx.tx_info.is_v6 = is_v6;
         ctx.tx_info.locktime = fallback_lock_time.unwrap_or_default();
         ctx.tx_info.expiry_height = expiry_height;
 
@@ -86,6 +104,12 @@ impl PcztParser {
             ));
         }
 
+        #[cfg(feature = "zcash_unstable")]
+        let fees_i128 = i128::from(ctx.tx_info.total_amount)
+            + i128::from(self.orchard_value_balance)
+            + i128::from(self.ironwood_value_balance)
+            - i128::from(self.total_output_amount);
+        #[cfg(not(feature = "zcash_unstable"))]
         let fees_i128 = i128::from(ctx.tx_info.total_amount)
             + i128::from(self.orchard_value_balance)
             - i128::from(self.total_output_amount);

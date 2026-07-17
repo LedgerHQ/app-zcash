@@ -29,11 +29,15 @@ impl PcztParser {
 
         self.pczt_finished = false;
 
+        self.has_orchard_bundle = action_count > 0;
+        self.is_v6_tx = ctx.tx_info.is_v6;
+
         self.reset_orchard_bundle_state(action_count);
 
         if action_count == 0 {
             self.finalize_orchard_actions(ctx)?;
         } else {
+            // Action-level personalization strings are identical for V5 and V6.
             ok!(ctx
                 .hashers
                 .tx_compact_hasher
@@ -46,6 +50,17 @@ impl PcztParser {
                 .hashers
                 .tx_non_compact_hasher
                 .init_with_perso(ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION));
+
+            // Bundle-level personalization differs between V5 and V6.
+            #[cfg(feature = "zcash_unstable")]
+            let bundle_perso = if ctx.tx_info.is_v6 {
+                crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6
+            } else {
+                ::orchard::bundle::commitments::ZCASH_ORCHARD_HASH_PERSONALIZATION
+            };
+            #[cfg(not(feature = "zcash_unstable"))]
+            let bundle_perso = ::orchard::bundle::commitments::ZCASH_ORCHARD_HASH_PERSONALIZATION;
+            ok!(ctx.hashers.orchard_hasher.init_with_perso(bundle_perso));
 
             self.state = PcztParserState::WaitOrchardAction;
         }
@@ -334,7 +349,9 @@ impl PcztParser {
         self.finish_orchard_anchor(ctx, &anchor)
     }
 
-    fn ensure_orchard_apdu_group_end(reader: &ByteReader<'_>) -> Result<(), ParserError> {
+    pub(crate) fn ensure_orchard_apdu_group_end(
+        reader: &ByteReader<'_>,
+    ) -> Result<(), ParserError> {
         if reader.remaining_len() != 0 {
             return Err(ParserError::from_str(
                 "Unexpected data after PCZT orchard APDU field group",
@@ -344,7 +361,7 @@ impl PcztParser {
         Ok(())
     }
 
-    fn read_orchard_value(
+    pub(crate) fn read_orchard_value(
         &self,
         reader: &mut ByteReader<'_>,
         read_error: &'static str,
@@ -359,7 +376,7 @@ impl PcztParser {
         Ok(value.into_u64())
     }
 
-    fn read_large_orchard_vec(
+    pub(crate) fn read_large_orchard_vec(
         &mut self,
         reader: &mut ByteReader<'_>,
         size: usize,
@@ -995,6 +1012,13 @@ impl PcztParser {
             .hashers
             .orchard_hasher
             .update(&self.orchard_value_balance.to_le_bytes()));
+        // For V6 the anchor goes to the authorizing-data digest (handled elsewhere);
+        // it is excluded from the txid commitment hasher.
+        #[cfg(feature = "zcash_unstable")]
+        if !ctx.tx_info.is_v6 {
+            ok!(ctx.hashers.orchard_hasher.update(anchor));
+        }
+        #[cfg(not(feature = "zcash_unstable"))]
         ok!(ctx.hashers.orchard_hasher.update(anchor));
         ok!(ctx
             .hashers
@@ -1155,13 +1179,22 @@ impl PcztParser {
     }
 
     pub fn are_orchard_signatures_done(&self) -> bool {
-        self.orchard_signed_action_count >= self.orchard_signature_count()
+        !self.has_orchard_bundle
+            || self.orchard_signed_action_count >= self.orchard_signature_count()
     }
 
     fn finalize_orchard_actions(&mut self, ctx: &mut PcztParserCtx<'_>) -> Result<(), ParserError> {
         debug!("PCZT orchard actions hashing done");
 
         self.state = PcztParserState::OrchardActionsDone;
+
+        // For V6, review_outputs is deferred to finalize_ironwood_actions so that
+        // ironwood_value_balance is included in the fee computation.
+        #[cfg(feature = "zcash_unstable")]
+        if self.is_v6_tx {
+            return Ok(());
+        }
+
         self.review_outputs(ctx)?;
 
         Ok(())

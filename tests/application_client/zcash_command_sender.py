@@ -18,6 +18,7 @@ from application_client.pczt import (
     PCZT_DEFAULT_SEED_FINGERPRINT,
     PcztGlobal,
     PcztOrchardBundle,
+    PcztIronwoodBundle,
     PcztTransparentInput,
     PcztTransparentOutput,
     pczt_orchard_bundle_from_raw_tx,
@@ -97,6 +98,9 @@ class InsType(IntEnum):
     PCZT_SIGN_TRANSPARENT = 0x55
     PCZT_ORCHARD_ACTION = 0x56
     PCZT_SIGN_ORCHARD = 0x57
+    # UNSTABLE: Ironwood INS codes pending NU6.3 ratification
+    PCZT_IRONWOOD_ACTION = 0x58
+    PCZT_SIGN_IRONWOOD = 0x59
 
 
 class GetVkMode(IntEnum):
@@ -894,6 +898,124 @@ class ZcashCommandSender:
         tx += write_varint(0)
 
         return tx
+
+    def _build_pczt_ironwood_action_packets(
+        self,
+        ironwood_bundle: PcztIronwoodBundle,
+        include_rcv: bool = True,
+    ) -> list[bytes]:
+        # UNSTABLE: mirrors Orchard packet layout with Ironwood INS.
+        # pylint: disable=too-many-branches
+        packets = [
+            self._checked_pczt_packet(
+                write_varint(len(ironwood_bundle.actions)),
+                "ironwood actions header",
+            )
+        ]
+
+        if not ironwood_bundle.actions:
+            return packets
+
+        for action in ironwood_bundle.actions:
+            if len(action.alpha) != 32:
+                raise ValueError("Ironwood alpha must be 32 bytes")
+            if include_rcv and action.rcv is None:
+                raise ValueError("Ironwood rcv is required")
+
+            packets.append(
+                self._checked_pczt_packet(
+                    action.cv_net
+                    + action.nullifier
+                    + action.rk
+                    + action.spend_recipient
+                    + action.spend_value.to_bytes(8, byteorder="little")
+                    + action.spend_rho
+                    + action.spend_rseed
+                    + action.alpha,
+                    "ironwood action spend small fields",
+                )
+            )
+            packets.append(self._build_pczt_zip32_derivation_packet(action.signing_path))
+            packets.append(
+                self._checked_pczt_packet(
+                    action.cmx + action.ephemeral_key,
+                    "ironwood action output small fields",
+                )
+            )
+            packets.extend(
+                self._split_pczt_field_packet(
+                    write_varint(len(action.enc_ciphertext)) + action.enc_ciphertext
+                )
+            )
+            packets.extend(
+                self._split_pczt_field_packet(
+                    write_varint(len(action.out_ciphertext)) + action.out_ciphertext
+                )
+            )
+            output_metadata = (
+                action.recipient
+                + action.value.to_bytes(8, byteorder="little")
+                + action.rseed
+            )
+            if include_rcv:
+                output_metadata += action.rcv
+            packets.append(
+                self._checked_pczt_packet(output_metadata, "ironwood action output metadata")
+            )
+
+        trailer = bytearray()
+        value_balance = ironwood_bundle.value_balance
+        trailer.extend(ironwood_bundle.flags.to_bytes(1, byteorder="little"))
+        trailer.extend(abs(value_balance).to_bytes(8, byteorder="little"))
+        trailer.extend((1 if value_balance < 0 else 0).to_bytes(1, byteorder="little"))
+        trailer.extend(ironwood_bundle.anchor)
+        packets.append(self._checked_pczt_packet(bytes(trailer), "ironwood bundle trailer"))
+
+        return packets
+
+    @contextmanager
+    def _send_pczt_ironwood_actions(
+        self,
+        ironwood_bundle: PcztIronwoodBundle,
+        pczt_finished: bool = False,
+        include_rcv: bool = True,
+    ) -> Generator[None, None, None]:
+        # UNSTABLE: INS 0x58 pending NU6.3 ratification.
+        packets = self._build_pczt_ironwood_action_packets(
+            ironwood_bundle,
+            include_rcv=include_rcv,
+        )
+
+        for idx, packet in enumerate(packets[:-1]):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_IRONWOOD_ACTION,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                data=packet,
+            )
+
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.PCZT_IRONWOOD_ACTION,
+            p1=self._pczt_chunk_p1(len(packets) - 1, len(packets)),
+            p2=self._pczt_chunk_p2(len(packets) - 1, len(packets), pczt_finished),
+            data=packets[-1],
+        ) as response:
+            yield response
+
+    def pczt_sign_ironwood(
+        self,
+        action_index: int = 0,
+    ) -> RAPDU:
+        # UNSTABLE: INS 0x59 pending NU6.3 ratification.
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_SIGN_IRONWOOD,
+            p1=P1.P1_FIRST,
+            p2=action_index,
+            data=b"",
+        )
 
     def get_async_response(self) -> ApduResponse | RAPDU | None:
         return self.last_response or self.backend.last_async_response

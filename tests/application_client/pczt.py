@@ -236,3 +236,35 @@ def _read_bytes(raw_transaction: bytes, index: int, size: int) -> tuple[bytes, i
         raise ValueError("Invalid raw Orchard action ciphertext sizes")
 
     return value, end
+
+
+# --- Ironwood (V6/NU6.3) PCZT dataclasses ---
+# UNSTABLE: wire format based on ZIP 229 draft. Layout mirrors Orchard.
+
+@dataclass
+class PcztIronwoodAction:  # pylint: disable=too-many-instance-attributes
+    cv_net: bytes
+    nullifier: bytes
+    spend_recipient: bytes
+    spend_rho: bytes
+    spend_rseed: bytes
+    rk: bytes
+    alpha: bytes
+    signing_path: str
+    cmx: bytes
+    ephemeral_key: bytes
+    enc_ciphertext: bytes
+    out_ciphertext: bytes
+    rcv: bytes
+    rseed: bytes = bytes(ORCHARD_FIELD_SIZE)
+    spend_value: int = 0
+    value: int = 0
+    recipient: bytes = bytes(ORCHARD_RAW_ADDRESS_SIZE)
+
+
+@dataclass
+class PcztIronwoodBundle:
+    actions: list  # list[PcztIronwoodAction]
+    flags: int
+    value_balance: int
+    anchor: bytes  # 32 bytes -- goes to auth digest, excluded from sighash

@@ -30,6 +30,8 @@ pub struct Hashers {
     pub scripts_hasher: Blake2b_256,
 
     pub orchard_hasher: Blake2b_256,
+    #[cfg(feature = "zcash_unstable")]
+    pub ironwood_hasher: Blake2b_256,
     pub sapling_hasher: Blake2b_256,
 
     pub tx_memo_hasher: Blake2b_256,
@@ -172,6 +174,10 @@ pub struct TxInfo {
 
     pub header_digest: [u8; 32],
     pub orchard_digest: [u8; 32],
+    #[cfg(feature = "zcash_unstable")]
+    pub ironwood_digest: [u8; 32],
+    pub is_v6: bool,
+    pub branch_id_raw: u32,
     pub signature_digest: [u8; 32],
 
     pub orchard_decipher_keys: Option<OrchardDecipherKeys>,

@@ -37,3 +37,22 @@ pub const ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"Z
 pub const ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION: &[u8; 16] = b"Zcash___TxInHash";
 pub const ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrAmountsHash";
 pub const ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrScriptsHash";
+
+// --- Ironwood bundle digest tree (ZIP 229 [DRAFT]) ---
+// Source: orchard-0.15.0/src/bundle/commitments.rs
+// UNSTABLE: personalization strings are draft values pending NU6.3 ratification.
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_IRONWOOD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIronwd_H_v6";
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_IRONWOOD_ACTIONS_COMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActCH_v6";
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_IRONWOOD_ACTIONS_MEMOS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActMH_v6";
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_IRONWOOD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActNH_v6";
+
+// --- Orchard V6 bundle-level overrides ---
+// Only the bundle-level and auth personalizations differ from V5. Action-level
+// strings (compact / memos / noncompact) are identical to V5.
+// Source: orchard-0.15.0/src/bundle/commitments.rs lines 41-44
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_ORCHARD_HASH_PERSONALIZATION_V6: &[u8; 16] = b"ZTxIdOrchardH_v6";

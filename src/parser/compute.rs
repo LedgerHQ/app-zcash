@@ -258,8 +258,21 @@ fn compute_header_digest(tx_info: &mut TxInfo) -> Result<(), ParserError> {
 
     let mut hasher = Blake2b_256::default();
     ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-    ok!(tx_version.write(&mut hasher.as_writer()));
-    ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    #[cfg(feature = "zcash_unstable")]
+    if tx_info.is_v6 {
+        // Manually encode V6 version header (version | 0x80000000 + version_group_id).
+        ok!(hasher.update(&(crate::consts::V6_TX_VERSION | 0x8000_0000u32).to_le_bytes()));
+        ok!(hasher.update(&crate::consts::V6_VERSION_GROUP_ID.to_le_bytes()));
+        ok!(hasher.update(&tx_info.branch_id_raw.to_le_bytes()));
+    } else {
+        ok!(tx_version.write(&mut hasher.as_writer()));
+        ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    }
+    #[cfg(not(feature = "zcash_unstable"))]
+    {
+        ok!(tx_version.write(&mut hasher.as_writer()));
+        ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    }
     ok!(hasher.update(&tx_info.locktime.to_le_bytes()));
     ok!(hasher.update(&tx_info.expiry_height.to_le_bytes()));
     ok!(hasher.finalize(&mut tx_info.header_digest));
@@ -319,7 +332,15 @@ fn finalize_signature_hash_from_transparent_digest(
 
     let mut personalization = [0u8; 16];
     personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
-    personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
+    #[cfg(feature = "zcash_unstable")]
+    let branch_id_bytes = if tx_info.is_v6 {
+        tx_info.branch_id_raw.to_le_bytes()
+    } else {
+        u32::from(branch_id).to_le_bytes()
+    };
+    #[cfg(not(feature = "zcash_unstable"))]
+    let branch_id_bytes = u32::from(branch_id).to_le_bytes();
+    personalization[12..].copy_from_slice(&branch_id_bytes);
 
     let mut hasher = Blake2b_256::default();
     ok!(hasher.init_with_perso(&personalization));
@@ -327,6 +348,10 @@ fn finalize_signature_hash_from_transparent_digest(
     ok!(hasher.update(transparent_digest));
     ok!(hasher.update(&sapling_digest));
     ok!(hasher.update(&orchard_digest));
+    #[cfg(feature = "zcash_unstable")]
+    if tx_info.is_v6 {
+        ok!(hasher.update(&tx_info.ironwood_digest));
+    }
     ok!(hasher.finalize(&mut tx_info.signature_digest));
 
     debug!("Signature hash: {}", HexSlice(&tx_info.signature_digest));
