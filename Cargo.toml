@@ -5,7 +5,7 @@ authors = ["Ledger"]
 edition = "2024"
 
 [dependencies]
-ledger_device_sdk = { version = "1.35.2", features = ["sys"] }
+ledger_device_sdk = { version = "1.36.0", features = ["sys"] }
 corez = { version = "0.1.1", default-features = false, features = ["alloc"] }
 hex = { version = "0.4.3", default-features = false, features = [
     "serde",
