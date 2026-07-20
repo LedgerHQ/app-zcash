@@ -36,3 +36,4 @@ tests/swap/.test_dependencies/app-ethereum/
 # VSCode
 /.vscode
 
+.worktrees/
