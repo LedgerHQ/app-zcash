@@ -1282,6 +1282,11 @@ impl PcztParser {
         debug!("PCZT orchard actions hashing done");
 
         self.state = PcztParserState::OrchardActionsDone;
+        // For V6, defer the user review to Ironwood finalization so the fee includes both pools.
+        #[cfg(feature = "zcash_unstable")]
+        if ctx.tx_info.is_v6 {
+            return Ok(());
+        }
         self.review_outputs(ctx)?;
 
         // The bundle is fully parsed, so the real-spend count is final. When it

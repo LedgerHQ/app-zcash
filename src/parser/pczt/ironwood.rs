@@ -44,6 +44,7 @@ impl PcztParser {
 
         self.has_ironwood_bundle = true;
         self.is_v6_tx = true;
+        ctx.tx_info.has_ironwood_bundle = true;
         self.reset_ironwood_bundle_state(action_count);
 
         {

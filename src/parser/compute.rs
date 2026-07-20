@@ -343,7 +343,7 @@ fn finalize_signature_hash_from_transparent_digest(
     ok!(hasher.update(&sapling_digest));
     ok!(hasher.update(&orchard_digest));
     #[cfg(feature = "zcash_unstable")]
-    if tx_info.is_v6 {
+    if tx_info.has_ironwood_bundle {
         ok!(hasher.update(&tx_info.ironwood_digest));
     }
     ok!(hasher.finalize(&mut tx_info.signature_digest));

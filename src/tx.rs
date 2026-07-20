@@ -183,6 +183,7 @@ pub struct TxInfo {
 
     pub ironwood_digest: [u8; 32],
     pub is_v6: bool,
+    pub has_ironwood_bundle: bool,
     pub branch_id_raw: u32,
 
     pub orchard_decipher_keys: Option<OrchardDecipherKeys>,
