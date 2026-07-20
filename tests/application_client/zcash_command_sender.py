@@ -959,8 +959,15 @@ class ZcashCommandSender:
             ) as response:
                 yield response
         else:
-            if orchard_bundle is not None:
-                self._send_pczt_orchard_actions_sync(orchard_bundle)
+            if orchard_bundle is None:
+                # V6 Ironwood: advance the state machine through OrchardActionsDone.
+                orchard_bundle = PcztOrchardBundle(
+                    actions=[],
+                    flags=0,
+                    value_balance=0,
+                    anchor=bytes(32),
+                )
+            self._send_pczt_orchard_actions_sync(orchard_bundle)
             with self._send_pczt_ironwood_actions(
                 ironwood_bundle,
                 pczt_finished=True,

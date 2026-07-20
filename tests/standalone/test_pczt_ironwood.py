@@ -7,6 +7,7 @@ from application_client.pczt import (
     PcztIronwoodBundle,
     PcztOrchardAction,
     PcztOrchardBundle,
+    PcztTransparentOutput,
 )
 from application_client.zcash_command_sender import (
     Errors,
@@ -52,6 +53,18 @@ _SPEND_RSEED = bytes.fromhex("1a000000000000000000000000000000000000000000000000
 
 # In V6 neither the Orchard nor the Ironwood anchor enters the sighash.
 _ORCHARD_ANCHOR_A = bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109")
+
+# Transparent output used by tests that need a displayable output.
+# Ironwood-only (one pool): orchard_vb=0 + ironwood_vb=300000 - 299000 = 1000 fee.
+_TRANSPARENT_OUTPUT_299K = PcztTransparentOutput(
+    value=299000,
+    script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+)
+# V6 migration (two pools): orchard_vb=300000 + ironwood_vb=300000 - 599000 = 1000 fee.
+_TRANSPARENT_OUTPUT_599K = PcztTransparentOutput(
+    value=599000,
+    script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+)
 
 
 def _valid_ironwood_action() -> PcztIronwoodAction:
@@ -150,7 +163,7 @@ def test_pczt_ironwood_bundle_signing(
     with client.send_pczt(
         pczt_global=PCZT_V6_GLOBAL,
         transparent_inputs=[],
-        transparent_outputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
         ironwood_bundle=_valid_ironwood_bundle(),
     ):
         _review_approve(scenario_navigator, "test_pczt_ironwood_bundle_signing")
@@ -169,7 +182,7 @@ def test_pczt_migration_orchard_to_ironwood(
     with client.send_pczt(
         pczt_global=PCZT_V6_GLOBAL,
         transparent_inputs=[],
-        transparent_outputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
         orchard_bundle=_valid_orchard_bundle(),
         ironwood_bundle=_valid_ironwood_bundle(),
     ):
@@ -218,7 +231,7 @@ def test_pczt_orchard_path_unaffected(
     with client.send_pczt(
         pczt_global=v5_global,
         transparent_inputs=[],
-        transparent_outputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
         orchard_bundle=_valid_orchard_bundle(),
     ):
         _review_approve(scenario_navigator, "test_pczt_orchard_path_unaffected")
@@ -238,7 +251,7 @@ def test_pczt_ironwood_user_rejection(
         with client.send_pczt(
             pczt_global=PCZT_V6_GLOBAL,
             transparent_inputs=[],
-            transparent_outputs=[],
+            transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
             ironwood_bundle=_valid_ironwood_bundle(),
         ):
             scenario_navigator.review_reject(test_name="test_pczt_ironwood_user_rejection")
@@ -267,7 +280,7 @@ def test_pczt_ironwood_zero_actions_rejected(
             transparent_outputs=[],
             ironwood_bundle=empty_ironwood,
         ):
-            pytest.fail("Device accepted a zero-action Ironwood bundle")
+            pass  # Rejection arrives in async response, checked on context-manager exit
 
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
@@ -285,7 +298,7 @@ def test_pczt_v5_finished_marker_regression(
     with client.send_pczt(
         pczt_global=v5_global,
         transparent_inputs=[],
-        transparent_outputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
         orchard_bundle=_valid_orchard_bundle(),
     ):
         _review_approve(scenario_navigator, "test_pczt_v5_finished_marker_regression")
@@ -294,38 +307,55 @@ def test_pczt_v5_finished_marker_regression(
     assert len(auth_sig) == 64
 
 
+# Expected Orchard spendAuthSig for a V6 migration PCZT on a freshly started Speculos
+# session (deterministic RNG starting point, Speculos default seed).  The value is
+# constant regardless of the Orchard anchor because NU6.3 excludes the anchor from the
+# sighash — only the authorising-data digest includes it, not the sighash.
+_EXPECTED_V6_ORCHARD_SIG = bytes.fromhex(
+    "43b8257c89b3214f1f6e2cae79e512985531e1958d0da6ab08ef10b962c2220"
+    "30245bdb39e65246d3d8525a64931cda3b2b05a984009f7e864318d57a47f2c19"
+)
+
+# Second anchor: first byte flipped so the Orchard anchor bytes differ in every bit
+# that the first byte carries, giving an easy regression signal.
+_ORCHARD_ANCHOR_B = bytes([_ORCHARD_ANCHOR_A[0] ^ 0xFF]) + _ORCHARD_ANCHOR_A[1:]
+
+
+@pytest.mark.parametrize(
+    "anchor,test_name",
+    [
+        (_ORCHARD_ANCHOR_A, "test_pczt_v6_orchard_anchor_exclusion_a"),
+        (_ORCHARD_ANCHOR_B, "test_pczt_v6_orchard_anchor_exclusion_b"),
+    ],
+    ids=["anchor_a", "anchor_b"],
+)
 def test_pczt_v6_orchard_anchor_exclusion_regression(
     backend,
     scenario_navigator: NavigateWithScenario,
+    anchor: bytes,
+    test_name: str,
 ):
     """V6: the Orchard anchor is excluded from the sighash — changing its value must not alter the signature.
 
-    Two V6 migration PCZTs with identical fields but different Orchard anchors must produce
-    the same Orchard spendAuthSig. If the anchor were included in the Orchard digest the
-    signatures would differ.
+    Each parametrised invocation runs in its own Speculos session (fresh deterministic RNG
+    start state).  If the Orchard anchor were included in the V6 sighash the signature
+    would differ from _EXPECTED_V6_ORCHARD_SIG; if it is correctly excluded both anchors
+    produce the same signature.
     """
-    anchor_a = _ORCHARD_ANCHOR_A
-    anchor_b = bytes([anchor_a[0] ^ 0xFF]) + anchor_a[1:]
-
-    def _sign_orchard_then_finish(anchor: bytes, test_name: str) -> bytes:
-        client = ZcashCommandSender(backend)
-        with client.send_pczt(
-            pczt_global=PCZT_V6_GLOBAL,
-            transparent_inputs=[],
-            transparent_outputs=[],
-            orchard_bundle=_valid_orchard_bundle(anchor=anchor),
-            ironwood_bundle=_valid_ironwood_bundle(),
-        ):
-            _review_approve(scenario_navigator, test_name)
-        orchard_sig = client.pczt_sign_orchard(action_index=0).data
-        # Complete the PCZT so the device resets before the next invocation.
-        client.pczt_sign_ironwood(action_index=0)
-        return orchard_sig
-
-    sig_a = _sign_orchard_then_finish(anchor_a, "test_pczt_v6_orchard_anchor_exclusion_a")
-    sig_b = _sign_orchard_then_finish(anchor_b, "test_pczt_v6_orchard_anchor_exclusion_b")
-
-    assert sig_a == sig_b, (
+    client = ZcashCommandSender(backend)
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
+        orchard_bundle=_valid_orchard_bundle(anchor=anchor),
+        ironwood_bundle=_valid_ironwood_bundle(),
+    ):
+        _review_approve(scenario_navigator, test_name)
+    orchard_sig = client.pczt_sign_orchard(action_index=0).data
+    assert orchard_sig == _EXPECTED_V6_ORCHARD_SIG, (
         "Orchard spendAuthSig changed when Orchard anchor changed — "
-        f"Orchard anchor incorrectly included in V6 sighash: {sig_a.hex()} != {sig_b.hex()}"
+        f"Orchard anchor incorrectly excluded from V6 sighash.\n"
+        f"anchor={anchor.hex()}\n"
+        f"got:  {orchard_sig.hex()}\n"
+        f"want: {_EXPECTED_V6_ORCHARD_SIG.hex()}"
     )
