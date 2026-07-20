@@ -263,13 +263,15 @@ fn compute_header_digest(tx_info: &mut TxInfo) -> Result<(), ParserError> {
     ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
     #[cfg(feature = "zcash_unstable")]
     if tx_info.is_v6 {
-        // V6: tx_version field = 6 | 0x80000000; version_group_id = V6_VERSION_GROUP_ID;
-        // branch_id written from branch_id_raw (not via BranchId enum) — values are identical
-        // when Nu6_3 is in the enum, but using the raw u32 avoids a round-trip through try_from.
         ok!(hasher.update(&(V6_TX_VERSION | 0x80000000u32).to_le_bytes()));
         ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
         ok!(hasher.update(&tx_info.branch_id_raw.to_le_bytes()));
     } else {
+        ok!(tx_version.write(&mut hasher.as_writer()));
+        ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    }
+    #[cfg(not(feature = "zcash_unstable"))]
+    {
         ok!(tx_version.write(&mut hasher.as_writer()));
         ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
     }
