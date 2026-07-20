@@ -99,6 +99,9 @@ name = "small"
 path = "benches/small.rs"
 harness = false
 
+[dependencies.ledger_zcash_crypto]
+path = "../../ledger_zcash_crypto"
+
 [dependencies.aes]
 version = "0.8"
 
@@ -206,9 +209,9 @@ version = "0.1"
 version = "2.6"
 default-features = false
 
-[dependencies.tracing]
-version = "0.1"
-default-features = false
+#[dependencies.tracing]
+#version = "0.1"
+#default-features = false
 
 [dependencies.visibility]
 version = "0.1.1"
@@ -262,8 +265,3 @@ features = [
     "flamegraph",
 ]
 
-[profile.bench]
-debug = 2
-
-[profile.release]
-debug = 2
