@@ -12,7 +12,13 @@ fn are_pczt_transparent_signatures_done(ctx: &TxContext) -> bool {
 }
 
 fn are_pczt_signatures_done(ctx: &TxContext) -> bool {
-    are_pczt_transparent_signatures_done(ctx) && ctx.pczt_parser.are_orchard_signatures_done()
+    #[cfg(feature = "zcash_unstable")]
+    let ironwood_done = ctx.pczt_parser.are_ironwood_signatures_done();
+    #[cfg(not(feature = "zcash_unstable"))]
+    let ironwood_done = true;
+    are_pczt_transparent_signatures_done(ctx)
+        && ctx.pczt_parser.are_orchard_signatures_done()
+        && ironwood_done
 }
 
 fn reset_pczt_parser_after_error(ctx: &mut TxContext) {
@@ -199,6 +205,45 @@ pub fn handler_pczt_orchard_action(
     Ok(())
 }
 
+#[cfg(feature = "zcash_unstable")]
+pub fn handler_pczt_ironwood_action(
+    comm: &mut Comm,
+    ctx: &mut TxContext,
+    first: bool,
+    last: bool,
+    finished: bool,
+) -> Result<(), AppSW> {
+    if first {
+        debug!("Start PCZT ironwood action parsing");
+    }
+
+    let data = match comm.get_data() {
+        Ok(data) => data,
+        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
+    };
+
+    if let Err(e) = ctx.pczt_parser.parse_ironwood_actions(
+        &mut PcztParserCtx {
+            tx_state: &mut ctx.tx_signing_state,
+            tx_info: &mut ctx.tx_info,
+            hashers: &mut ctx.hashers,
+        },
+        data,
+    ) {
+        error!("Error parsing PCZT ironwood action data: {:#?}", e);
+        return Err(map_pczt_parser_error(ctx, e));
+    }
+
+    if last && !ctx.pczt_parser.is_ironwood_actions_finished() {
+        error!("PCZT ironwood action data ended before all actions were parsed");
+        return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength));
+    }
+
+    finish_pczt_if_requested(ctx, finished)?;
+
+    Ok(())
+}
+
 pub fn handler_pczt_sign_transparent(
     comm: &mut Comm,
     ctx: &mut TxContext,
@@ -350,6 +395,78 @@ pub fn handler_pczt_sign_orchard(
     info!(
         "Signed PCZT orchard action {} ({}/{})",
         action_index, signed_orchard_count, orchard_signature_count
+    );
+
+    if are_pczt_signatures_done(ctx) {
+        info!("All PCZT signatures have been produced");
+        ctx.set_finished();
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "zcash_unstable")]
+pub fn handler_pczt_sign_ironwood(
+    comm: &mut Comm,
+    ctx: &mut TxContext,
+    action_index: usize,
+) -> Result<(), AppSW> {
+    let data = match comm.get_data() {
+        Ok(data) => data,
+        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
+    };
+
+    if !data.is_empty() {
+        error!("Unexpected data for PCZT ironwood signing");
+        return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength));
+    }
+
+    if !ctx.pczt_parser.is_finished() {
+        error!("PCZT is not finished and ready for Ironwood signing");
+        return Err(reset_pczt_parser_with_sw(
+            ctx,
+            AppSW::ConditionsOfUseNotSatisfied,
+        ));
+    }
+
+    if let Err(e) = ctx
+        .pczt_parser
+        .ensure_signature_digest_for_ironwood(&mut ctx.tx_info, action_index)
+    {
+        error!(
+            "Error preparing PCZT signature digest for Ironwood signing: {:#?}",
+            e
+        );
+        return Err(map_pczt_parser_error(ctx, e));
+    }
+
+    let (path, alpha) = match ctx.pczt_parser.ironwood_action_signing_data(action_index) {
+        Ok(signing_data) => signing_data,
+        Err(e) => {
+            error!("Error reading PCZT ironwood signing data: {:#?}", e);
+            return Err(map_pczt_parser_error(ctx, e));
+        }
+    };
+
+    let auth_sig =
+        match orchard_spend_auth_signature_with_alpha(path, &ctx.tx_info.signature_digest, alpha) {
+            Ok(auth_sig) => auth_sig,
+            Err(sw) => return Err(reset_pczt_parser_with_sw(ctx, sw)),
+        };
+    comm.append(&auth_sig);
+
+    let signed_ironwood_count = match ctx.pczt_parser.mark_ironwood_action_signed(action_index) {
+        Ok(signed_ironwood_count) => signed_ironwood_count,
+        Err(e) => {
+            error!("Error marking PCZT ironwood action as signed: {:#?}", e);
+            return Err(map_pczt_parser_error(ctx, e));
+        }
+    };
+    let ironwood_signature_count = ctx.pczt_parser.ironwood_signature_count();
+
+    info!(
+        "Signed PCZT ironwood action {} ({}/{})",
+        action_index, signed_ironwood_count, ironwood_signature_count
     );
 
     if are_pczt_signatures_done(ctx) {
