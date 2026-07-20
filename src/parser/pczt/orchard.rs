@@ -49,6 +49,7 @@ impl PcztParser {
         if action_count == 0 {
             self.finalize_orchard_actions(ctx)?;
         } else {
+            self.has_orchard_bundle = true;
             ok!(ctx
                 .hashers
                 .tx_compact_hasher
@@ -1273,7 +1274,8 @@ impl PcztParser {
     }
 
     pub fn are_orchard_signatures_done(&self) -> bool {
-        self.orchard_signed_action_count >= self.orchard_signature_count()
+        !self.has_orchard_bundle
+            || self.orchard_signed_action_count >= self.orchard_signature_count()
     }
 
     fn finalize_orchard_actions(&mut self, ctx: &mut PcztParserCtx<'_>) -> Result<(), ParserError> {

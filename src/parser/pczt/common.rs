@@ -101,8 +101,13 @@ impl PcztParser {
             ));
         }
 
+        #[cfg(not(feature = "zcash_unstable"))]
+        let ironwood_vb: i64 = 0;
+        #[cfg(feature = "zcash_unstable")]
+        let ironwood_vb: i64 = self.ironwood_value_balance;
         let fees_i128 = i128::from(ctx.tx_info.total_amount)
             + i128::from(self.orchard_value_balance)
+            + i128::from(ironwood_vb)
             - i128::from(self.total_output_amount);
 
         if fees_i128 < 0 {
@@ -113,8 +118,8 @@ impl PcztParser {
             .map_err(|_| ParserError::from_str("PCZT fee value out of range"))?;
 
         debug!(
-            "PCZT fees: {}, transparent_input_total={}, transparent_output_total={}, orchard_value_balance={}",
-            fees, ctx.tx_info.total_amount, self.total_output_amount, self.orchard_value_balance
+            "PCZT fees: {}, transparent_input_total={}, transparent_output_total={}, orchard_value_balance={}, ironwood_value_balance={}",
+            fees, ctx.tx_info.total_amount, self.total_output_amount, self.orchard_value_balance, ironwood_vb
         );
 
         // In the case of internal transfers between pools (for example, transparent -> Orchard or Orchard -> transparent),
