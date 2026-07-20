@@ -16,7 +16,8 @@ components.
 
 - The bundle command order is fixed:
   `PCZT_HEADER`, then `PCZT_TRANSPARENT_INPUT`, then
-  `PCZT_TRANSPARENT_OUTPUT`, then `PCZT_ORCHARD_ACTION`.
+  `PCZT_TRANSPARENT_OUTPUT`, then `PCZT_ORCHARD_ACTION`, and for V6
+  transactions `PCZT_IRONWOOD_ACTION`.
 - `PCZT_HEADER` is sent exactly once and contains only the `Pczt` header and
   `common::Global` fields.
 - `PCZT_TRANSPARENT_INPUT` and `PCZT_TRANSPARENT_OUTPUT` are always sent. Use
@@ -27,8 +28,12 @@ components.
   `PCZT_*` command.
 - A one-packet command uses `P1_FIRST`.
 - `P2_PCZT_CONTINUE` means more PCZT bundle commands may still follow.
-- `P2_PCZT_FINISHED` is valid only on the last APDU packet of
-  `PCZT_ORCHARD_ACTION`. Signing commands are accepted only after this marker.
+- `P2_PCZT_FINISHED` is set on the last APDU packet of the **last bundle
+  command**. For V5 transactions this is the last packet of
+  `PCZT_ORCHARD_ACTION`. For V6 transactions this is the last packet of
+  `PCZT_IRONWOOD_ACTION`; the last `PCZT_ORCHARD_ACTION` packet must use
+  `P2_PCZT_CONTINUE` instead. Signing commands are accepted only after this
+  marker.
 - Small neighboring fields may be grouped into one APDU packet.
 - Large `Vec<u8>` fields are sent as their own APDU packet sequence. The first
   packet contains the CompactSize byte length followed by field bytes. If the
@@ -37,7 +42,8 @@ components.
 - `bip32_derivation` and `zip32_derivation` fields MUST each fit in, and be sent
   as, one APDU packet.
 - The current app limits are: at most 10 transparent inputs, at most 10
-  transparent outputs, and at most 10 Orchard actions.
+  transparent outputs, at most 10 Orchard actions, and at most 10 Ironwood
+  actions.
 
 ## PCZT_HEADER
 
@@ -160,3 +166,33 @@ action is accepted:
 - Non-zero undecryptable outputs are rejected.
 
 Dummy spends are not represented by this compact APDU subset.
+
+## PCZT_IRONWOOD_ACTION
+
+Sent only for V6 transactions. The per-action wire layout is identical to
+`PCZT_ORCHARD_ACTION` — the same packet types in the same order.
+
+Packet sequence:
+
+1. Count packet:
+   - Ironwood action count as CompactSize (must be ≥ 1; count `0` is rejected)
+
+2. For each Ironwood action, in order: same packet sequence as
+   `PCZT_ORCHARD_ACTION` per-action (spend small fields, `zip32_derivation`,
+   output small fields, `enc_ciphertext`, `out_ciphertext`, output metadata).
+
+3. Bundle trailer packet:
+   - `flags u8`
+   - `value_balance` magnitude `u64`
+   - `value_balance` negative-sign flag `u8`
+   - `anchor [u8; 32]` — committed to the Ironwood authorizing-data digest;
+     not included in the txid sighash
+
+The last APDU packet of the bundle trailer carries `P2_PCZT_FINISHED`,
+triggering the device review screen and enabling signing commands.
+
+### Ironwood validation requirements
+
+Ironwood action validation applies the same cryptographic checks as Orchard
+(see above): `rk` recomputation, `cv_net` verification, recipient derivation,
+`nullifier` recomputation, and output note-commitment check for dummy outputs.
