@@ -48,6 +48,33 @@ impl NonIdentityPallasPoint {
         pallas::Point::from_bytes(bytes)
             .and_then(|p| CtOption::new(NonIdentityPallasPoint(p), !p.is_identity()))
     }
+
+    pub(crate) fn from_bytes_ledger(bytes: &[u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
+        let point = ledger_zcash_crypto::nonidentity_pallas_point_from_bytes(bytes)?;
+        let x = pallas::Base::from_repr(point.x);
+        if !bool::from(x.is_some()) {
+            return Err(ledger_zcash_crypto::Error::MalformedPallasBase);
+        }
+        let x = x.unwrap();
+
+        let y = pallas::Base::from_repr(point.y);
+        if !bool::from(y.is_some()) {
+            return Err(ledger_zcash_crypto::Error::MalformedPallasBase);
+        }
+        let y = y.unwrap();
+
+        let affine = pallas::Affine::from_xy(x, y);
+        if !bool::from(affine.is_some()) {
+            return Err(ledger_zcash_crypto::Error::MalformedPallasPoint);
+        }
+
+        let point = pallas::Point::from(affine.unwrap());
+        if bool::from(point.is_identity()) {
+            return Err(ledger_zcash_crypto::Error::MalformedPallasPoint);
+        }
+
+        Ok(NonIdentityPallasPoint(point))
+    }
 }
 
 impl Deref for NonIdentityPallasPoint {
