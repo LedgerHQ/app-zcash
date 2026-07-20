@@ -11,7 +11,7 @@ use zcash_encoding::CompactSize;
 use crate::{
     consts::SIGHASH_ALL,
     parser::{
-        LegacyParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, finalize_and_log_hash, ok,
+        LegacyParserCtx, ParserError, ZCASH_ORCHARD_V5_HASH_PERSONALIZATION, finalize_and_log_hash, ok,
     },
     tx::{SupportedTxVersion, TxInfo},
     utils::{
@@ -311,7 +311,7 @@ fn finalize_signature_hash_from_transparent_digest(
 
     let sapling_digest = empty_digest(ZCASH_SAPLING_HASH_PERSONALIZATION)?;
     let orchard_digest = if tx_info.orchard_digest == [0; 32] {
-        empty_digest(ZCASH_ORCHARD_HASH_PERSONALIZATION)?
+        empty_digest(ZCASH_ORCHARD_V5_HASH_PERSONALIZATION)?
     } else {
         tx_info.orchard_digest
     };

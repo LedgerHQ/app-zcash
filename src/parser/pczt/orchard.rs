@@ -2,6 +2,7 @@ use super::*;
 use crate::tx::TxOutputMemo;
 use alloc::string::ToString;
 use ledger_device_sdk::hash::blake2::Blake2b_256;
+use ::orchard::bundle::BundleVersion;
 
 const ZCASH_MEMO_TEXT_MAX_TAG: u8 = 0xF4;
 const ZCASH_MEMO_EMPTY_TAG: u8 = 0xF6;
@@ -316,8 +317,9 @@ impl PcztParser {
         ctx: &mut PcztParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
-        let flags = ok!(orchard_component::read_flags(&mut *reader));
-        self.current_orchard_flags = flags.to_byte();
+        let bundle_version = BundleVersion::orchard_insecure_v1();
+        let flags = ok!(orchard_component::read_flags(&mut *reader, bundle_version));
+        self.current_orchard_flags = ok!(flags.to_byte(bundle_version).ok_or(()), "invalid Orchard flags");
         debug!("PCZT orchard flags: {:02x}", self.current_orchard_flags);
 
         self.current_orchard_value_sum_magnitude = ok!(reader.read_u64_le());

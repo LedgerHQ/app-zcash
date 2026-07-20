@@ -1,4 +1,4 @@
-use ::orchard::bundle::commitments::ZCASH_ORCHARD_HASH_PERSONALIZATION;
+use ::orchard::bundle::commitments::ZCASH_ORCHARD_V5_HASH_PERSONALIZATION;
 use ledger_device_sdk::hash::HashInit;
 use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::log::debug;
