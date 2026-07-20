@@ -7,6 +7,8 @@ use corez::io::Write;
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
 use ledger_device_sdk::log::{debug, info};
 use zcash_encoding::CompactSize;
+#[cfg(feature = "zcash_unstable")]
+use crate::consts::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
 
 use crate::{
     consts::SIGHASH_ALL,
@@ -259,8 +261,18 @@ fn compute_header_digest(tx_info: &mut TxInfo) -> Result<(), ParserError> {
 
     let mut hasher = Blake2b_256::default();
     ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-    ok!(tx_version.write(&mut hasher.as_writer()));
-    ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    #[cfg(feature = "zcash_unstable")]
+    if tx_info.is_v6 {
+        // V6: tx_version field = 6 | 0x80000000; version_group_id = V6_VERSION_GROUP_ID;
+        // branch_id written from branch_id_raw (not via BranchId enum) — values are identical
+        // when Nu6_3 is in the enum, but using the raw u32 avoids a round-trip through try_from.
+        ok!(hasher.update(&(V6_TX_VERSION | 0x80000000u32).to_le_bytes()));
+        ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
+        ok!(hasher.update(&tx_info.branch_id_raw.to_le_bytes()));
+    } else {
+        ok!(tx_version.write(&mut hasher.as_writer()));
+        ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    }
     ok!(hasher.update(&tx_info.locktime.to_le_bytes()));
     ok!(hasher.update(&tx_info.expiry_height.to_le_bytes()));
     ok!(hasher.finalize(&mut tx_info.header_digest));
@@ -328,6 +340,10 @@ fn finalize_signature_hash_from_transparent_digest(
     ok!(hasher.update(transparent_digest));
     ok!(hasher.update(&sapling_digest));
     ok!(hasher.update(&orchard_digest));
+    #[cfg(feature = "zcash_unstable")]
+    if tx_info.is_v6 {
+        ok!(hasher.update(&tx_info.ironwood_digest));
+    }
     ok!(hasher.finalize(&mut tx_info.signature_digest));
 
     debug!("Signature hash: {}", HexSlice(&tx_info.signature_digest));
