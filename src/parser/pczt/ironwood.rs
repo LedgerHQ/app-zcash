@@ -4,6 +4,7 @@
 //! by Ironwood/NU6.3. Gated on `zcash_unstable` — see Cargo.toml.
 
 use super::*;
+use ::orchard::bundle::BundleVersion;
 use crate::parser::personalization::{
     ZCASH_IRONWOOD_HASH_PERSONALIZATION,
     ZCASH_IRONWOOD_ACTIONS_COMPACT_HASH_PERSONALIZATION,
@@ -13,6 +14,9 @@ use crate::parser::personalization::{
 use crate::tx::TxOutputMemo;
 use alloc::string::ToString;
 use ledger_device_sdk::hash::blake2::Blake2b_256;
+
+const ZCASH_MEMO_TEXT_MAX_TAG: u8 = 0xF4;
+const ZCASH_MEMO_EMPTY_TAG: u8 = 0xF6;
 
 #[cfg(feature = "zcash_unstable")]
 impl PcztParser {
@@ -336,8 +340,8 @@ impl PcztParser {
         ctx: &mut PcztParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
-        let flags = ok!(orchard_component::read_flags(&mut *reader));
-        self.current_ironwood_flags = flags.to_byte();
+        let flags = ok!(orchard_component::read_flags(&mut *reader, BundleVersion::ironwood_v3()));
+        self.current_ironwood_flags = flags.to_byte(BundleVersion::ironwood_v3()).unwrap_or(0);
         debug!("PCZT ironwood flags: {:02x}", self.current_ironwood_flags);
 
         self.current_ironwood_value_sum_magnitude = ok!(reader.read_u64_le());
@@ -1094,7 +1098,7 @@ impl PcztParser {
         );
 
         self.current_ironwood_path = Some(path);
-        self.current_ironwood_fvk = Some(ironwood_fvk);
+        self.current_ironwood_fvk = Some(orchard_fvk);
         self.state = PcztParserState::WaitIronwoodOutput;
 
         Ok(())

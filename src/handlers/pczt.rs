@@ -322,6 +322,7 @@ pub fn handler_pczt_sign_transparent(
     if are_pczt_signatures_done(ctx) {
         info!("All PCZT signatures have been produced");
         ctx.set_finished();
+        ctx.pczt_parser.reset();
     }
 
     Ok(())
@@ -400,6 +401,7 @@ pub fn handler_pczt_sign_orchard(
     if are_pczt_signatures_done(ctx) {
         info!("All PCZT signatures have been produced");
         ctx.set_finished();
+        ctx.pczt_parser.reset();
     }
 
     Ok(())
@@ -472,6 +474,7 @@ pub fn handler_pczt_sign_ironwood(
     if are_pczt_signatures_done(ctx) {
         info!("All PCZT signatures have been produced");
         ctx.set_finished();
+        ctx.pczt_parser.reset();
     }
 
     Ok(())

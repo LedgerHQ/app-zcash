@@ -508,7 +508,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
             | Instruction::PcztSignOrchard { .. }
             | Instruction::PcztInvalid { .. },
             true,
-        ) = (ins, is_error)
+        ) = (&ins, is_error)
         {
             tx_ctx.reset(Default::default());
         }

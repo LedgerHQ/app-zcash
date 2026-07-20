@@ -17,8 +17,8 @@ use ::orchard::bundle::BundleVersion;
 use alloc::string::ToString;
 use ledger_device_sdk::hash::blake2::Blake2b_256;
 
-const ZCASH_MEMO_TEXT_MAX_TAG: u8 = 0xF4;
-const ZCASH_MEMO_EMPTY_TAG: u8 = 0xF6;
+pub(super) const ZCASH_MEMO_TEXT_MAX_TAG: u8 = 0xF4;
+pub(super) const ZCASH_MEMO_EMPTY_TAG: u8 = 0xF6;
 
 impl PcztParser {
     #[inline(never)]
@@ -349,7 +349,15 @@ impl PcztParser {
         ctx: &mut PcztParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
-        // V5 Orchard only; read_flags rejects any flags with bit 2 set before reaching to_byte.
+        // V5 Orchard uses orchard_insecure_v1 (current mainnet, pre-NU6.2).
+        // V6 Orchard uses orchard_v3 (NU6.3, enables cross-address flag bit 2).
+        #[cfg(feature = "zcash_unstable")]
+        let bundle_version = if ctx.tx_info.is_v6 {
+            BundleVersion::orchard_v3()
+        } else {
+            BundleVersion::orchard_insecure_v1()
+        };
+        #[cfg(not(feature = "zcash_unstable"))]
         let bundle_version = BundleVersion::orchard_insecure_v1();
         let flags = ok!(orchard_component::read_flags(&mut *reader, bundle_version));
         self.current_orchard_flags = ok!(

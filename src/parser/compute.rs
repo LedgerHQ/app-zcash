@@ -115,6 +115,8 @@ pub fn tx_id(ctx: &mut LegacyParserCtx<'_>) -> Result<(), ParserError> {
                 HexSlice(&ctx.trusted_input_info.tx_id)
             );
         }
+        #[cfg(feature = "zcash_unstable")]
+        SupportedTxVersion::V6 => unreachable!("V6 transactions use the PCZT path"),
     }
 
     Ok(())
