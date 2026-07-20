@@ -3,6 +3,16 @@
 import struct
 
 import pytest
+from application_client.zcash_command_sender import Errors, ZcashCommandSender
+from application_client.zcash_response_unpacker import (
+    unpack_get_public_key_response,
+    unpack_trusted_input_response,
+)
+from application_client.zcash_utils import write_varint
+from application_client.zcash_verify_sign import (
+    check_tx_v5_signature_validity,
+    nu5_txid_digests,
+)
 from ecdsa.keys import BadSignatureError
 
 from ragger.error import ExceptionRAPDU
@@ -19,6 +29,7 @@ from application_client.zcash_utils import write_varint
 
 NU5_BRANCH_ID = 0xC2D6D0B4
 NU6_2_BRANCH_ID = 0x5437F330
+NU6_3_BRANCH_ID = 0x37A5165B
 
 def extension(cls):
     def wrapper(func):
@@ -206,6 +217,94 @@ def test_sign_tx_v5_nu6_2_trusted_input_and_tx(backend, scenario_navigator: Navi
             public_key,
             signature,
             _with_v5_branch_id(tx_bytes, NU5_BRANCH_ID),
+            input_index=0,
+            input_amounts=[input_amount],
+            sighash_type=sighash_type,
+        )
+
+def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: NavigateWithScenario):
+    locktime = 0
+    expiry = 0
+    sighash_type = 0x01
+    input_amount = 81_630_485
+    send_amount = 81_628_565
+    path = "m/44'/133'/0'/0/1"
+    input_script_pubkey = bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac")
+    output_script_pubkey = bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac")
+
+    prevout_tx_bytes = _build_transparent_tx_v5(
+        locktime=locktime,
+        expiry=expiry,
+        branch_id=NU6_3_BRANCH_ID,
+        inputs=[{
+            "prev_txid": bytes.fromhex("11" * 32),
+            "prev_vout": 0,
+            "script": bytes.fromhex("6a"),
+            "sequence": 0xFFFFFFFF,
+        }],
+        outputs=[{
+            "value": input_amount,
+            "script": input_script_pubkey,
+        }],
+    )
+    prevout_txid = nu5_txid_digests(prevout_tx_bytes)["final_digest"]
+
+    tx_bytes = _build_transparent_tx_v5(
+        locktime=locktime,
+        expiry=expiry,
+        branch_id=NU6_3_BRANCH_ID,
+        inputs=[{
+            "prev_txid": prevout_txid,
+            "prev_vout": 0,
+            "script": input_script_pubkey,
+            "sequence": 0,
+        }],
+        outputs=[{
+            "value": send_amount,
+            "script": output_script_pubkey,
+        }],
+    )
+
+    assert prevout_tx_bytes[8:12] == struct.pack("<I", NU6_3_BRANCH_ID)
+    assert tx_bytes[8:12]         == struct.pack("<I", NU6_3_BRANCH_ID)
+
+    client = ZcashCommandSender(backend)
+
+    trusted_input = client.get_trusted_input(prevout_tx_bytes, 0).data
+    trusted_txid, trusted_input_idx, trusted_amount, _, _ = unpack_trusted_input_response(trusted_input)
+    assert trusted_txid      == prevout_txid
+    assert trusted_input_idx == 0
+    assert trusted_amount    == input_amount
+
+    response = client.get_public_key(path=path).data
+    public_key, _, _ = unpack_get_public_key_response(response)
+
+    with client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input]):
+        scenario_navigator.review_approve()
+
+    resp = client.hash_sign(
+        path=path,
+        locktime=locktime,
+        expiry=expiry,
+        sighash_type=sighash_type,
+    ).data
+    signature = resp[:-1]
+    assert resp[-1] == sighash_type
+
+    assert check_tx_v5_signature_validity(
+        public_key,
+        signature,
+        tx_bytes,
+        input_index=0,
+        input_amounts=[input_amount],
+        sighash_type=sighash_type,
+    )
+
+    with pytest.raises(BadSignatureError):
+        check_tx_v5_signature_validity(
+            public_key,
+            signature,
+            _with_v5_branch_id(tx_bytes, NU6_2_BRANCH_ID),
             input_index=0,
             input_amounts=[input_amount],
             sighash_type=sighash_type,
