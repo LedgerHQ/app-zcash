@@ -2049,7 +2049,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orchard"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "aes",
  "bitvec",
@@ -3516,26 +3516,12 @@ dependencies = [
  "ledger_zcash_crypto",
  "num_enum",
  "orchard",
- "zcash_address 0.13.0",
+ "zcash_address",
  "zcash_encoding",
  "zcash_primitives",
- "zcash_protocol 0.10.0",
+ "zcash_protocol",
  "zcash_transparent",
  "zeroize",
-]
-
-[[package]]
-name = "zcash_address"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58342d0aaa8e2fa98849636f52800ac4bf020574c944c974742fc933db58cac2"
-dependencies = [
- "bech32",
- "bs58",
- "corez",
- "f4jumble",
- "zcash_encoding",
- "zcash_protocol 0.9.0",
 ]
 
 [[package]]
@@ -3549,7 +3535,7 @@ dependencies = [
  "corez",
  "f4jumble",
  "zcash_encoding",
- "zcash_protocol 0.10.0",
+ "zcash_protocol",
 ]
 
 [[package]]
@@ -3578,9 +3564,9 @@ dependencies = [
 
 [[package]]
 name = "zcash_primitives"
-version = "0.28.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c69e07f5eb3f682a6467b4b08ee4956f1acd1e886d70b21c4766953b3a1beba2"
+checksum = "bdbeccc05bfe63b6dee9e989c6ff5027421741562a4853c36504dd621f6a81b1"
 dependencies = [
  "blake2b_simd",
  "block-buffer 0.11.0-rc.3",
@@ -3600,20 +3586,9 @@ dependencies = [
  "sha2 0.10.9",
  "zcash_encoding",
  "zcash_note_encryption",
- "zcash_protocol 0.9.0",
+ "zcash_protocol",
  "zcash_script",
  "zcash_transparent",
-]
-
-[[package]]
-name = "zcash_protocol"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bec496a0bd62dae98c4b26f51c5dab112d0c5350bbc2ccfdfd05bb3454f714d"
-dependencies = [
- "corez",
- "hex",
- "zcash_encoding",
 ]
 
 [[package]]
@@ -3655,9 +3630,9 @@ dependencies = [
 
 [[package]]
 name = "zcash_transparent"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15df1908b428d4edeb7c7caae5692e05e2e92e5c38007a40b20ac098efdffd96"
+checksum = "72e0f8c142bed366ed5886dcfa8772ec90b5420cc127e6cdb76b6744c53a287b"
 dependencies = [
  "bip32",
  "bs58",
@@ -3668,9 +3643,9 @@ dependencies = [
  "ripemd 0.1.3",
  "sha2 0.10.9",
  "subtle",
- "zcash_address 0.12.0",
+ "zcash_address",
  "zcash_encoding",
- "zcash_protocol 0.9.0",
+ "zcash_protocol",
  "zcash_script",
  "zcash_spec",
  "zip32",
