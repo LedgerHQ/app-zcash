@@ -62,6 +62,15 @@ impl PcztParser {
                 .tx_non_compact_hasher
                 .init_with_perso(ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION));
 
+            // V6: switch bundle-level personalization; action-level strings are unchanged.
+            #[cfg(feature = "zcash_unstable")]
+            if ctx.tx_info.is_v6 {
+                ok!(ctx
+                    .hashers
+                    .orchard_hasher
+                    .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION_V6));
+            }
+
             self.state = PcztParserState::WaitOrchardAction;
         }
 
@@ -1044,7 +1053,13 @@ impl PcztParser {
             .hashers
             .orchard_hasher
             .update(&self.orchard_value_balance.to_le_bytes()));
+        // V6: anchor goes to the authorizing-data digest, not the sighash.
+        #[cfg(not(feature = "zcash_unstable"))]
         ok!(ctx.hashers.orchard_hasher.update(anchor));
+        #[cfg(feature = "zcash_unstable")]
+        if !ctx.tx_info.is_v6 {
+            ok!(ctx.hashers.orchard_hasher.update(anchor));
+        }
         ok!(ctx
             .hashers
             .orchard_hasher

@@ -20,6 +20,8 @@ use zcash_protocol::consensus::{BranchId, NetworkType};
 use zcash_protocol::constants::{V5_TX_VERSION, V5_VERSION_GROUP_ID};
 #[cfg(feature = "zcash_unstable")]
 use crate::consts::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
+#[cfg(feature = "zcash_unstable")]
+use crate::parser::personalization::{ZCASH_ORCHARD_HASH_PERSONALIZATION_V6};
 use zcash_protocol::value::Zatoshis;
 use zcash_transparent::bundle::OutPoint;
 
