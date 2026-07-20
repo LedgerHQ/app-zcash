@@ -47,40 +47,11 @@ impl<T: SigType> TryFrom<[u8; 32]> for SigningKey<T> {
 }
 
 impl SigningKey<SpendAuth> {
-    /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
-    pub fn try_from_ledger_signing_key(
-        ask: ledger_zcash_crypto::redpallas::SpendAuthSigningKey,
-    ) -> Result<Self, ledger_zcash_crypto::Error> {
-        Ok(SigningKey(reddsa::SigningKey::try_from_ledger_signing_key(
-            ask,
-        )?))
-    }
-
     /// Randomizes this signing key with the given `randomizer`.
     ///
     /// Randomization is only supported for `SpendAuth` keys.
     pub fn randomize(&self, randomizer: &pallas::Scalar) -> Self {
         SigningKey(self.0.randomize(randomizer))
-    }
-
-    /// Randomizes this signing key with the given `randomizer`, deriving the
-    /// randomized verification key using Ledger SDK Pallas primitives.
-    ///
-    /// Randomization is only supported for `SpendAuth` keys.
-    pub fn randomize_ledger(
-        &self,
-        randomizer: &pallas::Scalar,
-    ) -> Result<Self, ledger_zcash_crypto::Error> {
-        self.0.randomize_ledger(randomizer).map(SigningKey)
-    }
-
-    /// Creates a SpendAuth signature using Ledger SDK RedPallas primitives.
-    pub fn sign_ledger<R: RngCore + CryptoRng>(
-        &self,
-        rng: R,
-        msg: &[u8],
-    ) -> Result<Signature<SpendAuth>, ledger_zcash_crypto::Error> {
-        self.0.sign_ledger(rng, msg).map(Signature)
     }
 }
 
