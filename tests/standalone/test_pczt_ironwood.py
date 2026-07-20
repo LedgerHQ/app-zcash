@@ -250,7 +250,7 @@ def test_pczt_ironwood_user_rejection(
 def test_pczt_ironwood_zero_actions_rejected(
     backend,
 ):
-    """Ironwood bundle with action_count == 0 is rejected; state machine does not advance (BC-7)."""
+    """An Ironwood bundle with zero actions is rejected before the state machine advances."""
     client = ZcashCommandSender(backend)
 
     empty_ironwood = PcztIronwoodBundle(
@@ -276,7 +276,7 @@ def test_pczt_v5_finished_marker_regression(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """V5 Orchard PCZT with P2=FINISHED on INS_PCZT_ORCHARD_ACTION still works (BC-1)."""
+    """V5 Orchard PCZT with the FINISHED flag set on the last action chunk still produces a valid signature."""
     v5_global = PcztGlobal()
 
     client = ZcashCommandSender(backend)
@@ -298,7 +298,7 @@ def test_pczt_v6_orchard_anchor_exclusion_regression(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """V6: Orchard anchor is excluded from the sighash — changing it must not change the sig (BC-4).
+    """V6: the Orchard anchor is excluded from the sighash — changing its value must not alter the signature.
 
     Two V6 migration PCZTs with identical fields but different Orchard anchors must produce
     the same Orchard spendAuthSig. If the anchor were included in the Orchard digest the
@@ -327,5 +327,5 @@ def test_pczt_v6_orchard_anchor_exclusion_regression(
 
     assert sig_a == sig_b, (
         "Orchard spendAuthSig changed when Orchard anchor changed — "
-        f"anchor is included in V6 sighash (BC-4 regression): {sig_a.hex()} != {sig_b.hex()}"
+        f"Orchard anchor incorrectly included in V6 sighash: {sig_a.hex()} != {sig_b.hex()}"
     )

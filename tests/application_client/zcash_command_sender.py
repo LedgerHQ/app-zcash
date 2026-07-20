@@ -945,22 +945,22 @@ class ZcashCommandSender:
             self.pczt_transparent_outputs,
         )
 
-        if orchard_bundle is None:
-            orchard_bundle = PcztOrchardBundle(
-                actions=[],
-                flags=0,
-                value_balance=0,
-                anchor=bytes(32),
-            )
-
         if ironwood_bundle is None:
+            if orchard_bundle is None:
+                orchard_bundle = PcztOrchardBundle(
+                    actions=[],
+                    flags=0,
+                    value_balance=0,
+                    anchor=bytes(32),
+                )
             with self._send_pczt_orchard_actions(
                 orchard_bundle,
                 pczt_finished=True,
             ) as response:
                 yield response
         else:
-            self._send_pczt_orchard_actions_sync(orchard_bundle)
+            if orchard_bundle is not None:
+                self._send_pczt_orchard_actions_sync(orchard_bundle)
             with self._send_pczt_ironwood_actions(
                 ironwood_bundle,
                 pczt_finished=True,
