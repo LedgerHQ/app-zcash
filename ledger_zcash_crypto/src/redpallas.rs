@@ -410,7 +410,7 @@ fn reduce_uniform_le_bytes_mod_pallas_order(uniform_le: &[u8; 64]) -> Result<[u8
     Ok(reduced_bytes_le)
 }
 
-fn point_from_sdk_point(point: &EcPoint) -> Result<pallas::Point, Error> {
+pub(crate) fn point_from_sdk_point(point: &EcPoint) -> Result<pallas::Point, Error> {
     let mut x_be = [0u8; 32];
     let mut y_be = [0u8; 32];
     point.export(&mut x_be, &mut y_be)?;
@@ -440,7 +440,7 @@ struct ProjectivePointLayout {
     z: pallas::Base,
 }
 
-fn projective_point(x: pallas::Base, y: pallas::Base, z: pallas::Base) -> pallas::Point {
+pub(crate) fn projective_point(x: pallas::Base, y: pallas::Base, z: pallas::Base) -> pallas::Point {
     debug_assert_eq!(
         core::mem::size_of::<ProjectivePointLayout>(),
         core::mem::size_of::<pallas::Point>(),
@@ -456,7 +456,7 @@ fn projective_point(x: pallas::Base, y: pallas::Base, z: pallas::Base) -> pallas
     unsafe { core::mem::transmute(ProjectivePointLayout { x, y, z }) }
 }
 
-fn base_from_canonical_repr_unchecked(repr: [u8; 32]) -> pallas::Base {
+pub(crate) fn base_from_canonical_repr_unchecked(repr: [u8; 32]) -> pallas::Base {
     let repr_u64x4 = repr_to_u64x4(&repr);
     let (modulus, r2, inv) = pallas_montgomery_params(CurveDomainParam::Field);
     let wide = mul_u64x4(&repr_u64x4, &r2);
