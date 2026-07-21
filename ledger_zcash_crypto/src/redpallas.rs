@@ -218,19 +218,26 @@ pub fn spendauth_randomized_signing_key(
     let scalar_bytes_be = canonical_scalar_bytes_be(&scalar_bytes_le)?;
     let randomizer_bytes_be = canonical_scalar_bytes_be(&randomizer_bytes_le)?;
 
-    let scalar = Bn::alloc_init(&scalar_bytes_be)?;
-    let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
-    let mut order = Bn::alloc(32)?;
-    CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
+    // Scope the Bn objects so they are freed before calling spendauth_signing_key.
+    // Without this block, scalar/randomizer/order/randomized remain alive across
+    // the tail call, which pushes the concurrent Bn count past the SDK pool limit
+    // and causes Bn::alloc inside spendauth_signing_key to return CxError.
+    let randomized_bytes_le = {
+        let scalar = Bn::alloc_init(&scalar_bytes_be)?;
+        let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
+        let mut order = Bn::alloc(32)?;
+        CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
-    let randomized = Bn::alloc(32)?;
-    randomized.mod_add(&scalar, &randomizer, &order)?;
+        let randomized = Bn::alloc(32)?;
+        randomized.mod_add(&scalar, &randomizer, &order)?;
 
-    let mut randomized_bytes_be = [0u8; 32];
-    randomized.export(&mut randomized_bytes_be)?;
+        let mut randomized_bytes_be = [0u8; 32];
+        randomized.export(&mut randomized_bytes_be)?;
 
-    let mut randomized_bytes_le = [0u8; 32];
-    reverse_copy(&mut randomized_bytes_le, &randomized_bytes_be);
+        let mut randomized_bytes_le = [0u8; 32];
+        reverse_copy(&mut randomized_bytes_le, &randomized_bytes_be);
+        randomized_bytes_le
+    };
 
     spendauth_signing_key(randomized_bytes_le)
 }
