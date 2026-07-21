@@ -405,30 +405,35 @@ impl PcztParser {
         Ok(value.into_u64())
     }
 
+    /// Accumulates a large ciphertext field across multiple APDU packets.
+    ///
+    /// Uses `pool_field_bytes`, a buffer shared with `read_large_ironwood_vec`. This is
+    /// safe because the state machine ensures only one pool is being parsed at a time, and
+    /// each successful read drains the buffer via `mem::take`.
     fn read_large_orchard_vec(
         &mut self,
         reader: &mut ByteReader<'_>,
         size: usize,
     ) -> Result<Option<Vec<u8>>, ParserError> {
-        let missing = size.saturating_sub(self.orchard_field_bytes.len());
+        let missing = size.saturating_sub(self.pool_field_bytes.len());
 
         if missing > 0 {
             let to_read = cmp::min(missing, reader.remaining_len());
             if to_read == 0 {
                 debug!(
                     "Need more PCZT orchard Vec bytes, currently read: {}",
-                    self.orchard_field_bytes.len()
+                    self.pool_field_bytes.len()
                 );
                 return Ok(None);
             }
 
-            let offset = self.orchard_field_bytes.len();
-            self.orchard_field_bytes.resize(offset + to_read, 0);
-            ok!(reader.read_exact(&mut self.orchard_field_bytes[offset..]));
+            let offset = self.pool_field_bytes.len();
+            self.pool_field_bytes.resize(offset + to_read, 0);
+            ok!(reader.read_exact(&mut self.pool_field_bytes[offset..]));
         }
 
-        if self.orchard_field_bytes.len() == size {
-            Ok(Some(mem::take(&mut self.orchard_field_bytes)))
+        if self.pool_field_bytes.len() == size {
+            Ok(Some(mem::take(&mut self.pool_field_bytes)))
         } else {
             Ok(None)
         }
@@ -468,7 +473,7 @@ impl PcztParser {
         self.current_orchard_flags = 0;
         self.current_orchard_value_sum_magnitude = 0;
         self.reset_current_orchard_action();
-        self.orchard_field_bytes.clear();
+        self.pool_field_bytes.clear();
     }
 
     fn finish_orchard_enc_ciphertext(
@@ -1268,6 +1273,10 @@ impl PcztParser {
             .get_mut(action_index)
             .ok_or_else(|| ParserError::from_str("Bad PCZT orchard action index"))?;
 
+        if action.signed {
+            return Err(ParserError::from_str("PCZT orchard action already signed"));
+        }
+
         action.signed = true;
 
         self.orchard_signed_action_count = self.orchard_signed_action_count.saturating_add(1);
@@ -1290,7 +1299,12 @@ impl PcztParser {
         debug!("PCZT orchard actions hashing done");
 
         self.state = PcztParserState::OrchardActionsDone;
-        // For V6, defer the user review to Ironwood finalization so the fee includes both pools.
+        // For V6, defer the user review to Ironwood finalization so that the fee display
+        // includes both the Orchard and Ironwood value balances (review_outputs sums them).
+        // Invariant: every V6 (NU6.3) transaction has an Ironwood bundle, so finalize_ironwood_actions
+        // is always called after this point and will invoke review_outputs. A V6 PCZT without an
+        // Ironwood bundle would leave outputs_reviewed = false, permanently blocking signing — this
+        // is the correct fail-closed behavior for an out-of-spec transaction.
         #[cfg(feature = "zcash_unstable")]
         if ctx.tx_info.is_v6 {
             return Ok(());

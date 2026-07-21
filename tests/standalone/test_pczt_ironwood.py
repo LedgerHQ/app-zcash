@@ -103,6 +103,16 @@ def _valid_ironwood_bundle(anchor: bytes = bytes(32)) -> PcztIronwoodBundle:
     )
 
 
+def _valid_ironwood_bundle_2_actions() -> PcztIronwoodBundle:
+    """Two-action Ironwood bundle for replay-guard tests that must not reset on first sign."""
+    return PcztIronwoodBundle(
+        actions=[_valid_ironwood_action(), _valid_ironwood_action()],
+        flags=3,
+        value_balance=600000,
+        anchor=bytes(32),
+    )
+
+
 def _valid_orchard_action() -> PcztOrchardAction:
     return PcztOrchardAction(
         cv_net=_CV_NET,
@@ -414,3 +424,84 @@ def test_pczt_ironwood_sign_replay_rejected(
         client.pczt_sign_ironwood(action_index=0)
 
     assert e.value.status == Errors.SW_DENY
+
+
+def test_pczt_ironwood_sign_replay_in_session_rejected(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """In-session SIGN_IRONWOOD replay (before all actions are signed) is rejected by the guard.
+
+    Uses a 2-action bundle so the parser is not reset after the first sign.  The second
+    call for action 0 must be caught by the action.signed guard inside
+    ensure_signature_digest_for_ironwood, not by a parser-reset check.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
+        ironwood_bundle=_valid_ironwood_bundle_2_actions(),
+    ):
+        _review_approve(
+            scenario_navigator, "test_pczt_ironwood_sign_replay_in_session_rejected"
+        )
+
+    # First sign of action 0 succeeds; parser is NOT reset (action 1 still pending).
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+    # Replay of action 0 must be caught by the action.signed guard.
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.pczt_sign_ironwood(action_index=0)
+
+    assert e.value.status == Errors.SW_DENY
+
+
+# Expected Ironwood spendAuthSig for a V6 Ironwood-only PCZT on a freshly started Speculos
+# session (deterministic RNG, same seed as other tests).  Constant regardless of the Ironwood
+# anchor because NU6.3 excludes the anchor from the sighash.
+#
+# TODO: populate this constant from a reference Speculos run before merging:
+#   pytest tests/standalone/ --device nanox -k test_pczt_v6_ironwood_anchor_exclusion_a -s
+# Copy the hex from the "got:" line in the assertion failure.
+_EXPECTED_V6_IRONWOOD_SIG = bytes(64)  # placeholder — replace with actual reference value
+
+
+@pytest.mark.parametrize(
+    "anchor,test_name",
+    [
+        (bytes(32), "test_pczt_v6_ironwood_anchor_exclusion_a"),
+        (bytes([0xFF]) + bytes(31), "test_pczt_v6_ironwood_anchor_exclusion_b"),
+    ],
+    ids=["anchor_a", "anchor_b"],
+)
+def test_pczt_v6_ironwood_anchor_exclusion_regression(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    anchor: bytes,
+    test_name: str,
+):
+    """V6: Ironwood anchor excluded from sighash — changing it must not alter the signature.
+
+    Each parametrised invocation runs in its own Speculos session (fresh deterministic RNG).
+    If the Ironwood anchor were included in the V6 sighash the signature would differ from
+    _EXPECTED_V6_IRONWOOD_SIG; if correctly excluded both anchors produce the same signature.
+    """
+    client = ZcashCommandSender(backend)
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=_valid_ironwood_bundle(anchor=anchor),
+    ):
+        _review_approve(scenario_navigator, test_name)
+    ironwood_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert ironwood_sig == _EXPECTED_V6_IRONWOOD_SIG, (
+        "Ironwood spendAuthSig changed when Ironwood anchor changed — "
+        f"Ironwood anchor incorrectly included in V6 sighash.\n"
+        f"anchor={anchor.hex()}\n"
+        f"got:  {ironwood_sig.hex()}\n"
+        f"want: {_EXPECTED_V6_IRONWOOD_SIG.hex()}"
+    )

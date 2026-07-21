@@ -322,7 +322,7 @@ pub struct PcztParser {
     #[cfg(feature = "zcash_unstable")]
     current_ironwood_fvk: Option<OrchardFvk>,
     script_bytes: Vec<u8>,
-    orchard_field_bytes: Vec<u8>,
+    pool_field_bytes: Vec<u8>,
 }
 
 impl PcztParser {
@@ -555,7 +555,7 @@ impl PcztParser {
             #[cfg(feature = "zcash_unstable")]
             current_ironwood_fvk: None,
             script_bytes: Vec::new(),
-            orchard_field_bytes: Vec::new(),
+            pool_field_bytes: Vec::new(),
         }
     }
 
