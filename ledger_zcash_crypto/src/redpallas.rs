@@ -536,9 +536,8 @@ mod tests {
         name: "randomize_matches_scalar_sum",
         f: || {
             // 5 + 7 = 12, all far below the field order => (a + r) mod q == a + r.
-            let randomized =
-                spendauth_randomized_signing_key(scalar_from_u8(5), scalar_from_u8(7))
-                    .map_err(|_| ())?;
+            let randomized = spendauth_randomized_signing_key(scalar_from_u8(5), scalar_from_u8(7))
+                .map_err(|_| ())?;
             let expected = spendauth_signing_key(scalar_from_u8(12)).map_err(|_| ())?;
             if !signing_keys_eq(&randomized, &expected) {
                 return Err(());
