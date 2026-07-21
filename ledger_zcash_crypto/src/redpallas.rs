@@ -480,3 +480,88 @@ fn encode_pallas_point_bytes(x_be: &[u8; 32], sign: u32) -> [u8; 32] {
     x_le[31] |= ((sign & 1) as u8) << 7;
     x_le
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ledger_device_sdk::testing::TestType;
+
+    /// Little-endian scalar encoding of a small `u8` value.
+    fn scalar_from_u8(n: u8) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        bytes
+    }
+
+    /// A full-width, non-trivial scalar guaranteed to be canonical: the most
+    /// significant little-endian byte is left at 0, so the value is < 2^248,
+    /// well below the Pallas scalar-field order.
+    fn wide_canonical_scalar(seed: u8) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        let mut i = 0;
+        while i < 31 {
+            bytes[i] = seed.wrapping_add(i as u8) | 1;
+            i += 1;
+        }
+        bytes
+    }
+
+    fn signing_keys_eq(a: &SpendAuthSigningKey, b: &SpendAuthSigningKey) -> bool {
+        <[u8; 32]>::from(a) == <[u8; 32]>::from(b)
+            && a.verification_key_bytes() == b.verification_key_bytes()
+    }
+
+    /// Randomizing with a zero randomizer must yield exactly the plain signing
+    /// key derived from the same scalar.
+    #[test_case]
+    const RANDOMIZE_WITH_ZERO_IS_IDENTITY: TestType = TestType {
+        modname: module_path!(),
+        name: "randomize_with_zero_is_identity",
+        f: || {
+            let scalar = scalar_from_u8(9);
+            let randomized = spendauth_randomized_signing_key(scalar, [0u8; 32]).map_err(|_| ())?;
+            let plain = spendauth_signing_key(scalar).map_err(|_| ())?;
+            if !signing_keys_eq(&randomized, &plain) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// `(scalar + randomizer)` with small operands stays below the field order,
+    /// so the randomized key must equal the signing key of the plain sum.
+    #[test_case]
+    const RANDOMIZE_MATCHES_SCALAR_SUM: TestType = TestType {
+        modname: module_path!(),
+        name: "randomize_matches_scalar_sum",
+        f: || {
+            // 5 + 7 = 12, all far below the field order => (a + r) mod q == a + r.
+            let randomized =
+                spendauth_randomized_signing_key(scalar_from_u8(5), scalar_from_u8(7))
+                    .map_err(|_| ())?;
+            let expected = spendauth_signing_key(scalar_from_u8(12)).map_err(|_| ())?;
+            if !signing_keys_eq(&randomized, &expected) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// Regression test for the Bn allocator exhaustion fix: with full-width
+    /// scalars the temporary `Bn` values allocated while computing the
+    /// randomized scalar must be freed before the tail call to
+    /// `spendauth_signing_key`. Otherwise the concurrent `Bn` count exceeds the
+    /// SDK pool limit and `Bn::alloc` inside `spendauth_signing_key` fails with
+    /// `CxError`, which surfaces here as an `Err`.
+    #[test_case]
+    const RANDOMIZE_WIDE_SCALARS_DOES_NOT_EXHAUST_BN_POOL: TestType = TestType {
+        modname: module_path!(),
+        name: "randomize_wide_scalars_does_not_exhaust_bn_pool",
+        f: || {
+            let scalar = wide_canonical_scalar(0x11);
+            let randomizer = wide_canonical_scalar(0x42);
+            spendauth_randomized_signing_key(scalar, randomizer).map_err(|_| ())?;
+            Ok(())
+        },
+    };
+}
