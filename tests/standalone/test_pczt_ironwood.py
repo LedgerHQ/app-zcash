@@ -10,9 +10,14 @@ from application_client.pczt import (
     PcztTransparentOutput,
 )
 from application_client.zcash_command_sender import (
+    CLA,
     Errors,
+    InsType,
+    P1,
+    P2,
     ZcashCommandSender,
 )
+from application_client.zcash_utils import write_varint
 from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
@@ -359,3 +364,53 @@ def test_pczt_v6_orchard_anchor_exclusion_regression(
         f"got:  {orchard_sig.hex()}\n"
         f"want: {_EXPECTED_V6_ORCHARD_SIG.hex()}"
     )
+
+
+def test_pczt_ironwood_before_orchard_rejected(backend):
+    """IRONWOOD_ACTION sent before Orchard completes is rejected with BadState.
+
+    After PCZT_HEADER the parser is in WaitTransparentInput, not OrchardActionsDone.
+    Sending PCZT_IRONWOOD_ACTION at that point must return SW_BAD_STATE, ensuring
+    the host cannot skip the mandatory Orchard step in the V6 command sequence.
+    """
+    client = ZcashCommandSender(backend)
+    client._send_pczt_header(PCZT_V6_GLOBAL)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_IRONWOOD_ACTION,
+            p1=P1.P1_FIRST,
+            p2=P2.P2_NONE,
+            data=write_varint(1),
+        )
+
+    assert e.value.status == Errors.SW_BAD_STATE
+
+
+def test_pczt_ironwood_sign_replay_rejected(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A second SIGN_IRONWOOD for the same action after completion is rejected.
+
+    After all Ironwood signatures are produced the parser is reset; a replay
+    of SIGN_IRONWOOD must be rejected rather than producing a second signature.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=_valid_ironwood_bundle(),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_sign_replay_rejected")
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.pczt_sign_ironwood(action_index=0)
+
+    assert e.value.status == Errors.SW_DENY
