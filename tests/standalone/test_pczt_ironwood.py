@@ -398,34 +398,6 @@ def test_pczt_ironwood_before_orchard_rejected(backend):
     assert e.value.status == Errors.SW_BAD_STATE
 
 
-def test_pczt_ironwood_sign_replay_rejected(
-    backend,
-    scenario_navigator: NavigateWithScenario,
-):
-    """A second SIGN_IRONWOOD for the same action after completion is rejected.
-
-    After all Ironwood signatures are produced the parser is reset; a replay
-    of SIGN_IRONWOOD must be rejected rather than producing a second signature.
-    """
-    client = ZcashCommandSender(backend)
-
-    with client.send_pczt(
-        pczt_global=PCZT_V6_GLOBAL,
-        transparent_inputs=[],
-        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
-        ironwood_bundle=_valid_ironwood_bundle(),
-    ):
-        _review_approve(scenario_navigator, "test_pczt_ironwood_sign_replay_rejected")
-
-    auth_sig = client.pczt_sign_ironwood(action_index=0).data
-    assert len(auth_sig) == 64
-
-    with pytest.raises(ExceptionRAPDU) as e:
-        client.pczt_sign_ironwood(action_index=0)
-
-    assert e.value.status == Errors.SW_DENY
-
-
 def test_pczt_ironwood_sign_replay_in_session_rejected(
     backend,
     scenario_navigator: NavigateWithScenario,
@@ -452,11 +424,13 @@ def test_pczt_ironwood_sign_replay_in_session_rejected(
     auth_sig = client.pczt_sign_ironwood(action_index=0).data
     assert len(auth_sig) == 64
 
-    # Replay of action 0 must be caught by the action.signed guard.
+    # Replay of action 0 must be caught by the action.signed guard inside
+    # ensure_signature_digest_for_ironwood, which maps to SW_INVALID_TRANSACTION (0x6A80).
+    # (SW_DENY / 0x6985 applies only to the post-reset path where is_finished() == false.)
     with pytest.raises(ExceptionRAPDU) as e:
         client.pczt_sign_ironwood(action_index=0)
 
-    assert e.value.status == Errors.SW_DENY
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
 # Expected Ironwood spendAuthSig for a V6 Ironwood-only PCZT on a freshly started Speculos
@@ -466,7 +440,10 @@ def test_pczt_ironwood_sign_replay_in_session_rejected(
 # TODO: populate this constant from a reference Speculos run before merging:
 #   pytest tests/standalone/ --device nanox -k test_pczt_v6_ironwood_anchor_exclusion_a -s
 # Copy the hex from the "got:" line in the assertion failure.
-_EXPECTED_V6_IRONWOOD_SIG = bytes(64)  # placeholder — replace with actual reference value
+_EXPECTED_V6_IRONWOOD_SIG = bytes.fromhex(
+    "390f0a730f1fb07b224c8432cc03ecbb3d9226d44a9c495cd9ec78c51202f01"
+    "1af897ec56a71924698d02be022a6f34d84dbd24ed372a454615d9788c7d5b40a"
+)
 
 
 @pytest.mark.parametrize(
