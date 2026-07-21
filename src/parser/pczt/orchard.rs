@@ -317,6 +317,7 @@ impl PcztParser {
         ctx: &mut PcztParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
+        // V5 Orchard only; read_flags rejects any flags with bit 2 set before reaching to_byte.
         let bundle_version = BundleVersion::orchard_insecure_v1();
         let flags = ok!(orchard_component::read_flags(&mut *reader, bundle_version));
         self.current_orchard_flags = ok!(flags.to_byte(bundle_version).ok_or(()), "invalid Orchard flags");

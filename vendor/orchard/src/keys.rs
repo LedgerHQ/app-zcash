@@ -166,8 +166,10 @@ impl SpendAuthorizingKey {
     /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let ask = Self::ledger_derive_inner(sk)?;
+        // ask != 0 is guaranteed by SpendingKey::ledger_from_bytes; this asserts the invariant.
         assert!(!bool::from(ask.is_zero()));
         let ask_bytes = ask.to_repr();
+        // ask is a non-zero Pallas scalar, so spendauth_signing_key always succeeds.
         let signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(ask_bytes)
             .expect("ledger_zcash_crypto spend-auth signing key derivation should succeed");
 
