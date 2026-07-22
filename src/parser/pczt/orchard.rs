@@ -493,11 +493,15 @@ impl PcztParser {
         let note_ciphertext = self.current_orchard_note_ciphertext(out_ciphertext)?;
 
         self.verify_current_orchard_cv_net()?;
-        let orchard_fvk = self
-            .current_orchard_fvk
-            .as_ref()
-            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
-        self.verify_current_orchard_spend_nullifier(orchard_fvk)?;
+        // Dummy spends (spend_value == 0) use a throwaway key; recipient membership
+        // and nullifier checks only apply to real spends the device will sign.
+        if self.current_orchard_spend_value != 0 {
+            let orchard_fvk = self
+                .current_orchard_fvk
+                .as_ref()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+            self.verify_current_orchard_spend_nullifier(orchard_fvk)?;
+        }
         self.validate_current_orchard_output(ctx, &note_ciphertext)?;
 
         self.orchard_spend_value_sum = self
