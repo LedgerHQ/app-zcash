@@ -1,4 +1,4 @@
-use orchard::keys::{SpendAuthorizingKey as OrchardAsk, SpendingKey as OrchardSk};
+use orchard::keys::SpendingKey as OrchardSk;
 use zcash_protocol::consensus::NetworkType;
 
 use ledger_device_sdk::ecc::Pallas;
@@ -10,6 +10,7 @@ use crate::utils::extended_public_key::ExtendedPublicKey;
 use crate::{AppSW, utils::bip32_path::Bip32Path};
 
 pub use orchard::keys::FullViewingKey as OrchardFvk;
+pub use orchard::keys::SpendAuthorizingKey as OrchardAsk;
 
 pub fn map_ledger_crypto_error(err: ledger_zcash_crypto::Error) -> AppSW {
     match err {
@@ -78,4 +79,17 @@ pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
     info!("Orchard FVK: {}", HexSlice(&orchard_fvk.to_bytes()));
 
     Ok(orchard_fvk)
+}
+
+// Derives both FVK and ASK from a single zip32_orchard_derive call.
+// Use instead of calling derive_orchard_fvk + derive_orchard_ask separately,
+// as two consecutive zip32_orchard_derive calls exhaust the BN pool.
+pub fn derive_orchard_fvk_and_ask(
+    path: &Bip32Path,
+) -> Result<(OrchardFvk, OrchardAsk), AppSW> {
+    let sk = derive_orchard_sk(path)?;
+    let fvk = OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
+    info!("Orchard FVK: {}", HexSlice(&fvk.to_bytes()));
+    let ask = OrchardAsk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
+    Ok((fvk, ask))
 }

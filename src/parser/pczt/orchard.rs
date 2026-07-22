@@ -942,7 +942,7 @@ impl PcztParser {
         Ok(())
     }
 
-    fn verify_current_orchard_rk(&self, path: &Bip32Path) -> Result<(), ParserError> {
+    fn verify_current_orchard_rk(&self, ask: &OrchardAsk) -> Result<(), ParserError> {
         let alpha = self
             .current_orchard_alpha
             .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
@@ -950,7 +950,6 @@ impl PcztParser {
         let alpha = ledger_zcash_crypto::pallas_scalar_from_repr(alpha)
             .map_err(|_| ParserError::from_str("Bad PCZT orchard alpha"))?;
 
-        let ask = ok!(derive_orchard_ask(path));
         let randomized_ask = ask
             .randomize_ledger(&alpha)
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
@@ -1067,11 +1066,18 @@ impl PcztParser {
             self.orchard_action_parsed_count, path
         );
 
-        let orchard_fvk = ok!(derive_orchard_fvk(&path));
-        // Dummy spends (spend_value == 0) use a throwaway key unrelated to the device seed;
-        // rk verification only applies to real spends the device will sign.
-        if self.current_orchard_spend_value != 0 {
-            self.verify_current_orchard_rk(&path)?;
+        // For real spends, derive FVK and ASK from a single SK derivation.
+        // Calling zip32_orchard_derive separately for FVK and ASK exhausts the BN pool,
+        // so both are derived from the same OrchardSk here.
+        let (orchard_fvk, ask_for_rk) = if self.current_orchard_spend_value != 0 {
+            let (fvk, ask) = ok!(derive_orchard_fvk_and_ask(&path));
+            (fvk, Some(ask))
+        } else {
+            // Dummy spend: throwaway key, rk check skipped.
+            (ok!(derive_orchard_fvk(&path)), None)
+        };
+        if let Some(ref ask) = ask_for_rk {
+            self.verify_current_orchard_rk(ask)?;
         }
         let network = orchard_network(&path);
         ctx.tx_info.orchard_decipher_keys =

@@ -48,7 +48,7 @@ use crate::utils::{
     extended_public_key::ExtendedPublicKey,
     hashers::ToHash160,
 };
-use crate::zip32::{OrchardFvk, derive_orchard_ask, derive_orchard_fvk, orchard_network};
+use crate::zip32::{OrchardAsk, OrchardFvk, derive_orchard_fvk, derive_orchard_fvk_and_ask, orchard_network};
 
 use super::reader::{ByteReader, ReadBytesExt};
 use super::{ParserError, finalize_and_log_hash, ok};
