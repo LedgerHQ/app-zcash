@@ -11,7 +11,8 @@ use zcash_encoding::CompactSize;
 use crate::{
     consts::SIGHASH_ALL,
     parser::{
-        LegacyParserCtx, ParserError, ZCASH_ORCHARD_V5_HASH_PERSONALIZATION, finalize_and_log_hash, ok,
+        LegacyParserCtx, ParserError, ZCASH_ORCHARD_V5_HASH_PERSONALIZATION, finalize_and_log_hash,
+        ok,
     },
     tx::{SupportedTxVersion, TxInfo},
     utils::{
