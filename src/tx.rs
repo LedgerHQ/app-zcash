@@ -18,7 +18,7 @@ use crate::parser::personalization::{
 };
 use crate::parser::{LegacyOutputParser, LegacyParser, LegacyParserMode, PcztParser};
 use crate::utils::blake2b_256_pers::Blake2b256Personalization as _;
-use orchard::bundle::commitments::ZCASH_ORCHARD_HASH_PERSONALIZATION;
+use orchard::bundle::commitments::ZCASH_ORCHARD_V5_HASH_PERSONALIZATION;
 
 #[derive(Default)]
 pub struct Hashers {
@@ -55,7 +55,7 @@ impl Hashers {
         self.sapling_hasher
             .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION)?;
         self.orchard_hasher
-            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION)?;
+            .init_with_perso(ZCASH_ORCHARD_V5_HASH_PERSONALIZATION)?;
 
         Ok(())
     }
