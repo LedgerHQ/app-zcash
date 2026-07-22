@@ -1064,7 +1064,11 @@ impl PcztParser {
         );
 
         let orchard_fvk = ok!(derive_orchard_fvk(&path));
-        self.verify_current_orchard_rk(&path)?;
+        // Dummy spends (spend_value == 0) use a throwaway key unrelated to the device seed;
+        // rk verification only applies to real spends the device will sign.
+        if self.current_orchard_spend_value != 0 {
+            self.verify_current_orchard_rk(&path)?;
+        }
         let network = orchard_network(&path);
         ctx.tx_info.orchard_decipher_keys =
             Some(ok!(OrchardDecipherKeys::from_fvk(&orchard_fvk, network)));
