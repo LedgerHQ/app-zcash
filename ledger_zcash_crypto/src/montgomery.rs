@@ -45,22 +45,12 @@ const PALLAS_SCALAR_R2_U64X4: [u64; 4] = [
 // Montgomery -n^{-1} mod 2^64 derived from the low limb of the scalar modulus.
 const PALLAS_SCALAR_INV: u64 = 0x8c46eb20ffffffff;
 
-#[cfg(feature = "montgomery_fallback")]
 pub(crate) fn repr_to_montgomery_u64x4(
     repr: &[u8; 32],
     modulus_param: CurveDomainParam,
     malformed_error: Error,
 ) -> Result<[u64; 4], Error> {
     repr_to_montgomery_u64x4_pasta(repr, modulus_param, malformed_error)
-}
-
-#[cfg(not(feature = "montgomery_fallback"))]
-pub(crate) fn repr_to_montgomery_u64x4(
-    repr: &[u8; 32],
-    modulus_param: CurveDomainParam,
-    malformed_error: Error,
-) -> Result<[u64; 4], Error> {
-    repr_to_montgomery_u64x4_ledger_sdk(repr, modulus_param, malformed_error)
 }
 
 pub(crate) fn byte_to_fp(bytes: &[u64; 4]) -> Fp {
@@ -175,6 +165,7 @@ pub(crate) fn montgomery_reduce_u64x8(limbs: [u64; 8], modulus: [u64; 4], inv: u
 }
 
 #[cfg(not(feature = "montgomery_fallback"))]
+#[allow(dead_code)]
 fn repr_to_montgomery_u64x4_ledger_sdk(
     repr: &[u8; 32],
     modulus_param: CurveDomainParam,
@@ -206,7 +197,6 @@ fn repr_to_montgomery_u64x4_ledger_sdk(
     Ok(repr_to_u64x4(&mont_le))
 }
 
-#[cfg(feature = "montgomery_fallback")]
 fn repr_to_montgomery_u64x4_pasta(
     repr: &[u8; 32],
     modulus_param: CurveDomainParam,
@@ -253,10 +243,13 @@ fn mac_u64(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
 // NOTE: These tests can only be run manually by calling test functions from device code.
 #[cfg(test)]
 mod tests {
-    use super::{repr_to_montgomery_u64x4_ledger_sdk, repr_to_montgomery_u64x4_pasta};
+    #[cfg(not(feature = "montgomery_fallback"))]
+    use super::repr_to_montgomery_u64x4_ledger_sdk;
+    use super::repr_to_montgomery_u64x4_pasta;
     use crate::Error;
     use ledger_device_sdk::ecc::math::CurveDomainParam;
 
+    #[cfg(not(feature = "montgomery_fallback"))]
     #[test]
     fn test_repr_to_montgomery_u64x4() {
         let mut repr = [0u8; 32];
