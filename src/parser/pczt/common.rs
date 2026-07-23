@@ -37,10 +37,14 @@ impl PcztParser {
 
         if !is_v5 {
             #[cfg(not(feature = "zcash_unstable"))]
-            return Err(ParserError::from_str("Unsupported PCZT transaction version"));
+            return Err(ParserError::from_str(
+                "Unsupported PCZT transaction version",
+            ));
             #[cfg(feature = "zcash_unstable")]
             if !is_v6 {
-                return Err(ParserError::from_str("Unsupported PCZT transaction version"));
+                return Err(ParserError::from_str(
+                    "Unsupported PCZT transaction version",
+                ));
             }
         }
 
@@ -119,7 +123,11 @@ impl PcztParser {
 
         debug!(
             "PCZT fees: {}, transparent_input_total={}, transparent_output_total={}, orchard_value_balance={}, ironwood_value_balance={}",
-            fees, ctx.tx_info.total_amount, self.total_output_amount, self.orchard_value_balance, ironwood_vb
+            fees,
+            ctx.tx_info.total_amount,
+            self.total_output_amount,
+            self.orchard_value_balance,
+            ironwood_vb
         );
 
         // In the case of internal transfers between pools (for example, transparent -> Orchard or Orchard -> transparent),

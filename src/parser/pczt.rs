@@ -6,6 +6,10 @@ use ::orchard::bundle::commitments::{
 use alloc::{format, string::ToString, vec::Vec};
 use core::{cmp, mem};
 
+#[cfg(feature = "zcash_unstable")]
+use crate::consts::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
+#[cfg(feature = "zcash_unstable")]
+use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use ::orchard::keys::Scope as OrchardScope;
 use ::orchard::note::TransmittedNoteCiphertext;
 use corez::io::Read;
@@ -18,22 +22,17 @@ use zcash_primitives::transaction::TxVersion;
 use zcash_primitives::transaction::components::orchard as orchard_component;
 use zcash_protocol::consensus::{BranchId, NetworkType};
 use zcash_protocol::constants::{V5_TX_VERSION, V5_VERSION_GROUP_ID};
-#[cfg(feature = "zcash_unstable")]
-use crate::consts::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
-#[cfg(feature = "zcash_unstable")]
-use crate::parser::personalization::{ZCASH_ORCHARD_HASH_PERSONALIZATION_V6};
 use zcash_protocol::value::Zatoshis;
 use zcash_transparent::bundle::OutPoint;
 
 use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
-use crate::consts::{
-    MAX_PCZT_ORCHARD_ACTIONS_NUMBER,
-    MAX_PCZT_TRANSPARENT_INPUTS_NUMBER, MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER,
-    MAX_SCRIPT_SIZE, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
-};
 #[cfg(feature = "zcash_unstable")]
 use crate::consts::MAX_PCZT_IRONWOOD_ACTIONS_NUMBER;
+use crate::consts::{
+    MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
+    MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
+};
 use crate::parser::ORCHARD_MEMO_SIZE;
 use crate::parser::compute::{
     compute_shielded_signature_digest, compute_transparent_input_signature_digest,
@@ -626,9 +625,13 @@ impl PcztParser {
         ) || self.state.is_orchard_state()
             || {
                 #[cfg(feature = "zcash_unstable")]
-                { self.state.is_ironwood_state() }
+                {
+                    self.state.is_ironwood_state()
+                }
                 #[cfg(not(feature = "zcash_unstable"))]
-                { false }
+                {
+                    false
+                }
             }
     }
 
@@ -637,9 +640,13 @@ impl PcztParser {
             || self.state.is_orchard_state()
             || {
                 #[cfg(feature = "zcash_unstable")]
-                { self.state.is_ironwood_state() }
+                {
+                    self.state.is_ironwood_state()
+                }
                 #[cfg(not(feature = "zcash_unstable"))]
-                { false }
+                {
+                    false
+                }
             }
     }
 
@@ -662,8 +669,8 @@ impl PcztParser {
     pub fn is_ready_to_sign(&self) -> bool {
         let orchard_done = !self.has_orchard_bundle || self.is_orchard_actions_finished();
         #[cfg(feature = "zcash_unstable")]
-        let ironwood_done = !self.is_v6_tx || !self.has_ironwood_bundle
-            || self.is_ironwood_actions_finished();
+        let ironwood_done =
+            !self.is_v6_tx || !self.has_ironwood_bundle || self.is_ironwood_actions_finished();
         #[cfg(not(feature = "zcash_unstable"))]
         let ironwood_done = true;
         orchard_done && ironwood_done && self.outputs_reviewed

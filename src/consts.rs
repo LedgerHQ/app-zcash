@@ -115,5 +115,3 @@ pub const OVERWINTERED_FLAG: u32 = 0x8000_0000;
 pub const V6_TX_VERSION: u32 = 6;
 #[cfg(feature = "zcash_unstable")]
 pub const V6_VERSION_GROUP_ID: u32 = 0xD884B698;
-#[cfg(feature = "zcash_unstable")]
-pub const NU6_3_BRANCH_ID: u32 = 0x37A5165B;

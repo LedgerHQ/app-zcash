@@ -67,7 +67,11 @@ use crate::consts::{
     P2_PCZT_CONTINUE, P2_PCZT_FINISHED, P2ShieldedAddrMode, P2VkMode,
 };
 #[cfg(feature = "zcash_unstable")]
-use crate::consts::{INS_PCZT_IRONWOOD_ACTION, INS_PCZT_SIGN_IRONWOOD, MAX_PCZT_IRONWOOD_ACTIONS_NUMBER};
+use crate::consts::{
+    INS_PCZT_IRONWOOD_ACTION, INS_PCZT_SIGN_IRONWOOD, MAX_PCZT_IRONWOOD_ACTIONS_NUMBER,
+};
+#[cfg(feature = "zcash_unstable")]
+use crate::handlers::pczt::{handler_pczt_ironwood_action, handler_pczt_sign_ironwood};
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
     consts::{
@@ -88,8 +92,6 @@ use crate::{
     },
     settings::Settings,
 };
-#[cfg(feature = "zcash_unstable")]
-use crate::handlers::pczt::{handler_pczt_ironwood_action, handler_pczt_sign_ironwood};
 
 // Required for using String, Vec, format!...
 extern crate alloc;
@@ -314,9 +316,7 @@ impl TryFrom<ApduHeader> for Instruction {
                 })
             }
             #[cfg(feature = "zcash_unstable")]
-            (INS_PCZT_SIGN_IRONWOOD, 0, p2)
-                if (p2 as usize) < MAX_PCZT_IRONWOOD_ACTIONS_NUMBER =>
-            {
+            (INS_PCZT_SIGN_IRONWOOD, 0, p2) if (p2 as usize) < MAX_PCZT_IRONWOOD_ACTIONS_NUMBER => {
                 Ok(Instruction::PcztSignIronwood {
                     action_index: p2 as usize,
                 })

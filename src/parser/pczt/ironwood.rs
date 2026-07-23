@@ -4,14 +4,13 @@
 //! by Ironwood/NU6.3. Gated on `zcash_unstable` — see Cargo.toml.
 
 use super::*;
-use ::orchard::bundle::BundleVersion;
 use crate::parser::personalization::{
-    ZCASH_IRONWOOD_HASH_PERSONALIZATION,
     ZCASH_IRONWOOD_ACTIONS_COMPACT_HASH_PERSONALIZATION,
     ZCASH_IRONWOOD_ACTIONS_MEMOS_HASH_PERSONALIZATION,
-    ZCASH_IRONWOOD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION,
+    ZCASH_IRONWOOD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION, ZCASH_IRONWOOD_HASH_PERSONALIZATION,
 };
 use crate::tx::TxOutputMemo;
+use ::orchard::bundle::BundleVersion;
 use alloc::string::ToString;
 use ledger_device_sdk::hash::blake2::Blake2b_256;
 
@@ -43,7 +42,9 @@ impl PcztParser {
         self.pczt_finished = false;
 
         if action_count == 0 {
-            return Err(ParserError::from_str("Ironwood bundle with zero actions is invalid"));
+            return Err(ParserError::from_str(
+                "Ironwood bundle with zero actions is invalid",
+            ));
         }
 
         self.has_ironwood_bundle = true;
@@ -335,8 +336,14 @@ impl PcztParser {
         ctx: &mut PcztParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
-        let flags = ok!(orchard_component::read_flags(&mut *reader, BundleVersion::ironwood_v3()));
-        self.current_ironwood_flags = flags.to_byte(BundleVersion::ironwood_v3()).unwrap_or(0);
+        let flags = ok!(orchard_component::read_flags(
+            &mut *reader,
+            BundleVersion::ironwood_v3()
+        ));
+        self.current_ironwood_flags = ok!(
+            flags.to_byte(BundleVersion::ironwood_v3()).ok_or(()),
+            "invalid Ironwood flags"
+        );
         debug!("PCZT ironwood flags: {:02x}", self.current_ironwood_flags);
 
         self.current_ironwood_value_sum_magnitude = ok!(reader.read_u64_le());
@@ -951,7 +958,10 @@ impl PcztParser {
             _ => return Err(ParserError::from_str("Bad PCZT ironwood value_sum sign")),
         };
 
-        debug!("PCZT ironwood value balance: {}", self.ironwood_value_balance);
+        debug!(
+            "PCZT ironwood value balance: {}",
+            self.ironwood_value_balance
+        );
 
         let expected_value_balance =
             i128::from(self.ironwood_spend_value_sum) - i128::from(self.ironwood_output_value_sum);
@@ -1194,7 +1204,10 @@ impl PcztParser {
             || self.ironwood_signed_action_count >= self.ironwood_signature_count()
     }
 
-    fn finalize_ironwood_actions(&mut self, ctx: &mut PcztParserCtx<'_>) -> Result<(), ParserError> {
+    fn finalize_ironwood_actions(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+    ) -> Result<(), ParserError> {
         debug!("PCZT ironwood actions hashing done");
 
         self.state = PcztParserState::IronwoodActionsDone;

@@ -1,3 +1,5 @@
+#[cfg(feature = "zcash_unstable")]
+use crate::consts::{OVERWINTERED_FLAG, V6_TX_VERSION, V6_VERSION_GROUP_ID};
 use crate::parser::personalization::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
@@ -7,8 +9,6 @@ use corez::io::Write;
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
 use ledger_device_sdk::log::{debug, info};
 use zcash_encoding::CompactSize;
-#[cfg(feature = "zcash_unstable")]
-use crate::consts::{OVERWINTERED_FLAG, V6_TX_VERSION, V6_VERSION_GROUP_ID};
 
 use crate::{
     consts::SIGHASH_ALL,
