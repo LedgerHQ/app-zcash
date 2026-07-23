@@ -804,6 +804,8 @@ impl PcztParser {
             return Err(ParserError::from_str("Multiple change outputs detected"));
         }
 
+        // Ironwood reuses the Orchard UA receiver typecode (0x03) — ZIP 229 §4.2 defines no
+        // distinct typecode for Ironwood; addresses are encoded identically to Orchard receivers.
         let address =
             UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(output.raw_address)])
                 .map(|address| address.encode(&network))
