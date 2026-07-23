@@ -38,12 +38,10 @@ pub const ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION: &[u8; 16] = b"Zcash___Tx
 pub const ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrAmountsHash";
 pub const ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrScriptsHash";
 
-// --- NU6.3 / V6 personalizations (gated until NU6.3 is ratified) ---
+// --- NU6.3 / V6 personalizations ---
 //
 // Verified against ZIP 229 §4.6 (l.342-346) and the vendored `orchard` 0.15.0
-// (`src/bundle/commitments.rs`) at PR #28 review 2026-07-21; all seven strings are
-// byte-identical. Re-verify against the ratified ZIP 229 text before enabling
-// `zcash_unstable` in any Mainnet-activation build (block 3 428 143, 2026-07-28).
+// (`src/bundle/commitments.rs`); all seven strings are byte-identical.
 
 /// Ironwood bundle digest personalizations per ZIP 229 §4.6 (l.342-346).
 #[cfg(feature = "zcash_unstable")]

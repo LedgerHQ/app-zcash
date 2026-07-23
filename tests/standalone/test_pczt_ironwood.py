@@ -686,3 +686,26 @@ def test_pczt_ironwood_max_actions_exceeded_rejected(backend):
         ):
             pass
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+@pytest.mark.skip(
+    reason="Requires a Pallas-valid (rk, alpha) pair where rk is deliberately wrong — "
+           "needs Pallas group arithmetic unavailable in this test harness. "
+           "Rejection verified by code inspection: ironwood.rs verify_current_ironwood_rk() "
+           "recomputes rk = SpendAuthorizationKey(path).randomize(alpha) and returns an error "
+           "on mismatch before any signature is produced."
+)
+def test_pczt_ironwood_rk_mismatch_rejected(backend):
+    pass
+
+
+@pytest.mark.skip(
+    reason="Requires constructing a bundle whose per-action spend_value or output_value sum "
+           "exceeds i64::MAX (9223372036854775807) with a matching cv_net — needs Pallas "
+           "commitment arithmetic unavailable in this test harness. "
+           "Rejection verified by code inspection: ironwood.rs finish_current_ironwood_action() "
+           "uses checked_add on the running sums (spend/output), and the value balance magnitude "
+           "is cast via i64::try_from() which errors on overflow."
+)
+def test_pczt_ironwood_value_sum_overflow_rejected(backend):
+    pass

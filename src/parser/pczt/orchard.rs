@@ -150,11 +150,6 @@ impl PcztParser {
 
         let mut alpha = [0u8; 32];
         ok!(reader.read_exact(&mut alpha));
-        debug!(
-            "PCZT orchard action #{} alpha: {}",
-            self.orchard_action_parsed_count,
-            HexSlice(&alpha)
-        );
         self.current_orchard_alpha = Some(alpha);
 
         Self::ensure_orchard_apdu_group_end(reader)?;
@@ -463,6 +458,9 @@ impl PcztParser {
     pub(super) fn reset_orchard_bundle_state(&mut self, action_count: usize) {
         self.orchard_action_count = action_count;
         self.orchard_action_parsed_count = 0;
+        for record in self.orchard_signing_records.iter_mut() {
+            record.alpha = [0u8; 32];
+        }
         self.orchard_signing_records.clear();
         self.orchard_signed_action_count = 0;
         self.orchard_real_spend_count = 0;
@@ -1278,6 +1276,7 @@ impl PcztParser {
         }
 
         action.signed = true;
+        action.alpha = [0u8; 32];
 
         self.orchard_signed_action_count = self.orchard_signed_action_count.saturating_add(1);
 

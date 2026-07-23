@@ -148,11 +148,6 @@ impl PcztParser {
 
         let mut alpha = [0u8; 32];
         ok!(reader.read_exact(&mut alpha));
-        debug!(
-            "PCZT ironwood action #{} alpha: {}",
-            self.ironwood_action_parsed_count,
-            HexSlice(&alpha)
-        );
         self.current_ironwood_alpha = Some(alpha);
 
         Self::ensure_ironwood_apdu_group_end(reader)?;
@@ -442,6 +437,9 @@ impl PcztParser {
     pub(super) fn reset_ironwood_bundle_state(&mut self, action_count: usize) {
         self.ironwood_action_count = action_count;
         self.ironwood_action_parsed_count = 0;
+        for record in self.ironwood_signing_records.iter_mut() {
+            record.alpha = [0u8; 32];
+        }
         self.ironwood_signing_records.clear();
         self.ironwood_signed_action_count = 0;
         self.ironwood_signature_digest = None;
@@ -1182,6 +1180,7 @@ impl PcztParser {
         }
 
         action.signed = true;
+        action.alpha = [0u8; 32];
 
         self.ironwood_signed_action_count = self.ironwood_signed_action_count.saturating_add(1);
 
