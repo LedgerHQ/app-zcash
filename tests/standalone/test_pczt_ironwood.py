@@ -434,12 +434,9 @@ def test_pczt_ironwood_sign_replay_in_session_rejected(
 
 
 # Expected Ironwood spendAuthSig for a V6 Ironwood-only PCZT on a freshly started Speculos
-# session (deterministic RNG, same seed as other tests).  Constant regardless of the Ironwood
-# anchor because NU6.3 excludes the anchor from the sighash.
-#
-# TODO: populate this constant from a reference Speculos run before merging:
-#   pytest tests/standalone/ --device nanox -k test_pczt_v6_ironwood_anchor_exclusion_a -s
-# Copy the hex from the "got:" line in the assertion failure.
+# session (deterministic RNG starting point, Speculos default seed).  Constant regardless of
+# the Ironwood anchor because NU6.3 excludes the anchor from the sighash — only the
+# authorising-data digest includes it, not the sighash.
 _EXPECTED_V6_IRONWOOD_SIG = bytes.fromhex(
     "390f0a730f1fb07b224c8432cc03ecbb3d9226d44a9c495cd9ec78c51202f01"
     "1af897ec56a71924698d02be022a6f34d84dbd24ed372a454615d9788c7d5b40a"
@@ -482,3 +479,210 @@ def test_pczt_v6_ironwood_anchor_exclusion_regression(
         f"got:  {ironwood_sig.hex()}\n"
         f"want: {_EXPECTED_V6_IRONWOOD_SIG.hex()}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Negative / malicious-input tests for the Ironwood validation paths (F3+F4)
+# ---------------------------------------------------------------------------
+
+
+def test_pczt_ironwood_cv_net_mismatch_rejected(backend):
+    """Ironwood action with a cv_net that does not match Commitment(rcv, spend_value-output_value) is rejected.
+
+    The device recomputes cv_net from the provided rcv and value fields; if it differs from the
+    transmitted cv_net the transaction is rejected with SW_INVALID_TRANSACTION.
+    """
+    client = ZcashCommandSender(backend)
+    bad_bundle = PcztIronwoodBundle(
+        actions=[
+            PcztIronwoodAction(
+                cv_net=bytes(32),  # wrong: all-zero, doesn't match Commitment(_RCV, 300000)
+                nullifier=_NULLIFIER,
+                spend_recipient=_SPEND_RECIPIENT,
+                spend_rho=_SPEND_RHO,
+                spend_rseed=_SPEND_RSEED,
+                rk=_RK_ALPHA_1,
+                alpha=_ALPHA,
+                signing_path=_SIGNING_PATH,
+                cmx=_CMX,
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(580),
+                out_ciphertext=bytes(80),
+                rcv=_RCV,
+                rseed=_RSEED,
+                spend_value=300000,
+                value=0,
+                recipient=_INTERNAL_RECIPIENT,
+            )
+        ],
+        flags=3,
+        value_balance=300000,
+        anchor=bytes(32),
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            ironwood_bundle=bad_bundle,
+        ):
+            pass  # device rejects synchronously during action parsing, before review
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_ironwood_nullifier_mismatch_rejected(backend):
+    """Ironwood action with a nullifier that doesn't match NullifierDerive(fvk, spend_note) is rejected.
+
+    The device derives the expected nullifier from the spend note fields and the signing key's FVK.
+    """
+    client = ZcashCommandSender(backend)
+    bad_bundle = PcztIronwoodBundle(
+        actions=[
+            PcztIronwoodAction(
+                cv_net=_CV_NET,
+                nullifier=bytes(32),  # wrong: all-zero, doesn't match the derived nullifier
+                spend_recipient=_SPEND_RECIPIENT,
+                spend_rho=_SPEND_RHO,
+                spend_rseed=_SPEND_RSEED,
+                rk=_RK_ALPHA_1,
+                alpha=_ALPHA,
+                signing_path=_SIGNING_PATH,
+                cmx=_CMX,
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(580),
+                out_ciphertext=bytes(80),
+                rcv=_RCV,
+                rseed=_RSEED,
+                spend_value=300000,
+                value=0,
+                recipient=_INTERNAL_RECIPIENT,
+            )
+        ],
+        flags=3,
+        value_balance=300000,
+        anchor=bytes(32),
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            ironwood_bundle=bad_bundle,
+        ):
+            pass
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_ironwood_wrong_enc_ciphertext_length_rejected(backend):
+    """Ironwood action with enc_ciphertext length != 580 is rejected before action parsing completes.
+
+    The device enforces ORCHARD_ENC_CIPHERTEXT_SIZE = 580; any other length returns SW_INVALID_TRANSACTION.
+    """
+    client = ZcashCommandSender(backend)
+    bad_bundle = PcztIronwoodBundle(
+        actions=[
+            PcztIronwoodAction(
+                cv_net=_CV_NET,
+                nullifier=_NULLIFIER,
+                spend_recipient=_SPEND_RECIPIENT,
+                spend_rho=_SPEND_RHO,
+                spend_rseed=_SPEND_RSEED,
+                rk=_RK_ALPHA_1,
+                alpha=_ALPHA,
+                signing_path=_SIGNING_PATH,
+                cmx=_CMX,
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(500),  # wrong: 500 != 580
+                out_ciphertext=bytes(80),
+                rcv=_RCV,
+                rseed=_RSEED,
+                spend_value=300000,
+                value=0,
+                recipient=_INTERNAL_RECIPIENT,
+            )
+        ],
+        flags=3,
+        value_balance=300000,
+        anchor=bytes(32),
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            ironwood_bundle=bad_bundle,
+        ):
+            pass
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_ironwood_wrong_out_ciphertext_length_rejected(backend):
+    """Ironwood action with out_ciphertext length != 80 is rejected before action parsing completes.
+
+    The device enforces ORCHARD_OUT_CIPHERTEXT_SIZE = 80; any other length returns SW_INVALID_TRANSACTION.
+    """
+    client = ZcashCommandSender(backend)
+    bad_bundle = PcztIronwoodBundle(
+        actions=[
+            PcztIronwoodAction(
+                cv_net=_CV_NET,
+                nullifier=_NULLIFIER,
+                spend_recipient=_SPEND_RECIPIENT,
+                spend_rho=_SPEND_RHO,
+                spend_rseed=_SPEND_RSEED,
+                rk=_RK_ALPHA_1,
+                alpha=_ALPHA,
+                signing_path=_SIGNING_PATH,
+                cmx=_CMX,
+                ephemeral_key=bytes(32),
+                enc_ciphertext=bytes(580),
+                out_ciphertext=bytes(50),  # wrong: 50 != 80
+                rcv=_RCV,
+                rseed=_RSEED,
+                spend_value=300000,
+                value=0,
+                recipient=_INTERNAL_RECIPIENT,
+            )
+        ],
+        flags=3,
+        value_balance=300000,
+        anchor=bytes(32),
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            ironwood_bundle=bad_bundle,
+        ):
+            pass
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_ironwood_max_actions_exceeded_rejected(backend):
+    """An Ironwood bundle with 11 actions (> MAX_PCZT_IRONWOOD_ACTIONS_NUMBER = 10) is rejected.
+
+    The device checks the action count immediately on the header packet; 11 actions returns
+    SW_INVALID_TRANSACTION before any action field is parsed.
+    """
+    client = ZcashCommandSender(backend)
+    oversize_bundle = PcztIronwoodBundle(
+        actions=[_valid_ironwood_action()] * 11,
+        flags=3,
+        value_balance=300000 * 11,
+        anchor=bytes(32),
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            ironwood_bundle=oversize_bundle,
+        ):
+            pass
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
