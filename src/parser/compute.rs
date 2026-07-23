@@ -8,7 +8,7 @@ use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256
 use ledger_device_sdk::log::{debug, info};
 use zcash_encoding::CompactSize;
 #[cfg(feature = "zcash_unstable")]
-use crate::consts::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
+use crate::consts::{OVERWINTERED_FLAG, V6_TX_VERSION, V6_VERSION_GROUP_ID};
 
 use crate::{
     consts::SIGHASH_ALL,
@@ -265,7 +265,7 @@ fn compute_header_digest(tx_info: &mut TxInfo) -> Result<(), ParserError> {
     ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
     #[cfg(feature = "zcash_unstable")]
     if tx_info.is_v6 {
-        ok!(hasher.update(&(V6_TX_VERSION | 0x80000000u32).to_le_bytes()));
+        ok!(hasher.update(&(V6_TX_VERSION | OVERWINTERED_FLAG).to_le_bytes()));
         ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
         ok!(hasher.update(&tx_info.branch_id_raw.to_le_bytes()));
     } else {

@@ -108,6 +108,9 @@ impl TryFrom<u8> for P2ShieldedAddrMode {
 }
 
 // NU6.3 / V6 transaction constants — gated until ratification (zcash_protocol 0.10.0)
+// The overwintered flag (bit 31) is ORed into the transaction version in the header digest
+// per ZIP-244 §T.1 and ZIP-229 §4.6.
+pub const OVERWINTERED_FLAG: u32 = 0x8000_0000;
 #[cfg(feature = "zcash_unstable")]
 pub const V6_TX_VERSION: u32 = 6;
 #[cfg(feature = "zcash_unstable")]
