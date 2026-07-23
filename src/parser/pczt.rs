@@ -28,10 +28,12 @@ use zcash_transparent::bundle::OutPoint;
 use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
 use crate::consts::{
-    MAX_PCZT_IRONWOOD_ACTIONS_NUMBER, MAX_PCZT_ORCHARD_ACTIONS_NUMBER,
+    MAX_PCZT_ORCHARD_ACTIONS_NUMBER,
     MAX_PCZT_TRANSPARENT_INPUTS_NUMBER, MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER,
     MAX_SCRIPT_SIZE, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
 };
+#[cfg(feature = "zcash_unstable")]
+use crate::consts::MAX_PCZT_IRONWOOD_ACTIONS_NUMBER;
 use crate::parser::ORCHARD_MEMO_SIZE;
 use crate::parser::compute::{
     compute_shielded_signature_digest, compute_transparent_input_signature_digest,
@@ -62,6 +64,7 @@ use super::reader::{ByteReader, ReadBytesExt};
 use super::{ParserError, finalize_and_log_hash, ok};
 
 mod common;
+#[cfg(feature = "zcash_unstable")]
 mod ironwood;
 mod orchard;
 mod transparent;
