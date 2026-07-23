@@ -210,8 +210,8 @@ def _assert_pczt_orchard_sign_digest(
         sig.hex() for sig in expected_auth_sigs
     ], [sig.hex() for sig in auth_sigs]
 
-    for input_index, (txin, transparent_sig) in enumerate(
-        zip(transparent_inputs, transparent_sigs)
+    for input_index, (_txin, transparent_sig) in enumerate(
+        zip(transparent_inputs, transparent_sigs, strict=True)
     ):
         assert check_tx_v5_signature_validity(
             transparent_public_keys[input_index],

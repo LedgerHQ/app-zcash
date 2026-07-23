@@ -11,10 +11,10 @@ from application_client.pczt import (
 )
 from application_client.zcash_command_sender import (
     CLA,
-    Errors,
-    InsType,
     P1,
     P2,
+    Errors,
+    InsType,
     ZcashCommandSender,
 )
 from application_client.zcash_utils import write_varint
