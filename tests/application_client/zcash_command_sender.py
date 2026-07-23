@@ -626,7 +626,6 @@ class ZcashCommandSender:
 
         return packets
 
-
     def _build_pczt_ironwood_action_packets(
         self,
         ironwood_bundle: PcztIronwoodBundle,
@@ -841,7 +840,6 @@ class ZcashCommandSender:
         ) as response:
             yield response
 
-
     @contextmanager
     def _send_pczt_ironwood_actions(
         self,
@@ -912,7 +910,6 @@ class ZcashCommandSender:
             p2=action_index,
             data=b"",
         )
-
 
     def pczt_sign_ironwood(
         self,

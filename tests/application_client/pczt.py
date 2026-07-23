@@ -77,6 +77,7 @@ class PcztOrchardBundle:
     value_balance: int
     anchor: bytes
 
+
 @dataclass
 class PcztIronwoodAction:  # pylint: disable=too-many-instance-attributes
     cv_net: bytes
