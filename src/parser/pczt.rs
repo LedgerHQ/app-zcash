@@ -198,6 +198,7 @@ pub struct PcztParserCtx<'ctx> {
 }
 
 /// Ironwood signing records share the same layout as Orchard — alias for correct naming.
+#[cfg(feature = "zcash_unstable")]
 type PcztIronwoodActionSigningRecord = PcztOrchardActionSigningRecord;
 
 pub struct PcztParser {
@@ -264,8 +265,10 @@ pub struct PcztParser {
     // Derivation path the cached spending key belongs to, used to reject a
     // second Orchard action declaring a different path.
     orchard_spending_key_path: Option<Bip32Path>,
+    #[cfg(feature = "zcash_unstable")]
     is_v6_tx: bool,
     has_orchard_bundle: bool,
+    #[cfg(feature = "zcash_unstable")]
     has_ironwood_bundle: bool,
     #[cfg(feature = "zcash_unstable")]
     ironwood_action_count: usize,
@@ -497,8 +500,10 @@ impl PcztParser {
             current_orchard_fvk: None,
             orchard_spending_key: None,
             orchard_spending_key_path: None,
+            #[cfg(feature = "zcash_unstable")]
             is_v6_tx: false,
             has_orchard_bundle: false,
+            #[cfg(feature = "zcash_unstable")]
             has_ironwood_bundle: false,
             #[cfg(feature = "zcash_unstable")]
             ironwood_action_count: 0,

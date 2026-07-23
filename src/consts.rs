@@ -24,6 +24,7 @@ pub const MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER: usize = 10;
 // Limit the number of PCZT orchard actions due to device memory constraints.
 pub const MAX_PCZT_ORCHARD_ACTIONS_NUMBER: usize = 10;
 // Limit the number of PCZT ironwood actions due to device memory constraints.
+#[cfg(feature = "zcash_unstable")]
 pub const MAX_PCZT_IRONWOOD_ACTIONS_NUMBER: usize = 10;
 
 pub const ZCASH_CLA: u8 = 0xE0;
@@ -42,7 +43,9 @@ pub const INS_PCZT_TRANSPARENT_OUTPUT: u8 = 0x54;
 pub const INS_PCZT_SIGN_TRANSPARENT: u8 = 0x55;
 pub const INS_PCZT_ORCHARD_ACTION: u8 = 0x56;
 pub const INS_PCZT_SIGN_ORCHARD: u8 = 0x57;
+#[cfg(feature = "zcash_unstable")]
 pub const INS_PCZT_IRONWOOD_ACTION: u8 = 0x58;
+#[cfg(feature = "zcash_unstable")]
 pub const INS_PCZT_SIGN_IRONWOOD: u8 = 0x59;
 
 pub const P1_FIRST: u8 = 0x00;
@@ -110,6 +113,7 @@ impl TryFrom<u8> for P2ShieldedAddrMode {
 // NU6.3 / V6 transaction constants — gated until ratification (zcash_protocol 0.10.0)
 // The overwintered flag (bit 31) is ORed into the transaction version in the header digest
 // per ZIP-244 §T.1 and ZIP-229 §4.6.
+#[cfg(feature = "zcash_unstable")]
 pub const OVERWINTERED_FLAG: u32 = 0x8000_0000;
 #[cfg(feature = "zcash_unstable")]
 pub const V6_TX_VERSION: u32 = 6;

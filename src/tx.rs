@@ -41,6 +41,7 @@ pub struct Hashers {
     // Legacy V4 txid is SHA256d over the V4-encoded transaction bytes.
     pub v4_tx_hasher: Sha2_256,
 
+    #[cfg(feature = "zcash_unstable")]
     pub ironwood_hasher: Blake2b_256,
 }
 
@@ -181,8 +182,11 @@ pub struct TxInfo {
     pub orchard_digest: [u8; 32],
     pub signature_digest: [u8; 32],
 
+    #[cfg(feature = "zcash_unstable")]
     pub ironwood_digest: [u8; 32],
+    #[cfg(feature = "zcash_unstable")]
     pub is_v6: bool,
+    #[cfg(feature = "zcash_unstable")]
     pub has_ironwood_bundle: bool,
     pub branch_id_raw: u32,
 
