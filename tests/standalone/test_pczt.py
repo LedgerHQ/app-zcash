@@ -144,8 +144,16 @@ def _sign_all_orchard_actions(
     client: ZcashCommandSender,
     orchard_bundle: PcztOrchardBundle,
 ) -> list[bytes]:
+    # The device produces a spend-auth signature only for real spends. Dummy
+    # padding spends (spend_value == 0) are signed host-side and never counted
+    # by the device, which completes the signing session as soon as every real
+    # spend is signed. Requesting a device signature for a dummy therefore races
+    # the device's post-completion UI transition, so the host (DMK) skips them —
+    # this mirrors that contract.
     auth_sigs = []
-    for action_index in range(len(orchard_bundle.actions)):
+    for action_index, action in enumerate(orchard_bundle.actions):
+        if action.spend_value == 0:
+            continue
         auth_sig = client.pczt_sign_orchard(action_index=action_index).data
         assert len(auth_sig) == 64
         auth_sigs.append(auth_sig)
@@ -1083,7 +1091,9 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("0e38d98b744da4e7eb6d22d7b983eb6e44c770f957ab9b8764b2c530f69cbaba389c2a3fffbb6f63a208ad1c74fce78c978371759aae2bbdcb2c9b26a6a09e29")
+    # All Orchard spends are dummy padding (spend_value == 0), signed host-side;
+    # the device produces no Orchard spend-auth signature for this transfer.
+    EXPECTED_AUTH_SIG: list[bytes] = []
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1138,7 +1148,9 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_memo(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("57093ab792c148469efb524cd831d78bd10c0b521c258c79dd57f8b6db87fd0f4137669b31f8918364598cea985dd4b9cbe88e704a77eb23aa69821924195708")
+    # All Orchard spends are dummy padding (spend_value == 0), signed host-side;
+    # the device produces no Orchard spend-auth signature for this transfer.
+    EXPECTED_AUTH_SIG: list[bytes] = []
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1211,10 +1223,10 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = [
-        bytes.fromhex("13da39bb4da9bd165c34cfcaf5da58871ad44af34f525e5c046abf113d42343b635f12a78bf1e7acbe69472c80865baeee36a5d1f064d5795425add4312d6826"),
-        bytes.fromhex("265af45c8582ec76713ee193c782c0afccc059561311d5589b07dd795102bd854ceb59d47ba21b53e9a1244559a1e31a4af9928e048db7122e38cd09e39cfe05"),
-    ]
+    # Both Orchard actions (recipient + change) are dummy padding
+    # (spend_value == 0), signed host-side; the device produces no Orchard
+    # spend-auth signature for this transfer.
+    EXPECTED_AUTH_SIG: list[bytes] = []
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1268,7 +1280,9 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_self_transfer_displays_internal(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("96b54456684a5fbcd1b36bdddc5d8a00a83d7ad085899136004b483ef34b54035e91e3bd47fa70ba47c0bb75216bfd8c241e168b6ea02028cc462cfe9e56c12c")
+    # The Orchard spend is dummy padding (spend_value == 0), signed host-side;
+    # the device produces no Orchard spend-auth signature for this transfer.
+    EXPECTED_AUTH_SIG: list[bytes] = []
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1600,9 +1614,11 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
         anchor=bytes.fromhex("c5e1408579e67cf16b5d19479408fa035a7db4fe3060123d139eba8523bc9633"),
     )
     PCZT_GLOBAL = PcztGlobal()
+    # Action 0 is a real spend (spend_value != 0), signed by the device.
+    # Action 1 is the dummy change spend (spend_value == 0), signed host-side;
+    # the device produces no spend-auth signature for it.
     EXPECTED_AUTH_SIG = [
-        bytes.fromhex("920a50c9903cd33fdd143bb10d4baaaa6d064f0a9db6c4a5f3c6bdabf870ad8831ce35ebb5cf06a6f49dfd3b51b52e1d9b28d2da5b0bfacd5c3fe530fe18880b"),
-        bytes.fromhex("0c47298136a564936f911eb85e4e89718b9242ecdfe963668aebf70da10aff284dc0037af3c1c0e3f103c76933264132f979d3cef32e78566561c7d772387117"),
+        bytes.fromhex("8e02f26bee1e1a0635692338689b25753059fcc73ba63f8742cd6fcb6a2f972966b8f0f4243826a4a5d413e64d8fdabde9e242c2ac0e4f4bd7ef35b297d6d138"),
     ]
 
     _assert_pczt_orchard_sign_digest(
