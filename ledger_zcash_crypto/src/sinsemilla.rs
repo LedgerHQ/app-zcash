@@ -1,9 +1,13 @@
 use ff::PrimeField;
 use ledger_device_sdk::ecc::{CurvesId, math::EcPoint};
-use pasta_curves::{arithmetic::CurveAffine, group::{Curve, Group}, pallas};
+use pasta_curves::{
+    arithmetic::CurveAffine,
+    group::{Curve, Group},
+    pallas,
+};
 
-use crate::{Error, bytes::reverse_copy};
 use crate::redpallas::{point_from_sdk_point, projective_point};
+use crate::{Error, bytes::reverse_copy};
 
 /// Number of bits of each message piece in `SinsemillaHashToPoint`.
 pub const K: usize = 10;
@@ -14524,7 +14528,6 @@ fn lebs2ip_k(bits: &[bool; K]) -> u32 {
         .fold(0u32, |acc, (i, bit)| acc + if *bit { 1 << i } else { 0 })
 }
 
-
 // Extracts the x-coordinate (ExtractP) from an optional pallas::Point.
 // Returns Some(Base::zero()) for the identity point, None when the input is None.
 fn extract_x_from_pallas_point(point: Option<pallas::Point>) -> Option<pallas::Base> {
@@ -14544,7 +14547,6 @@ pub(crate) fn extract_p_pallas(point: &pallas::Point) -> pallas::Base {
     Option::from(affine.coordinates().map(|c| *c.x())).unwrap_or_else(pallas::Base::zero)
 }
 
-
 fn point_from_affine_coordinates(coords: &AffineCoordinates) -> Result<EcPoint, Error> {
     point_from_affine_repr(&coords.0, &coords.1)
 }
@@ -14559,7 +14561,6 @@ fn point_from_affine_repr(x_le: &[u8; 32], y_le: &[u8; 32]) -> Result<EcPoint, E
     point.init(&x_be, &y_be)?;
     Ok(point)
 }
-
 
 fn scalar_bytes_be(scalar: &pallas::Scalar) -> [u8; 32] {
     let repr_le = scalar.to_repr();

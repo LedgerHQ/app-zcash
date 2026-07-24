@@ -169,20 +169,40 @@ impl SpendAuthorizingKey {
         self.0.randomize_ledger(randomizer)
     }
 
+    /// Computes only the bytes of the randomized spend-auth verification key
+    /// (`rk = [(ask + randomizer) mod q]·G`) for this key, without constructing
+    /// the intermediate curve point. Used to verify a PCZT action's `rk` with a
+    /// smaller BN/point footprint than `randomize_ledger` + key conversion.
+    pub fn randomized_verification_key_bytes(
+        &self,
+        randomizer: &pallas::Scalar,
+    ) -> Result<[u8; 32], ledger_zcash_crypto::Error> {
+        let scalar_bytes: [u8; 32] = (&self.0).into();
+        let randomizer_bytes: [u8; 32] = randomizer.to_repr();
+        Ok(
+            ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
+                scalar_bytes,
+                randomizer_bytes,
+            )?,
+        )
+    }
+
     /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let ask = Self::ledger_derive_inner(sk)?;
         // SpendingKey cannot be constructed such that this assertion would fail.
         assert!(!bool::from(ask.is_zero()));
         let ask_bytes = ask.to_repr();
-        let signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(ask_bytes)
-            .expect("ledger_zcash_crypto spend-auth signing key derivation should succeed");
+        // Propagate a derivation failure (e.g. BN-pool exhaustion surfaced as a
+        // CxError) instead of `.expect()`-panicking: a panic aborts through the
+        // device panic handler and freezes the app mid-signing, whereas a
+        // returned error lets the caller fail closed with a proper status word.
+        let signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(ask_bytes)?;
 
         // If the last bit of repr_P(ak) is 1, negate ask.
         let signing_key = if (signing_key.verification_key_bytes()[31] >> 7) == 1 {
             let neg_ask_bytes = (-ask).to_repr();
-            ledger_zcash_crypto::redpallas::spendauth_signing_key(neg_ask_bytes)
-                .expect("ledger_zcash_crypto spend-auth signing key derivation should succeed")
+            ledger_zcash_crypto::redpallas::spendauth_signing_key(neg_ask_bytes)?
         } else {
             signing_key
         };

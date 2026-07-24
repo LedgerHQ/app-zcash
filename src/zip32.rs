@@ -38,11 +38,6 @@ pub fn derive_orchard_fvk_bytes(sk: Secret<32>) -> Result<OrchardFvk, AppSW> {
     OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)
 }
 
-pub fn derive_orchard_ask(path: &Bip32Path) -> Result<OrchardAsk, AppSW> {
-    let sk = derive_orchard_sk(path)?;
-    OrchardAsk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)
-}
-
 // Derives the transparent account public key bytes for the BIP44 path
 // `m/44'/<coin_type>'/<account>'`.
 //
@@ -58,7 +53,15 @@ pub fn derive_transparent_account_pubkey(path: &Bip32Path) -> Result<[u8; 65], A
     Ok(result)
 }
 
-fn derive_orchard_sk_bytes(path: &Bip32Path) -> Result<Secret<32>, AppSW> {
+// `zip32_orchard_derive` is a Secure-Element key-derivation syscall whose
+// internal resources are not fully reclaimed between successive calls within a
+// power cycle; a handful of consecutive calls exhausts them and the next call
+// fails with a CxError surfaced as `TechnicalProblem` (6f00). The account
+// Orchard spending key is invariant across every action of a transaction, so
+// it must be derived at most once and reused — see `PcztParser`, which caches
+// the result and passes it to the `*_from_sk` helpers below. This function is
+// the single derivation site; do not call it per action.
+pub fn derive_orchard_sk_bytes(path: &Bip32Path) -> Result<Secret<32>, AppSW> {
     let path_slice = path.as_slice();
     let mut cc = ChainCode::default();
 
@@ -68,9 +71,11 @@ fn derive_orchard_sk_bytes(path: &Bip32Path) -> Result<Secret<32>, AppSW> {
     Ok(sk)
 }
 
-fn derive_orchard_sk(path: &Bip32Path) -> Result<OrchardSk, AppSW> {
-    let sk = derive_orchard_sk_bytes(path)?;
-    OrchardSk::ledger_from_bytes(sk.as_ref().try_into().unwrap()).map_err(map_ledger_crypto_error)
+// Builds an `OrchardSk` from already-derived key bytes, WITHOUT invoking
+// `zip32_orchard_derive`. Used with a key cached by the PCZT parser.
+fn orchard_sk_from_bytes(sk_bytes: &Secret<32>) -> Result<OrchardSk, AppSW> {
+    OrchardSk::ledger_from_bytes(sk_bytes.as_ref().try_into().unwrap())
+        .map_err(map_ledger_crypto_error)
 }
 
 pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
@@ -81,15 +86,27 @@ pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
     Ok(orchard_fvk)
 }
 
-// Derives both FVK and ASK from a single zip32_orchard_derive call.
-// Use instead of calling derive_orchard_fvk + derive_orchard_ask separately,
-// as two consecutive zip32_orchard_derive calls exhaust the BN pool.
-pub fn derive_orchard_fvk_and_ask(
-    path: &Bip32Path,
+// FVK derivation from a cached spending key (no `zip32_orchard_derive`).
+pub fn derive_orchard_fvk_from_sk(sk_bytes: &Secret<32>) -> Result<OrchardFvk, AppSW> {
+    let sk = orchard_sk_from_bytes(sk_bytes)?;
+    let fvk = OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
+    info!("Orchard FVK: {}", HexSlice(&fvk.to_bytes()));
+    Ok(fvk)
+}
+
+// FVK + ASK derivation from a cached spending key (no `zip32_orchard_derive`).
+pub fn derive_orchard_fvk_and_ask_from_sk(
+    sk_bytes: &Secret<32>,
 ) -> Result<(OrchardFvk, OrchardAsk), AppSW> {
-    let sk = derive_orchard_sk(path)?;
+    let sk = orchard_sk_from_bytes(sk_bytes)?;
     let fvk = OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
     info!("Orchard FVK: {}", HexSlice(&fvk.to_bytes()));
     let ask = OrchardAsk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
     Ok((fvk, ask))
+}
+
+// ASK derivation from a cached spending key (no `zip32_orchard_derive`).
+pub fn derive_orchard_ask_from_sk(sk_bytes: &Secret<32>) -> Result<OrchardAsk, AppSW> {
+    let sk = orchard_sk_from_bytes(sk_bytes)?;
+    OrchardAsk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)
 }

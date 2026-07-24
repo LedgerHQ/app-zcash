@@ -8,8 +8,8 @@ use core::{cmp, mem};
 
 use ::orchard::keys::Scope as OrchardScope;
 use ::orchard::note::TransmittedNoteCiphertext;
-use ::orchard::primitives::redpallas::{SpendAuth, VerificationKey as RedpallasVerificationKey};
 use corez::io::Read;
+use ledger_device_sdk::ecc::Secret;
 use ledger_device_sdk::hash::HashInit as _;
 use ledger_device_sdk::log::{debug, info};
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
@@ -48,7 +48,10 @@ use crate::utils::{
     extended_public_key::ExtendedPublicKey,
     hashers::ToHash160,
 };
-use crate::zip32::{OrchardAsk, OrchardFvk, derive_orchard_fvk, derive_orchard_fvk_and_ask, orchard_network};
+use crate::zip32::{
+    OrchardAsk, OrchardFvk, derive_orchard_fvk_and_ask_from_sk, derive_orchard_fvk_from_sk,
+    derive_orchard_sk_bytes, orchard_network,
+};
 
 use super::reader::{ByteReader, ReadBytesExt};
 use super::{ParserError, finalize_and_log_hash, ok};
@@ -160,6 +163,14 @@ pub struct PcztParser {
     orchard_action_parsed_count: usize,
     orchard_signing_records: Vec<PcztOrchardActionSigningRecord>,
     orchard_signed_action_count: usize,
+    // Number of Orchard actions the device must sign: real spends (spend value
+    // != 0) only. Dummy padding spends (value 0) are self-signed host-side by
+    // the PCZT IoFinalizer and are never sent to the device for signing, so the
+    // signing loop completes when the real spends are signed — not when every
+    // action is. Using the total action count here would leave a transparent→
+    // shielded transaction (0 real spends) forever "unfinished", stranding the
+    // device on the signing screen.
+    orchard_real_spend_count: usize,
     orchard_signature_digest: Option<[u8; 32]>,
     orchard_value_balance: i64,
     orchard_spend_value_sum: u64,
@@ -184,6 +195,15 @@ pub struct PcztParser {
     current_orchard_alpha: Option<[u8; 32]>,
     current_orchard_path: Option<Bip32Path>,
     current_orchard_fvk: Option<OrchardFvk>,
+    // Account Orchard spending key, derived once per PCZT session and reused for
+    // every action's FVK/ASK derivation and spend-auth signature. `zip32_orchard_derive`
+    // (the SE key-derivation syscall) does not reclaim its resources between calls,
+    // so a few consecutive derivations exhaust them and the next fails with 6f00;
+    // caching keeps the session to a single derivation. A PCZT is signed by one
+    // account (one UFVK), so every Orchard action derives from the same path — the
+    // key is cached without a path key. Zeroized on `reset` and once the last
+    // Orchard action has been signed.
+    orchard_spending_key: Option<Secret<32>>,
     script_bytes: Vec<u8>,
     orchard_field_bytes: Vec<u8>,
 }
@@ -328,6 +348,7 @@ impl PcztParser {
             current_output_amount: 0,
             total_output_amount: 0,
             orchard_action_count: 0,
+            orchard_real_spend_count: 0,
             orchard_action_parsed_count: 0,
             orchard_signing_records: Vec::new(),
             orchard_signed_action_count: 0,
@@ -355,6 +376,7 @@ impl PcztParser {
             current_orchard_alpha: None,
             current_orchard_path: None,
             current_orchard_fvk: None,
+            orchard_spending_key: None,
             script_bytes: Vec::new(),
             orchard_field_bytes: Vec::new(),
         }
@@ -362,6 +384,29 @@ impl PcztParser {
 
     pub fn reset(&mut self) {
         *self = Self::new();
+    }
+
+    // Returns the account Orchard spending key, deriving it via
+    // `zip32_orchard_derive` exactly once per PCZT session and caching it for
+    // reuse. Reusing the cached key is mandatory, not an optimization: the
+    // syscall's SE resources are not reclaimed between successive calls, so
+    // re-deriving per action exhausts them and the derivation eventually fails
+    // with 6f00. All Orchard actions of a PCZT share one account key (one UFVK),
+    // so the first action's `path` fixes the key for the whole transaction.
+    pub fn orchard_spending_key(&mut self, path: &Bip32Path) -> Result<&Secret<32>, AppSW> {
+        if self.orchard_spending_key.is_none() {
+            let sk = derive_orchard_sk_bytes(path)?;
+            self.orchard_spending_key = Some(sk);
+        }
+        self.orchard_spending_key
+            .as_ref()
+            .ok_or(AppSW::TechnicalProblem)
+    }
+
+    // Zeroizes the cached account spending key (dropping the `Secret`) once it
+    // is no longer needed, i.e. after the last Orchard action is signed.
+    fn clear_orchard_spending_key(&mut self) {
+        self.orchard_spending_key = None;
     }
 
     fn reset_on_error<T>(&mut self, result: Result<T, ParserError>) -> Result<T, ParserError> {

@@ -414,6 +414,7 @@ impl PcztParser {
         self.orchard_action_parsed_count = 0;
         self.orchard_signing_records.clear();
         self.orchard_signed_action_count = 0;
+        self.orchard_real_spend_count = 0;
         self.orchard_signature_digest = None;
         self.orchard_value_balance = 0;
         self.orchard_spend_value_sum = 0;
@@ -501,6 +502,8 @@ impl PcztParser {
                 .as_ref()
                 .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
             self.verify_current_orchard_spend_nullifier(orchard_fvk)?;
+            // Real spend: the device will be asked to sign this action.
+            self.orchard_real_spend_count = self.orchard_real_spend_count.saturating_add(1);
         }
         self.validate_current_orchard_output(ctx, &note_ciphertext)?;
 
@@ -950,11 +953,12 @@ impl PcztParser {
         let alpha = ledger_zcash_crypto::pallas_scalar_from_repr(alpha)
             .map_err(|_| ParserError::from_str("Bad PCZT orchard alpha"))?;
 
-        let randomized_ask = ask
-            .randomize_ledger(&alpha)
+        // Compute rk bytes directly (no intermediate curve-point construction)
+        // to keep the BN/point footprint low: real Orchard spends run this on a
+        // BN pool already near capacity from the fvk/ask derivation.
+        let expected_rk = ask
+            .randomized_verification_key_bytes(&alpha)
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-        let expected_rk: [u8; 32] =
-            (&RedpallasVerificationKey::<SpendAuth>::from(&randomized_ask)).into();
 
         if expected_rk != self.current_orchard_rk {
             return Err(ParserError::from_str(
@@ -1066,22 +1070,27 @@ impl PcztParser {
             self.orchard_action_parsed_count, path
         );
 
-        // For real spends, derive FVK and ASK from a single SK derivation.
-        // Calling zip32_orchard_derive separately for FVK and ASK exhausts the BN pool,
-        // so both are derived from the same OrchardSk here.
-        let (orchard_fvk, ask_for_rk) = if self.current_orchard_spend_value != 0 {
-            let (fvk, ask) = ok!(derive_orchard_fvk_and_ask(&path));
+        // Derive FVK (and ASK for real spends) from the session-cached account
+        // spending key, so the exhausting zip32_orchard_derive syscall runs at
+        // most once for the whole transaction rather than once per action.
+        let spend_value = self.current_orchard_spend_value;
+        let sk = ok!(self.orchard_spending_key(&path));
+        let (orchard_fvk, ask_for_rk) = if spend_value != 0 {
+            let (fvk, ask) =
+                derive_orchard_fvk_and_ask_from_sk(sk).map_err(ParserError::from_sw)?;
             (fvk, Some(ask))
         } else {
             // Dummy spend: throwaway key, rk check skipped.
-            (ok!(derive_orchard_fvk(&path)), None)
+            (ok!(derive_orchard_fvk_from_sk(sk)), None)
         };
         if let Some(ref ask) = ask_for_rk {
             self.verify_current_orchard_rk(ask)?;
         }
         let network = orchard_network(&path);
-        ctx.tx_info.orchard_decipher_keys =
-            Some(ok!(OrchardDecipherKeys::from_fvk(&orchard_fvk, network)));
+        ctx.tx_info.orchard_decipher_keys = Some(
+            OrchardDecipherKeys::from_fvk(&orchard_fvk, network)
+                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?,
+        );
         debug!(
             "PCZT orchard action #{} decipher keys prepared",
             self.orchard_action_parsed_count
@@ -1148,8 +1157,13 @@ impl PcztParser {
         Ok((&action.path, action.alpha))
     }
 
+    // Number of Orchard spend-auth signatures the device produces for this
+    // transaction: one per real spend. Dummy padding spends are signed
+    // host-side and never counted here, so signing completes (and the device
+    // leaves the signing screen) as soon as every real spend is signed — which
+    // is zero for a transparent→shielded transaction.
     pub fn orchard_signature_count(&self) -> usize {
-        self.orchard_action_count
+        self.orchard_real_spend_count
     }
 
     pub fn mark_orchard_action_signed(
@@ -1164,6 +1178,12 @@ impl PcztParser {
         action.signed = true;
 
         self.orchard_signed_action_count = self.orchard_signed_action_count.saturating_add(1);
+
+        // Zeroize the cached account spending key as soon as the last action is
+        // signed — it is no longer needed and must not outlive its usage.
+        if self.are_orchard_signatures_done() {
+            self.clear_orchard_spending_key();
+        }
 
         Ok(self.orchard_signed_action_count)
     }
