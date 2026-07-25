@@ -1,3 +1,11 @@
+//! Orchard note, nullifier and value-commitment derivations.
+//!
+//! The commitment entry points here are `#[inline(never)]`: each builds a
+//! `[bool; NOTE_COMMITMENT_MESSAGE_BITS]` Sinsemilla message on the stack, and
+//! folded into their caller two of those (the nullifier's commitment and the
+//! output's `cmx`) become resident together even though they are computed one
+//! after the other — which overflows the Nano X stack.
+
 use alloc::{boxed::Box, vec::Vec};
 use chacha20::{
     ChaCha20,
@@ -86,6 +94,7 @@ pub fn decipher_compact_value(
     try_compact_note_decryption_with_ivk(ivk, compact)
 }
 
+#[inline(never)]
 pub fn spend_nullifier_bytes(
     nk: &[u8; HASH_SIZE],
     raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
@@ -115,8 +124,13 @@ pub fn spend_nullifier_bytes(
     let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
         cm
     } else {
-        // Convert the SDK basepoint-mul result to pallas::Point and add in pure Rust,
-        // keeping the total Bn allocation to 2 slots (just the scalar-mul EcPoint).
+        // The commitment `cm` is already a pure-Rust point, so converting the
+        // scalar-mul result and adding in software keeps exactly one SDK point
+        // alive here; adding with SDK points would hold three at once (cm, the
+        // scalar-mul result, the sum). The `cx_bn` pool is a small shared budget
+        // with no documented ceiling, and Speculos does not model it, so this
+        // path keeps its footprint minimal by construction rather than against a
+        // measured limit.
         let nullifier_k_ec = pallas_basepoint_mul(
             &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
             &scalar_bytes_be(&nullifier_scalar),
@@ -127,6 +141,7 @@ pub fn spend_nullifier_bytes(
     Ok(extract_p_pallas(&nullifier_point).to_repr())
 }
 
+#[inline(never)]
 pub fn note_commitment_bytes(
     raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
     value: u64,
@@ -471,6 +486,7 @@ fn parse_note_plaintext_prefix(
     })
 }
 
+#[inline(never)]
 fn note_commitment(
     g_d: &[u8; HASH_SIZE],
     pk_d: &[u8; HASH_SIZE],
@@ -498,6 +514,7 @@ fn note_commitment(
     Ok(cmx.to_repr())
 }
 
+#[inline(never)]
 fn note_commitment_point(
     g_d: &[u8; HASH_SIZE],
     pk_d: &[u8; HASH_SIZE],

@@ -1,3 +1,16 @@
+//! Orchard section of the PCZT parser.
+//!
+//! The state handlers are `#[inline(never)]` on purpose: inlined into the
+//! `parse_orchard_actions` dispatch loop their locals merge into a single frame
+//! that stays resident whichever state runs, and the deepest states (Orchard key
+//! derivation, note decryption) then have no stack left on the smallest device.
+//!
+//! The same applies to the per-action checks `finish_current_orchard_action`
+//! chains (`cv_net`, spend nullifier, output validation): each is called once, so
+//! the compiler folds them into the calling handler and their buffers — a note
+//! ciphertext and two Sinsemilla messages — end up resident together even though
+//! they are used strictly one after another.
+
 use super::*;
 use crate::tx::TxOutputMemo;
 use ::orchard::bundle::BundleVersion;
@@ -8,6 +21,7 @@ const ZCASH_MEMO_TEXT_MAX_TAG: u8 = 0xF4;
 const ZCASH_MEMO_EMPTY_TAG: u8 = 0xF6;
 
 impl PcztParser {
+    #[inline(never)]
     pub(super) fn parse_orchard_actions_start(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -54,6 +68,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     pub(super) fn parse_orchard_action(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -138,6 +153,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     pub(super) fn parse_orchard_output(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -171,6 +187,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     pub(super) fn parse_orchard_output_metadata(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -230,6 +247,7 @@ impl PcztParser {
         self.finish_current_orchard_action(ctx)
     }
 
+    #[inline(never)]
     pub(super) fn parse_orchard_enc_ciphertext_len(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -258,6 +276,7 @@ impl PcztParser {
         self.parse_orchard_enc_ciphertext(ctx, reader)
     }
 
+    #[inline(never)]
     pub(super) fn parse_orchard_enc_ciphertext(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -271,6 +290,7 @@ impl PcztParser {
         Self::ensure_orchard_apdu_group_end(reader)
     }
 
+    #[inline(never)]
     pub(super) fn parse_orchard_out_ciphertext_len(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -299,6 +319,7 @@ impl PcztParser {
         self.parse_orchard_out_ciphertext(ctx, reader)
     }
 
+    #[inline(never)]
     pub(super) fn parse_orchard_out_ciphertext(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -312,6 +333,7 @@ impl PcztParser {
         Self::ensure_orchard_apdu_group_end(reader)
     }
 
+    #[inline(never)]
     pub(super) fn parse_orchard_trailer(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -490,6 +512,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn finish_current_orchard_action(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -502,7 +525,15 @@ impl PcztParser {
         self.verify_current_orchard_cv_net()?;
         // Dummy spends (spend_value == 0) use a throwaway key; recipient membership
         // and nullifier checks only apply to real spends the device will sign.
-        if self.current_orchard_spend_value != 0 {
+        //
+        // `spend_value` is authenticated, not merely declared: `cv_net` binds
+        // `spend_value - output_value` to the value commitment that enters the
+        // txid digest, and `validate_current_orchard_output` below pins
+        // `output_value` (an output the device cannot decrypt must be 0-valued
+        // and match its recomputed `cmx`). A host therefore cannot disguise a
+        // real spend as a dummy to dodge the checks below.
+        let is_real_spend = self.current_orchard_spend_value != 0;
+        if is_real_spend {
             let orchard_fvk = self
                 .current_orchard_fvk
                 .as_ref()
@@ -540,6 +571,7 @@ impl PcztParser {
             .push(PcztOrchardActionSigningRecord {
                 alpha,
                 path,
+                is_real_spend,
                 signed: false,
             });
         self.reset_current_orchard_action();
@@ -554,6 +586,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn current_orchard_note_ciphertext(
         &self,
         out_ciphertext: [u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
@@ -643,6 +676,7 @@ impl PcztParser {
         Ok(false)
     }
 
+    #[inline(never)]
     fn validate_current_orchard_output(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -815,6 +849,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn verify_current_orchard_cv_net(&self) -> Result<(), ParserError> {
         let Some(rcv_bytes) = self.current_orchard_rcv else {
             return Err(ParserError::from_str("Missing PCZT orchard rcv"));
@@ -846,6 +881,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn verify_current_orchard_spend_nullifier(&self, fvk: &OrchardFvk) -> Result<(), ParserError> {
         let mut diversifier = [0u8; 11];
         diversifier.copy_from_slice(&self.current_orchard_spend_recipient[..11]);
@@ -1022,6 +1058,7 @@ impl PcztParser {
         self.finalize_orchard_actions(ctx)
     }
 
+    #[inline(never)]
     pub(super) fn parse_orchard_zip32_derivation(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -1127,6 +1164,19 @@ impl PcztParser {
             return Err(ParserError::from_str("PCZT orchard action already signed"));
         }
 
+        // Refuse to sign a dummy padding spend. Its rk and nullifier were
+        // deliberately left unverified during parsing (they derive from the
+        // host's throwaway key), and the PCZT IoFinalizer already self-signed it
+        // with that key — a device signature would authorize an action whose
+        // spend side was never checked, and would push the device signature
+        // count past the finalizer's unsigned-action count. The host is expected
+        // to skip dummy indices; this enforces it rather than assuming it.
+        if !action.is_real_spend {
+            return Err(ParserError::from_str(
+                "PCZT orchard dummy spend must not be signed by the device",
+            ));
+        }
+
         if let Some(signature_digest) = self.orchard_signature_digest {
             tx_info.signature_digest = signature_digest;
         } else {
@@ -1168,6 +1218,19 @@ impl PcztParser {
     // host-side and never counted here, so signing completes (and the device
     // leaves the signing screen) as soon as every real spend is signed — which
     // is zero for a transparent→shielded transaction.
+    //
+    // This is a quota over the same set that `orchard_signed_action_count`
+    // counts: `ensure_signature_digest_for_orchard` refuses dummy indices, so a
+    // signature can only ever be produced for a real spend and the two counters
+    // cannot drift apart.
+    //
+    // Note the host-side finalizer partitions on a different predicate — an
+    // action needs a device signature when its `spend_auth_sig` is `None` — and
+    // the two agree only because the IoFinalizer self-signs exactly the padding
+    // dummies with their `dummy_sk`. They would diverge for a real spend of a
+    // zero-valued note: the device would treat it as dummy and produce no
+    // signature while the finalizer still expects one, so finalization fails
+    // closed on its signature-count check.
     pub fn orchard_signature_count(&self) -> usize {
         self.orchard_real_spend_count
     }
@@ -1203,6 +1266,16 @@ impl PcztParser {
 
         self.state = PcztParserState::OrchardActionsDone;
         self.review_outputs(ctx)?;
+
+        // The bundle is fully parsed, so the real-spend count is final. When it
+        // is zero (transparent -> shielded: every spend is dummy padding) no
+        // signing request will ever follow, so the cached spending key is
+        // already dead here and `mark_orchard_action_signed` — the other release
+        // site — will never run. Release it now rather than leaving it in RAM
+        // for the rest of the session.
+        if self.are_orchard_signatures_done() {
+            self.clear_orchard_spending_key();
+        }
 
         Ok(())
     }

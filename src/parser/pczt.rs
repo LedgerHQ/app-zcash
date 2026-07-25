@@ -135,6 +135,14 @@ struct PcztTransparentInputRecord {
 struct PcztOrchardActionSigningRecord {
     alpha: [u8; 32],
     path: Bip32Path,
+    // Whether the action carries a real spend (spend value != 0) rather than a
+    // dummy padding spend. Dummy actions are deliberately parsed *without* the
+    // rk and nullifier checks (their rk derives from the host's throwaway key,
+    // so those checks cannot pass), which is only sound as long as the device
+    // never signs them: signing authorizes an action whose spend side it did
+    // not verify. The signing path therefore refuses a dummy index instead of
+    // trusting the host to skip it.
+    is_real_spend: bool,
     signed: bool,
 }
 
@@ -201,9 +209,13 @@ pub struct PcztParser {
     // so a few consecutive derivations exhaust them and the next fails with 6f00;
     // caching keeps the session to a single derivation. A PCZT is signed by one
     // account (one UFVK), so every Orchard action derives from the same path — the
-    // key is cached without a path key. Zeroized on `reset` and once the last
-    // Orchard action has been signed.
+    // key is cached under the first action's path and any divergent path is
+    // rejected. Zeroized on `reset` and once the last Orchard action has been
+    // signed (or once the parse shows none will be).
     orchard_spending_key: Option<Secret<32>>,
+    // Derivation path the cached spending key belongs to, used to reject a
+    // second Orchard action declaring a different path.
+    orchard_spending_key_path: Option<Bip32Path>,
     script_bytes: Vec<u8>,
     orchard_field_bytes: Vec<u8>,
 }
@@ -377,6 +389,7 @@ impl PcztParser {
             current_orchard_path: None,
             current_orchard_fvk: None,
             orchard_spending_key: None,
+            orchard_spending_key_path: None,
             script_bytes: Vec::new(),
             orchard_field_bytes: Vec::new(),
         }
@@ -391,22 +404,39 @@ impl PcztParser {
     // reuse. Reusing the cached key is mandatory, not an optimization: the
     // syscall's SE resources are not reclaimed between successive calls, so
     // re-deriving per action exhausts them and the derivation eventually fails
-    // with 6f00. All Orchard actions of a PCZT share one account key (one UFVK),
-    // so the first action's `path` fixes the key for the whole transaction.
+    // with 6f00.
+    //
+    // All Orchard actions of a PCZT share one account key (one UFVK), so the
+    // first action's `path` fixes the key for the whole transaction. A later
+    // action declaring a different path is rejected rather than served the
+    // cached key: the caller would otherwise derive an FVK from one path while
+    // deciding the network (`orchard_network`) from another, and sign with a key
+    // the declared path does not produce.
     pub fn orchard_spending_key(&mut self, path: &Bip32Path) -> Result<&Secret<32>, AppSW> {
-        if self.orchard_spending_key.is_none() {
-            let sk = derive_orchard_sk_bytes(path)?;
-            self.orchard_spending_key = Some(sk);
+        match self.orchard_spending_key_path {
+            Some(cached_path) if cached_path != *path => return Err(AppSW::BadState),
+            Some(_) => {}
+            None => {
+                self.orchard_spending_key = Some(derive_orchard_sk_bytes(path)?);
+                self.orchard_spending_key_path = Some(*path);
+            }
         }
+
         self.orchard_spending_key
             .as_ref()
             .ok_or(AppSW::TechnicalProblem)
     }
 
     // Zeroizes the cached account spending key (dropping the `Secret`) once it
-    // is no longer needed, i.e. after the last Orchard action is signed.
+    // is no longer needed: after the last Orchard action is signed, or as soon
+    // as the parse establishes that no action will be signed at all.
+    //
+    // The path is cleared with the key so a later action cannot be compared
+    // against a path whose key no longer exists; a fresh derivation for that
+    // path is then the correct behaviour.
     fn clear_orchard_spending_key(&mut self) {
         self.orchard_spending_key = None;
+        self.orchard_spending_key_path = None;
     }
 
     fn reset_on_error<T>(&mut self, result: Result<T, ParserError>) -> Result<T, ParserError> {

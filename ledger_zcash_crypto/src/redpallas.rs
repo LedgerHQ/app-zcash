@@ -270,23 +270,30 @@ pub fn spendauth_randomized_verification_key_bytes(
     // keeping the concurrent Bn count low (same rationale as
     // `spendauth_randomized_signing_key`).
     let randomized_bytes_be = {
-        let scalar = Bn::alloc_init(&scalar_bytes_be)?;
-        let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
         let mut order = Bn::alloc(32)?;
         CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
+        let sum = Bn::alloc(32)?;
+        {
+            let scalar = Bn::alloc_init(&scalar_bytes_be)?;
+            let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
+            sum.mod_add(&scalar, &randomizer, &order)?;
+        }
+
+        // Reduce to a canonical scalar (`< order`) for the same reason as
+        // `spendauth_randomized_signing_key`: `cx_bn_mod_add` may leave the
+        // result in `[order, 2*order)`. Whether the scalar multiplication below
+        // would reduce a non-canonical scalar internally is not a documented
+        // guarantee, and this runs on a verification path — reducing here costs
+        // one Bn and removes the assumption.
         let randomized = Bn::alloc(32)?;
-        randomized.mod_add(&scalar, &randomizer, &order)?;
+        randomized.reduce(&sum, &order)?;
 
         let mut randomized_bytes_be = [0u8; 32];
         randomized.export(&mut randomized_bytes_be)?;
         randomized_bytes_be
     };
 
-    // No canonical reduction is needed here even though `cx_bn_mod_add` may
-    // leave the sum in `[order, 2*order)`: the scalar multiplication below
-    // reduces the scalar modulo the group order internally, so the resulting
-    // `rk` bytes are identical whether or not the scalar is pre-reduced.
     // `basepoint_mul_bytes_from_scalar_be` returns the compressed key bytes and
     // drops the SDK `EcPoint` immediately (no `point_from_sdk_point`).
     basepoint_mul_bytes_from_scalar_be(&ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES, &randomized_bytes_be)
@@ -515,7 +522,7 @@ pub(crate) fn projective_point(x: pallas::Base, y: pallas::Base, z: pallas::Base
     unsafe { core::mem::transmute(ProjectivePointLayout { x, y, z }) }
 }
 
-pub(crate) fn base_from_canonical_repr_unchecked(repr: [u8; 32]) -> pallas::Base {
+fn base_from_canonical_repr_unchecked(repr: [u8; 32]) -> pallas::Base {
     let repr_u64x4 = repr_to_u64x4(&repr);
     let (modulus, r2, inv) = pallas_montgomery_params(CurveDomainParam::Field);
     let wide = mul_u64x4(&repr_u64x4, &r2);
@@ -642,6 +649,49 @@ mod tests {
                 spendauth_randomized_signing_key(scalar, randomizer).map_err(|_| ())?;
             let expected = spendauth_signing_key(scalar_from_u8(5)).map_err(|_| ())?;
             if !signing_keys_eq(&randomized, &expected) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// The light `rk` path must agree with the full path it replaces: computing
+    /// the randomized verification key bytes directly must give the same result
+    /// as randomizing the signing key and taking its verification key. Guards
+    /// against the two implementations drifting apart, since only the light one
+    /// is used to verify a PCZT action's `rk`.
+    #[test_case]
+    const RANDOMIZED_VK_BYTES_MATCH_FULL_PATH: TestType = TestType {
+        modname: module_path!(),
+        name: "randomized_vk_bytes_match_full_path",
+        f: || {
+            let scalar = wide_canonical_scalar(0x11);
+            let randomizer = wide_canonical_scalar(0x42);
+            let light =
+                spendauth_randomized_verification_key_bytes(scalar, randomizer).map_err(|_| ())?;
+            let full = spendauth_randomized_signing_key(scalar, randomizer).map_err(|_| ())?;
+            if light != full.verification_key_bytes() {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// Same reduction path as `RANDOMIZE_REDUCES_WHEN_SUM_EXCEEDS_ORDER`, for the
+    /// light `rk` computation: with `scalar = order - 5` and `randomizer = 10`
+    /// the sum is `order + 5`, which `mod_add` may leave unreduced, so the result
+    /// must still match the verification key of the reduced scalar `5`.
+    #[test_case]
+    const RANDOMIZED_VK_BYTES_REDUCE_WHEN_SUM_EXCEEDS_ORDER: TestType = TestType {
+        modname: module_path!(),
+        name: "randomized_vk_bytes_reduce_when_sum_exceeds_order",
+        f: || {
+            use ff::{Field, PrimeField};
+            let scalar: [u8; 32] = (pallas::Scalar::ZERO - pallas::Scalar::from(5u64)).to_repr();
+            let light = spendauth_randomized_verification_key_bytes(scalar, scalar_from_u8(10))
+                .map_err(|_| ())?;
+            let expected = spendauth_signing_key(scalar_from_u8(5)).map_err(|_| ())?;
+            if light != expected.verification_key_bytes() {
                 return Err(());
             }
             Ok(())

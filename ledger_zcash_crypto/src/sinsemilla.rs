@@ -14435,6 +14435,7 @@ pub(crate) fn sinsemilla_short_commit_point(
     sinsemilla_commit(domain, message, randomness)
 }
 
+#[inline(never)]
 fn sinsemilla_commit(
     domain: &str,
     message: &[bool],
@@ -14479,6 +14480,11 @@ fn commit_domain_generators(domain: &str) -> Result<(AffineCoordinates, AffineCo
     }
 }
 
+// The pure-Rust point helpers below are each `#[inline(never)]`. Inlined, their
+// `pallas::Point` and `pallas::Base` temporaries all live in this one frame at
+// once — enough to overflow the Nano X stack on the longest message. Kept as
+// separate frames, the depth is the largest of them rather than their sum.
+#[inline(never)]
 fn hash_to_point(q: pallas::Point, message: &[bool]) -> Option<pallas::Point> {
     // All additions use pure-Rust pallas::Point arithmetic: zero Bn slots in the loop.
     let mut acc: Option<pallas::Point> = Some(q);
@@ -14499,6 +14505,7 @@ fn hash_to_point(q: pallas::Point, message: &[bool]) -> Option<pallas::Point> {
 
 // Converts a SINSEMILLA_S table entry (already a pallas::Base affine coordinate pair)
 // into a projective pallas::Point. Uses zero Bn slots — pure Rust only.
+#[inline(never)]
 fn pasta_point_from_s_index(index: usize) -> pallas::Point {
     let (x, y) = SINSEMILLA_S[index];
     projective_point(x, y, pallas::Base::one())
@@ -14506,6 +14513,7 @@ fn pasta_point_from_s_index(index: usize) -> pallas::Point {
 
 // Sinsemilla incomplete addition: returns None for the identity or exceptional cases
 // (equal or negated inputs), which signal a hash collision as required by the spec.
+#[inline(never)]
 fn pallas_incomplete_add(lhs: pallas::Point, rhs: pallas::Point) -> Option<pallas::Point> {
     if bool::from(lhs.is_identity()) || bool::from(rhs.is_identity()) {
         return None;
@@ -14530,6 +14538,9 @@ fn lebs2ip_k(bits: &[bool; K]) -> u32 {
 
 // Extracts the x-coordinate (ExtractP) from an optional pallas::Point.
 // Returns Some(Base::zero()) for the identity point, None when the input is None.
+// `to_affine` inverts a field element — an addition chain with many temporaries.
+// Out of line, that depth is not added to the caller's own frame.
+#[inline(never)]
 fn extract_x_from_pallas_point(point: Option<pallas::Point>) -> Option<pallas::Base> {
     let point = point?;
     if bool::from(point.is_identity()) {
@@ -14539,6 +14550,7 @@ fn extract_x_from_pallas_point(point: Option<pallas::Point>) -> Option<pallas::B
     Option::from(affine.coordinates().map(|c| *c.x()))
 }
 
+#[inline(never)]
 pub(crate) fn extract_p_pallas(point: &pallas::Point) -> pallas::Base {
     if bool::from(point.is_identity()) {
         return pallas::Base::zero();
@@ -14567,4 +14579,114 @@ fn scalar_bytes_be(scalar: &pallas::Scalar) -> [u8; 32] {
     let mut repr_be = [0u8; 32];
     reverse_copy(&mut repr_be, &repr_le);
     repr_be
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ledger_device_sdk::testing::TestType;
+
+    /// Longest message `sinsemilla_short_commit` accepts, so `hash_to_point`
+    /// runs its maximum number of incomplete additions. Kept in rodata: a
+    /// `[bool; K * C]` local would dominate the test's own stack frame.
+    const LONGEST_MESSAGE: [bool; K * C] = {
+        let mut message = [false; K * C];
+        let mut i = 0;
+        while i < K * C {
+            message[i] = i % 3 == 0 || i % 7 == 0;
+            i += 1;
+        }
+        message
+    };
+
+    fn commit_longest_message() -> Result<Option<pallas::Base>, Error> {
+        sinsemilla_short_commit(
+            ORCHARD_COMMIT_IVK_PERSONALIZATION,
+            &LONGEST_MESSAGE,
+            &pallas::Scalar::from(0x5a5a_5a5au64),
+        )
+    }
+
+    /// Sinsemilla must commit identically whether or not the caller already holds
+    /// SDK points — true only while the hash loop stays pure Rust and allocates
+    /// no `cx_bn` slot of its own. Rewriting the loop with `EcPoint` arithmetic
+    /// also has a cost this test cannot see: it still passes under Speculos,
+    /// whose `cx_` calls are in-process, while on hardware each of the loop's
+    /// ~2400 additions becomes a secure-element syscall and a single Orchard
+    /// action then runs past the host's APDU timeout, surfacing as a device
+    /// disconnection rather than a status word.
+    #[test_case]
+    const COMMIT_IS_STABLE_UNDER_BN_PRESSURE: TestType = TestType {
+        modname: module_path!(),
+        name: "commit_is_stable_under_bn_pressure",
+        f: || {
+            let expected = commit_longest_message().map_err(|_| ())?.ok_or(())?;
+
+            // Mirrors a caller that reaches Sinsemilla with points of its own alive,
+            // as the nullifier and cv_net derivations do.
+            let _held = [
+                point_from_affine_coordinates(&Q_COMMIT_IVK_M_GENERATOR).map_err(|_| ())?,
+                point_from_affine_coordinates(&R_COMMIT_IVK_GENERATOR).map_err(|_| ())?,
+            ];
+
+            let under_pressure = commit_longest_message().map_err(|_| ())?.ok_or(())?;
+            if under_pressure != expected {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// `sinsemilla_short_commit` must return exactly the x-coordinate of the point
+    /// `sinsemilla_short_commit_point` returns for the same inputs, since the
+    /// Orchard note commitment (`cmx`) and nullifier derivations read the same
+    /// commitment through these two entry points.
+    #[test_case]
+    const SHORT_COMMIT_MATCHES_COMMIT_POINT: TestType = TestType {
+        modname: module_path!(),
+        name: "short_commit_matches_commit_point",
+        f: || {
+            let randomness = pallas::Scalar::from(0x0123_4567u64);
+            let message = &LONGEST_MESSAGE[..2 * 255];
+
+            let short = sinsemilla_short_commit(
+                ORCHARD_NOTE_COMMITMENT_PERSONALIZATION,
+                message,
+                &randomness,
+            )
+            .map_err(|_| ())?
+            .ok_or(())?;
+            let point = sinsemilla_short_commit_point(
+                ORCHARD_NOTE_COMMITMENT_PERSONALIZATION,
+                message,
+                &randomness,
+            )
+            .map_err(|_| ())?
+            .ok_or(())?;
+
+            if short != extract_p_pallas(&point) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// An unknown domain must be refused rather than silently committed under a
+    /// default generator pair.
+    #[test_case]
+    const UNKNOWN_DOMAIN_IS_REJECTED: TestType = TestType {
+        modname: module_path!(),
+        name: "unknown_domain_is_rejected",
+        f: || {
+            let result = sinsemilla_short_commit(
+                "z.cash:not-a-sinsemilla-domain",
+                &LONGEST_MESSAGE[..K],
+                &pallas::Scalar::from(1u64),
+            );
+            if result != Err(Error::UnsupportedSinsemillaDomain) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 }
