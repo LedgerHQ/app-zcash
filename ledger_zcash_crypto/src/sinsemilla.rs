@@ -14611,9 +14611,10 @@ mod tests {
     /// SDK points — true only while the hash loop stays pure Rust and allocates
     /// no `cx_bn` slot of its own. Rewriting the loop with `EcPoint` arithmetic
     /// also has a cost this test cannot see: it still passes under Speculos,
-    /// whose `cx_` calls are in-process, while on hardware each of the loop's
-    /// ~2400 additions becomes a secure-element syscall and a single Orchard
-    /// action then runs past the host's APDU timeout, surfacing as a device
+    /// whose `cx_` calls are in-process, while on hardware every one of the
+    /// loop's incomplete additions (up to `C`, over several commitments per
+    /// Orchard action) turns into a chain of secure-element calls, and the
+    /// action then runs past the host's APDU timeout — surfacing as a device
     /// disconnection rather than a status word.
     #[test_case]
     const COMMIT_IS_STABLE_UNDER_BN_PRESSURE: TestType = TestType {
