@@ -1,14 +1,15 @@
+use ff::{Field, FromUniformBytes, PrimeField};
 use ledger_device_sdk::{
-    bn::Bn,
     debug,
-    ecc::{CurvesId, CxError, math::EcPoint},
+    ecc::{CurvesId, math::EcPoint},
     hash::{
         HashInit as _,
         blake2::{Blake2b_512, Blake2bWithPerso},
     },
 };
+use pasta_curves::pallas;
 
-use crate::{Error, bytes::reverse_copy, to_pallas_base_bytes};
+use crate::{Error, bytes::reverse_copy};
 
 // `hash_to_field_pallas` below is a Ledger-port of `pasta_curves::hashtocurve::hash_to_field`.
 // In the original code these are `R_IN_BYTES = 128` and `CHUNKLEN = 64`.
@@ -27,27 +28,15 @@ const HASH_TO_CURVE_SUFFIX: &[u8] = b"_XMD:BLAKE2b_SSWU_RO_";
 // "SWU hash-to-curve personalization for the group hash for key diversification".
 const ORCHARD_DIVERSIFY_HASH_PERSONALIZATION: &str = "z.cash:Orchard-gd";
 
-// Tonelli-Shanks parameters for the Pallas base field, copied from
-// `pasta_curves::fields::fp.rs`.
-const PALLAS_S: u32 = 32;
-
-// `(t - 1) // 2` where `t * 2^s + 1 = p` with `t` odd.
-// Used by `sqrt()` to raise into the Tonelli-Shanks exponent.
+// `(t - 1) // 2` where `t * 2^s + 1 = p` with `t` odd, from
+// `pasta_curves::fields::fp.rs`. Feeds the software Tonelli-Shanks used by
+// `Fp::sqrt`.
 const PALLAS_T_MINUS1_OVER2: [u64; 4] = [
     0x04a67c8dcc969876,
     0x0000000011234c7e,
     0x0000000000000000,
     0x0000000020000000,
 ];
-
-// Pallas base field modulus `p`, from `pasta_curves::fields::fp.rs`:
-// `p = 0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001`.
-const PALLAS_MODULUS: Fp = Fp::from_raw([
-    0x992d30ed00000001,
-    0x224698fc094cf91b,
-    0x0000000000000000,
-    0x4000000000000000,
-]);
 
 // Coefficients of the auxiliary `iso-pallas` curve, copied from
 // `pasta_curves::curves.rs` (`new_curve_impl!(IsoEp, ..., "iso-pallas", a, b, ...)`).
@@ -169,178 +158,77 @@ const PALLAS_ISOGENY_CONSTANTS: [Fp; 13] = [
     ]),
 ];
 
+// Field arithmetic stays in software. The `cx_bn` unit costs about a dozen syscalls
+// per multiplication, which puts a single Orchard action tens of thousands of
+// syscalls over the per-APDU budget and trips the device watchdog.
 #[derive(Copy, Clone, Eq, PartialEq)]
-struct Fp([u8; 32]);
+struct Fp(pallas::Base);
 
 impl Fp {
-    const ZERO: Self = Self([0; 32]);
-    const ONE: Self = Self::from_raw([1, 0, 0, 0]);
+    const ZERO: Self = Self(pallas::Base::ZERO);
+    const ONE: Self = Self(pallas::Base::ONE);
 
     const fn from_raw(limbs: [u64; 4]) -> Self {
-        Self(limbs_to_le_bytes(limbs))
+        Self(pallas::Base::from_raw(limbs))
     }
 
     fn from_uniform_be_bytes(bytes_be: &[u8; BLAKE2B_HASH_BYTES]) -> Result<Self, Error> {
         let mut bytes_le = *bytes_be;
         bytes_le.reverse();
-        Ok(Self(to_pallas_base_bytes(&bytes_le)?))
+        Ok(Self(pallas::Base::from_uniform_bytes(&bytes_le)))
     }
 
     fn is_zero(&self) -> bool {
-        self.0 == [0; 32]
+        bool::from(self.0.is_zero())
     }
 
     fn is_odd(&self) -> bool {
-        (self.0[0] & 1) == 1
+        bool::from(self.0.is_odd())
     }
 
     fn add(&self, rhs: &Self) -> Result<Self, Error> {
-        let a = self.to_bn()?;
-        let b = rhs.to_bn()?;
-        let p = field_modulus_bn()?;
-        let result = Bn::alloc(32)?;
-        result.mod_add(&a, &b, &p)?;
-        Self::from_bn(&result)
+        Ok(Self(self.0 + rhs.0))
     }
 
     fn sub(&self, rhs: &Self) -> Result<Self, Error> {
-        let a = self.to_bn()?;
-        let b = rhs.to_bn()?;
-        let p = field_modulus_bn()?;
-        let result = Bn::alloc(32)?;
-        result.mod_sub(&a, &b, &p)?;
-        Self::from_bn(&result)
+        Ok(Self(self.0 - rhs.0))
     }
 
     fn mul(&self, rhs: &Self) -> Result<Self, Error> {
-        let a = self.to_bn()?;
-        let b = rhs.to_bn()?;
-        let p = field_modulus_bn()?;
-        let result = Bn::alloc(32)?;
-        result.mod_mul(&a, &b, &p)?;
-        Self::from_bn(&result)
+        Ok(Self(self.0 * rhs.0))
     }
 
     fn square(&self) -> Result<Self, Error> {
-        self.mul(self)
+        Ok(Self(self.0.square()))
     }
 
     fn double(&self) -> Result<Self, Error> {
-        self.add(self)
+        Ok(Self(self.0.double()))
     }
 
     fn neg(&self) -> Result<Self, Error> {
-        Fp::ZERO.sub(self)
+        Ok(Self(-self.0))
     }
 
     fn invert(&self) -> Result<Option<Self>, Error> {
-        if self.is_zero() {
-            return Ok(None);
-        }
-
-        let a = self.to_bn()?;
-        let p = field_modulus_bn()?;
-        let result = Bn::alloc(32)?;
-        match result.mod_invert_nprime(&a, &p) {
-            Ok(()) => Ok(Some(Self::from_bn(&result)?)),
-            Err(CxError::NotInvertible) => Ok(None),
-            Err(err) => Err(Error::Cx(err)),
-        }
+        Ok(self.0.invert().map(Self).into())
     }
 
+    // Not `Field::sqrt`: under `pasta_curves/sqrt-table`, which is enabled
+    // transitively, it lazily builds ~32 KB of lookup tables that the heap cannot
+    // hold. This form is constant-time and allocation-free.
     fn sqrt(&self) -> Result<Option<Self>, Error> {
-        if self.is_zero() {
-            return Ok(Some(Fp::ZERO));
-        }
-
-        let w = self.pow_vartime(&PALLAS_T_MINUS1_OVER2)?;
-        let mut v = PALLAS_S;
-        let mut x = w.mul(self)?;
-        let mut b = x.mul(&w)?;
-        let mut z = PALLAS_ROOT_OF_UNITY;
-
-        while b != Fp::ONE {
-            let mut k = 1;
-            let mut b2k = b.square()?;
-
-            while k < v {
-                if b2k == Fp::ONE {
-                    break;
-                }
-
-                b2k = b2k.square()?;
-                k += 1;
-            }
-
-            if k == v {
-                return Ok(None);
-            }
-
-            let mut w = z;
-            let mut j = k + 1;
-            while j < v {
-                w = w.square()?;
-                j += 1;
-            }
-
-            let z_new = w.square()?;
-            x = x.mul(&w)?;
-            b = b.mul(&z_new)?;
-            z = z_new;
-            v = k;
-        }
-
-        if x.square()? == *self {
-            Ok(Some(x))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn pow_vartime(&self, exp: &[u64; 4]) -> Result<Self, Error> {
-        let mut result = Fp::ONE;
-        let mut found_one = false;
-
-        let mut limb_idx = exp.len();
-        while limb_idx > 0 {
-            limb_idx -= 1;
-            let limb = exp[limb_idx];
-
-            let mut bit_idx = 64usize;
-            while bit_idx > 0 {
-                bit_idx -= 1;
-
-                if found_one {
-                    result = result.square()?;
-                }
-
-                if ((limb >> bit_idx) & 1) == 1 {
-                    found_one = true;
-                    result = result.mul(self)?;
-                }
-            }
-        }
-
-        Ok(result)
-    }
-
-    fn to_bn(self) -> Result<Bn, Error> {
-        Ok(Bn::alloc_init(&self.to_be_bytes())?)
+        Ok(
+            ff::helpers::sqrt_tonelli_shanks(&self.0, PALLAS_T_MINUS1_OVER2)
+                .map(Self)
+                .into(),
+        )
     }
 
     fn to_be_bytes(self) -> [u8; 32] {
         let mut be = [0u8; 32];
-        reverse_copy(&mut be, &self.0);
+        reverse_copy(&mut be, &self.0.to_repr());
         be
-    }
-
-    fn from_bn(bn: &Bn) -> Result<Self, Error> {
-        let mut be = [0u8; 32];
-        bn.export(&mut be)?;
-
-        let mut le = [0u8; 32];
-        reverse_copy(&mut le, &be);
-        Ok(Self(le))
     }
 }
 
@@ -644,33 +532,9 @@ fn iso_map_pallas(point: &JacobianPoint) -> Result<JacobianPoint, Error> {
     })
 }
 
-fn field_modulus_bn() -> Result<Bn, Error> {
-    Ok(Bn::alloc_init(&PALLAS_MODULUS.to_be_bytes())?)
-}
-
 fn encode_pallas_point_bytes(x_be: &[u8; 32], sign: u32) -> [u8; 32] {
     let mut x_le = [0u8; 32];
     reverse_copy(&mut x_le, x_be);
     x_le[31] |= ((sign & 1) as u8) << 7;
     x_le
-}
-
-const fn limbs_to_le_bytes(limbs: [u64; 4]) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    let mut i = 0;
-
-    while i < 4 {
-        let limb = limbs[i];
-        out[i * 8] = limb as u8;
-        out[i * 8 + 1] = (limb >> 8) as u8;
-        out[i * 8 + 2] = (limb >> 16) as u8;
-        out[i * 8 + 3] = (limb >> 24) as u8;
-        out[i * 8 + 4] = (limb >> 32) as u8;
-        out[i * 8 + 5] = (limb >> 40) as u8;
-        out[i * 8 + 6] = (limb >> 48) as u8;
-        out[i * 8 + 7] = (limb >> 56) as u8;
-        i += 1;
-    }
-
-    out
 }
