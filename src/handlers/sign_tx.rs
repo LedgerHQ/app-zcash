@@ -14,7 +14,7 @@
  *  See the License for the specific language governing permissions and
  *  limitations under the License.
  *****************************************************************************/
-use ledger_device_sdk::ecc::{Secp256k1, SeedDerive as _};
+use ledger_device_sdk::ecc::{Secp256k1, Secret, SeedDerive as _};
 use ledger_device_sdk::io::Comm;
 use ledger_device_sdk::log::{debug, error, info};
 use ledger_device_sdk::random::LedgerRng;
@@ -27,7 +27,7 @@ use crate::parser::{
 use crate::tx::TxContext;
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
-use crate::zip32::{derive_orchard_ask, map_ledger_crypto_error};
+use crate::zip32::{derive_orchard_ask_from_sk, map_ledger_crypto_error};
 
 pub fn handler_hash_input_start(
     comm: &mut Comm,
@@ -288,12 +288,12 @@ pub(crate) fn append_signature(
     Ok(())
 }
 
-pub(crate) fn orchard_spend_auth_signature_with_alpha(
-    bip32_path: &Bip32Path,
+pub(crate) fn orchard_spend_auth_signature_with_sk(
+    sk_bytes: &Secret<32>,
     sig_hash: &[u8; 32],
     alpha_bytes: [u8; 32],
 ) -> Result<[u8; 64], AppSW> {
-    let ask = derive_orchard_ask(bip32_path)?;
+    let ask = derive_orchard_ask_from_sk(sk_bytes)?;
     orchard_spend_auth_signature_with_ask(&ask, sig_hash, alpha_bytes)
 }
 

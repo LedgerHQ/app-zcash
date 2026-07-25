@@ -14,6 +14,6 @@ ff = { version = "0.13", default-features = false }
 pasta_curves = { version = "0.5", default-features = false }
 
 [features]
-default = ["montgomery_fallback"]
-
-montgomery_fallback = []
+# Enables the Ledger SDK on-device unit-test framework (TestType / sdk_test_runner).
+# Required when running `cargo test` for this crate under Speculos.
+unit_test = ["ledger_device_sdk/unit_test"]

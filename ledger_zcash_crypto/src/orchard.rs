@@ -1,3 +1,11 @@
+//! Orchard note, nullifier and value-commitment derivations.
+//!
+//! The commitment entry points here are `#[inline(never)]`: each builds a
+//! `[bool; NOTE_COMMITMENT_MESSAGE_BITS]` Sinsemilla message on the stack, and
+//! folded into their caller two of those (the nullifier's commitment and the
+//! output's `cmx`) become resident together even though they are computed one
+//! after the other — which overflows the Nano X stack.
+
 use alloc::{boxed::Box, vec::Vec};
 use chacha20::{
     ChaCha20,
@@ -15,9 +23,10 @@ use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
     ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
     bytes::reverse_copy,
-    pallas_base_from_repr, pallas_basepoint_mul, pallas_point_add, pallas_point_from_bytes,
-    pallas_point_to_bytes, pallas_scalar_from_repr, prf_expand_with_domain_separator_and_inputs,
-    sinsemilla::{extract_p, sinsemilla_short_commit, sinsemilla_short_commit_point},
+    pallas_base_from_repr, pallas_basepoint_mul, pallas_point_from_bytes, pallas_point_to_bytes,
+    pallas_scalar_from_repr, prf_expand_with_domain_separator_and_inputs,
+    redpallas::point_from_sdk_point,
+    sinsemilla::{extract_p_pallas, sinsemilla_short_commit, sinsemilla_short_commit_point},
     to_pallas_base_bytes, to_pallas_scalar_bytes,
 };
 
@@ -85,6 +94,7 @@ pub fn decipher_compact_value(
     try_compact_note_decryption_with_ivk(ivk, compact)
 }
 
+#[inline(never)]
 pub fn spend_nullifier_bytes(
     nk: &[u8; HASH_SIZE],
     raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
@@ -114,16 +124,24 @@ pub fn spend_nullifier_bytes(
     let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
         cm
     } else {
-        let nullifier_k = pallas_basepoint_mul(
+        // The commitment `cm` is already a pure-Rust point, so converting the
+        // scalar-mul result and adding in software keeps exactly one SDK point
+        // alive here; adding with SDK points would hold three at once (cm, the
+        // scalar-mul result, the sum). The `cx_bn` pool is a small shared budget
+        // with no documented ceiling, and Speculos does not model it, so this
+        // path keeps its footprint minimal by construction rather than against a
+        // measured limit.
+        let nullifier_k_ec = pallas_basepoint_mul(
             &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
             &scalar_bytes_be(&nullifier_scalar),
         )?;
-        pallas_point_add(&nullifier_k, &cm)?
+        point_from_sdk_point(&nullifier_k_ec)? + cm
     };
 
-    Ok(extract_p(&nullifier_point)?.to_repr())
+    Ok(extract_p_pallas(&nullifier_point).to_repr())
 }
 
+#[inline(never)]
 pub fn note_commitment_bytes(
     raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
     value: u64,
@@ -468,6 +486,7 @@ fn parse_note_plaintext_prefix(
     })
 }
 
+#[inline(never)]
 fn note_commitment(
     g_d: &[u8; HASH_SIZE],
     pk_d: &[u8; HASH_SIZE],
@@ -495,13 +514,14 @@ fn note_commitment(
     Ok(cmx.to_repr())
 }
 
+#[inline(never)]
 fn note_commitment_point(
     g_d: &[u8; HASH_SIZE],
     pk_d: &[u8; HASH_SIZE],
     value: u64,
     rho: &pallas::Base,
     rseed: &[u8; HASH_SIZE],
-) -> Result<ledger_device_sdk::ecc::math::EcPoint, Error> {
+) -> Result<pallas::Point, Error> {
     let psi = orchard_psi(rseed, rho)?;
     let rcm = orchard_rcm(rseed, rho)?;
     let rcm = pallas_scalar_from_repr(rcm)?;

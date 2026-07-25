@@ -144,8 +144,16 @@ def _sign_all_orchard_actions(
     client: ZcashCommandSender,
     orchard_bundle: PcztOrchardBundle,
 ) -> list[bytes]:
+    # The device produces a spend-auth signature only for real spends. Dummy
+    # padding spends (spend_value == 0) are signed host-side by the PCZT
+    # IoFinalizer and never counted by the device, which completes the signing
+    # session as soon as every real spend is signed. This mirrors the host (DMK)
+    # contract; the device also rejects a dummy index outright, which
+    # test_pczt_sign_tx_v5_orchard_dummy_spend_signature_is_refused covers.
     auth_sigs = []
-    for action_index in range(len(orchard_bundle.actions)):
+    for action_index, action in enumerate(orchard_bundle.actions):
+        if action.spend_value == 0:
+            continue
         auth_sig = client.pczt_sign_orchard(action_index=action_index).data
         assert len(auth_sig) == 64
         auth_sigs.append(auth_sig)
@@ -636,7 +644,7 @@ def test_pczt_sign_tx_orchard_action_count_limit(
             rcv=bytes(32),
         )
 
-    # MAX_ORCHARD_ACTIONS is 6; declare one more to trip the bound.
+    # MAX_PCZT_ORCHARD_ACTIONS_NUMBER is 10; declare one more to trip the bound.
     too_many_actions = PcztOrchardBundle(
         actions=[_dummy_orchard_action() for _ in range(11)],
         flags=0,
@@ -1083,7 +1091,9 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("0e38d98b744da4e7eb6d22d7b983eb6e44c770f957ab9b8764b2c530f69cbaba389c2a3fffbb6f63a208ad1c74fce78c978371759aae2bbdcb2c9b26a6a09e29")
+    # All Orchard spends are dummy padding (spend_value == 0), signed host-side;
+    # the device produces no Orchard spend-auth signature for this transfer.
+    EXPECTED_AUTH_SIG: list[bytes] = []
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1138,7 +1148,9 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_memo(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("57093ab792c148469efb524cd831d78bd10c0b521c258c79dd57f8b6db87fd0f4137669b31f8918364598cea985dd4b9cbe88e704a77eb23aa69821924195708")
+    # All Orchard spends are dummy padding (spend_value == 0), signed host-side;
+    # the device produces no Orchard spend-auth signature for this transfer.
+    EXPECTED_AUTH_SIG: list[bytes] = []
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1211,10 +1223,10 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = [
-        bytes.fromhex("13da39bb4da9bd165c34cfcaf5da58871ad44af34f525e5c046abf113d42343b635f12a78bf1e7acbe69472c80865baeee36a5d1f064d5795425add4312d6826"),
-        bytes.fromhex("265af45c8582ec76713ee193c782c0afccc059561311d5589b07dd795102bd854ceb59d47ba21b53e9a1244559a1e31a4af9928e048db7122e38cd09e39cfe05"),
-    ]
+    # Both Orchard actions (recipient + change) are dummy padding
+    # (spend_value == 0), signed host-side; the device produces no Orchard
+    # spend-auth signature for this transfer.
+    EXPECTED_AUTH_SIG: list[bytes] = []
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1268,7 +1280,9 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_self_transfer_displays_internal(
         anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
     )
     PCZT_GLOBAL = PcztGlobal()
-    EXPECTED_AUTH_SIG = bytes.fromhex("96b54456684a5fbcd1b36bdddc5d8a00a83d7ad085899136004b483ef34b54035e91e3bd47fa70ba47c0bb75216bfd8c241e168b6ea02028cc462cfe9e56c12c")
+    # The Orchard spend is dummy padding (spend_value == 0), signed host-side;
+    # the device produces no Orchard spend-auth signature for this transfer.
+    EXPECTED_AUTH_SIG: list[bytes] = []
 
     _assert_pczt_orchard_sign_digest(
         backend,
@@ -1553,11 +1567,13 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_unrecoverable_output_rejected(
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
-def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
-    backend,
-    scenario_navigator: NavigateWithScenario,
-):
-    TRANSPARENT_OUTPUTS = []
+def _mixed_real_and_dummy_orchard_bundle() -> PcztOrchardBundle:
+    """Orchard bundle with a real spend at index 0 and the dummy padding change
+    spend (spend_value == 0) at index 1.
+
+    Shared by the signing test and the test asserting the device refuses to sign
+    a dummy index, so both drive the exact same actions and ordering.
+    """
     RECIPIENT_ORCHARD_ACTION = {
         "cv_net": "2bbcd0793d399b207b228ca760f2b51ac8d6866e2649b3c3ff1e67b454c5a6bf",
         "nullifier": "a554dda140773e5cdf5234e36227ab659452e8102d4de726c8a72fa182d94203",
@@ -1590,7 +1606,7 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
         "value": 10000,
         "recipient": "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a",
     }
-    ORCHARD_BUNDLE = PcztOrchardBundle(
+    return PcztOrchardBundle(
         actions=[
             _strict_orchard_action(RECIPIENT_ORCHARD_ACTION),
             _strict_orchard_action(CHANGE_ORCHARD_ACTION),
@@ -1599,18 +1615,99 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
         value_balance=10000,
         anchor=bytes.fromhex("c5e1408579e67cf16b5d19479408fa035a7db4fe3060123d139eba8523bc9633"),
     )
+
+
+# Both tests below review the same bundle, so they share its review snapshots.
+_ORCHARD_TO_ORCHARD_SNAPSHOTS = "test_sign_tx_v5_orchard_to_orchard_with_change"
+
+
+def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    TRANSPARENT_OUTPUTS = []
+    ORCHARD_BUNDLE = _mixed_real_and_dummy_orchard_bundle()
     PCZT_GLOBAL = PcztGlobal()
+    # Action 0 is a real spend (spend_value != 0), signed by the device.
+    # Action 1 is the dummy change spend (spend_value == 0), signed host-side;
+    # the device produces no spend-auth signature for it.
     EXPECTED_AUTH_SIG = [
-        bytes.fromhex("920a50c9903cd33fdd143bb10d4baaaa6d064f0a9db6c4a5f3c6bdabf870ad8831ce35ebb5cf06a6f49dfd3b51b52e1d9b28d2da5b0bfacd5c3fe530fe18880b"),
-        bytes.fromhex("0c47298136a564936f911eb85e4e89718b9242ecdfe963668aebf70da10aff284dc0037af3c1c0e3f103c76933264132f979d3cef32e78566561c7d772387117"),
+        bytes.fromhex("8e02f26bee1e1a0635692338689b25753059fcc73ba63f8742cd6fcb6a2f972966b8f0f4243826a4a5d413e64d8fdabde9e242c2ac0e4f4bd7ef35b297d6d138"),
     ]
 
     _assert_pczt_orchard_sign_digest(
         backend,
         scenario_navigator,
-        "test_sign_tx_v5_orchard_to_orchard_with_change",
+        _ORCHARD_TO_ORCHARD_SNAPSHOTS,
         PCZT_GLOBAL,
         EXPECTED_AUTH_SIG,
         TRANSPARENT_OUTPUTS,
         ORCHARD_BUNDLE,
     )
+
+
+def test_pczt_sign_tx_v5_orchard_dummy_spend_signature_is_refused(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The device must refuse to produce a spend-auth signature for a dummy
+    padding spend.
+
+    Dummy actions are parsed without the rk and nullifier checks — those derive
+    from the host's throwaway key and cannot pass — and the PCZT IoFinalizer
+    already self-signs them. A device signature would therefore authorize an
+    action whose spend side was never verified, and would push the device
+    signature count past the finalizer's unsigned-action count. The host is
+    expected to skip dummy indices; this asserts the device does not depend on
+    it and rejects the request instead of hanging or signing.
+    """
+    ORCHARD_BUNDLE = _mixed_real_and_dummy_orchard_bundle()
+    PCZT_GLOBAL = PcztGlobal()
+    DUMMY_ACTION_INDEX = 1
+    assert ORCHARD_BUNDLE.actions[DUMMY_ACTION_INDEX].spend_value == 0
+
+    client = ZcashCommandSender(backend)
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        orchard_bundle=ORCHARD_BUNDLE,
+    ):
+        _review_approve(scenario_navigator, _ORCHARD_TO_ORCHARD_SNAPSHOTS)
+
+    # Requested before the real spend at index 0, so the signing session is still
+    # open: the rejection comes from the dummy check, not from a finished session.
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.pczt_sign_orchard(action_index=DUMMY_ACTION_INDEX)
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_sign_tx_v5_orchard_divergent_signing_path_rejected(
+    backend,
+):
+    """All Orchard actions of a PCZT belong to one account, so the device derives
+    the spending key once (from the first action's path) and reuses it.
+
+    An action declaring a different path must be rejected rather than served the
+    cached key: otherwise the device would derive the FVK from one path while
+    deriving the network from another, and sign with a key the declared path does
+    not produce.
+    """
+    ORCHARD_BUNDLE = _mixed_real_and_dummy_orchard_bundle()
+    # Same coin type (so this is not caught by the coin-type check), different
+    # account index.
+    ORCHARD_BUNDLE.actions[1].signing_path = "m/32'/133'/1'"
+    PCZT_GLOBAL = PcztGlobal()
+
+    client = ZcashCommandSender(backend)
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            orchard_bundle=ORCHARD_BUNDLE,
+        ):
+            pytest.fail("Device accepted Orchard actions with divergent signing paths")
+
+    assert e.value.status == Errors.SW_BAD_STATE

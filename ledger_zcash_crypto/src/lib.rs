@@ -1,4 +1,8 @@
 #![no_std]
+#![feature(custom_test_frameworks)]
+#![cfg_attr(test, no_main)]
+#![cfg_attr(test, test_runner(ledger_device_sdk::testing::sdk_test_runner))]
+#![cfg_attr(test, reexport_test_harness_main = "test_main")]
 
 extern crate alloc;
 
@@ -549,4 +553,18 @@ fn encode_pallas_point_bytes(x_be: &[u8; 32], sign: u32) -> [u8; 32] {
     bytes::reverse_copy(&mut x_le, x_be);
     x_le[31] |= ((sign & 1) as u8) << 7;
     x_le
+}
+
+// On-device unit-test entry point. The C runtime provided by the Ledger SDK
+// calls `sample_main`, which here simply runs the generated test harness.
+#[cfg(test)]
+#[unsafe(no_mangle)]
+fn sample_main() {
+    test_main();
+}
+
+#[cfg(test)]
+#[panic_handler]
+fn test_panic_handler(info: &core::panic::PanicInfo) -> ! {
+    ledger_device_sdk::testing::test_panic(info)
 }

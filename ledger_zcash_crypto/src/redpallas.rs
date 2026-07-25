@@ -218,21 +218,85 @@ pub fn spendauth_randomized_signing_key(
     let scalar_bytes_be = canonical_scalar_bytes_be(&scalar_bytes_le)?;
     let randomizer_bytes_be = canonical_scalar_bytes_be(&randomizer_bytes_le)?;
 
-    let scalar = Bn::alloc_init(&scalar_bytes_be)?;
-    let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
-    let mut order = Bn::alloc(32)?;
-    CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
+    // Scope the Bn objects so they are freed before calling spendauth_signing_key.
+    // Without this block, scalar/randomizer/order/randomized remain alive across
+    // the tail call, which pushes the concurrent Bn count past the SDK pool limit
+    // and causes Bn::alloc inside spendauth_signing_key to return CxError.
+    let randomized_bytes_le = {
+        let mut order = Bn::alloc(32)?;
+        CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
-    let randomized = Bn::alloc(32)?;
-    randomized.mod_add(&scalar, &randomizer, &order)?;
+        let sum = Bn::alloc(32)?;
+        {
+            let scalar = Bn::alloc_init(&scalar_bytes_be)?;
+            let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
+            sum.mod_add(&scalar, &randomizer, &order)?;
+        }
 
-    let mut randomized_bytes_be = [0u8; 32];
-    randomized.export(&mut randomized_bytes_be)?;
+        // `cx_bn_mod_add` can leave the result in `[order, 2*order)` (it does not
+        // always perform the final conditional subtraction). Reduce to a
+        // canonical scalar (`< order`): `spendauth_signing_key` decodes the bytes
+        // with a strict canonical check (`canonical_scalar_bytes_be`) that rejects
+        // a non-canonical scalar, so an unreduced `scalar + randomizer >= order`
+        // would otherwise fail key derivation.
+        let randomized = Bn::alloc(32)?;
+        randomized.reduce(&sum, &order)?;
 
-    let mut randomized_bytes_le = [0u8; 32];
-    reverse_copy(&mut randomized_bytes_le, &randomized_bytes_be);
+        let mut randomized_bytes_be = [0u8; 32];
+        randomized.export(&mut randomized_bytes_be)?;
+
+        let mut randomized_bytes_le = [0u8; 32];
+        reverse_copy(&mut randomized_bytes_le, &randomized_bytes_be);
+        randomized_bytes_le
+    };
 
     spendauth_signing_key(randomized_bytes_le)
+}
+
+/// Computes only the *bytes* of the randomized RedPallas spend-auth verification
+/// key `rk = [(scalar + randomizer) mod q]·G`, without constructing the
+/// intermediate `pallas::Point`. This is the light path for `rk` verification:
+/// it skips the SDK-point → `pallas::Point` conversion that
+/// [`spendauth_randomized_signing_key`] performs (and which the caller does not
+/// need when only comparing `rk` bytes), lowering the concurrent BN footprint.
+pub fn spendauth_randomized_verification_key_bytes(
+    scalar_bytes_le: [u8; 32],
+    randomizer_bytes_le: [u8; 32],
+) -> Result<[u8; 32], Error> {
+    let scalar_bytes_be = canonical_scalar_bytes_be(&scalar_bytes_le)?;
+    let randomizer_bytes_be = canonical_scalar_bytes_be(&randomizer_bytes_le)?;
+
+    // Scope the Bn objects so they are freed before the point multiplication,
+    // keeping the concurrent Bn count low (same rationale as
+    // `spendauth_randomized_signing_key`).
+    let randomized_bytes_be = {
+        let mut order = Bn::alloc(32)?;
+        CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
+
+        let sum = Bn::alloc(32)?;
+        {
+            let scalar = Bn::alloc_init(&scalar_bytes_be)?;
+            let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
+            sum.mod_add(&scalar, &randomizer, &order)?;
+        }
+
+        // Reduce to a canonical scalar (`< order`) for the same reason as
+        // `spendauth_randomized_signing_key`: `cx_bn_mod_add` may leave the
+        // result in `[order, 2*order)`. Whether the scalar multiplication below
+        // would reduce a non-canonical scalar internally is not a documented
+        // guarantee, and this runs on a verification path — reducing here costs
+        // one Bn and removes the assumption.
+        let randomized = Bn::alloc(32)?;
+        randomized.reduce(&sum, &order)?;
+
+        let mut randomized_bytes_be = [0u8; 32];
+        randomized.export(&mut randomized_bytes_be)?;
+        randomized_bytes_be
+    };
+
+    // `basepoint_mul_bytes_from_scalar_be` returns the compressed key bytes and
+    // drops the SDK `EcPoint` immediately (no `point_from_sdk_point`).
+    basepoint_mul_bytes_from_scalar_be(&ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES, &randomized_bytes_be)
 }
 
 /// Creates a RedPallas spend authorization signature using Ledger SDK hashing,
@@ -291,8 +355,17 @@ fn redpallas_sign(
     let challenge_mul_scalar = Bn::alloc(32)?;
     challenge_mul_scalar.mod_mul(&challenge, &scalar, &order)?;
 
+    let s_sum = Bn::alloc(32)?;
+    s_sum.mod_add(&nonce, &challenge_mul_scalar, &order)?;
+
+    // `cx_bn_mod_add` may leave the result in `[order, 2·order)` — it does not
+    // always perform the final conditional subtraction — yielding a
+    // NON-canonical scalar. A RedPallas signature's `s` MUST be a canonical
+    // scalar (`< order`): the verifier decodes it with a strict
+    // `Scalar::from_repr` and rejects any non-canonical encoding
+    // (`InvalidSignature`). Reduce explicitly so `s < order`.
     let s = Bn::alloc(32)?;
-    s.mod_add(&nonce, &challenge_mul_scalar, &order)?;
+    s.reduce(&s_sum, &order)?;
 
     let mut s_bytes_be = [0u8; 32];
     s.export(&mut s_bytes_be)?;
@@ -403,7 +476,7 @@ fn reduce_uniform_le_bytes_mod_pallas_order(uniform_le: &[u8; 64]) -> Result<[u8
     Ok(reduced_bytes_le)
 }
 
-fn point_from_sdk_point(point: &EcPoint) -> Result<pallas::Point, Error> {
+pub(crate) fn point_from_sdk_point(point: &EcPoint) -> Result<pallas::Point, Error> {
     let mut x_be = [0u8; 32];
     let mut y_be = [0u8; 32];
     point.export(&mut x_be, &mut y_be)?;
@@ -433,7 +506,7 @@ struct ProjectivePointLayout {
     z: pallas::Base,
 }
 
-fn projective_point(x: pallas::Base, y: pallas::Base, z: pallas::Base) -> pallas::Point {
+pub(crate) fn projective_point(x: pallas::Base, y: pallas::Base, z: pallas::Base) -> pallas::Point {
     debug_assert_eq!(
         core::mem::size_of::<ProjectivePointLayout>(),
         core::mem::size_of::<pallas::Point>(),
@@ -472,4 +545,182 @@ fn encode_pallas_point_bytes(x_be: &[u8; 32], sign: u32) -> [u8; 32] {
     reverse_copy(&mut x_le, x_be);
     x_le[31] |= ((sign & 1) as u8) << 7;
     x_le
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ledger_device_sdk::testing::TestType;
+
+    /// Little-endian scalar encoding of a small `u8` value.
+    fn scalar_from_u8(n: u8) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        bytes
+    }
+
+    /// A full-width, non-trivial scalar guaranteed to be canonical: the most
+    /// significant little-endian byte is left at 0, so the value is < 2^248,
+    /// well below the Pallas scalar-field order.
+    fn wide_canonical_scalar(seed: u8) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        let mut i = 0;
+        while i < 31 {
+            bytes[i] = seed.wrapping_add(i as u8) | 1;
+            i += 1;
+        }
+        bytes
+    }
+
+    fn signing_keys_eq(a: &SpendAuthSigningKey, b: &SpendAuthSigningKey) -> bool {
+        <[u8; 32]>::from(a) == <[u8; 32]>::from(b)
+            && a.verification_key_bytes() == b.verification_key_bytes()
+    }
+
+    /// Randomizing with a zero randomizer must yield exactly the plain signing
+    /// key derived from the same scalar.
+    #[test_case]
+    const RANDOMIZE_WITH_ZERO_IS_IDENTITY: TestType = TestType {
+        modname: module_path!(),
+        name: "randomize_with_zero_is_identity",
+        f: || {
+            let scalar = scalar_from_u8(9);
+            let randomized = spendauth_randomized_signing_key(scalar, [0u8; 32]).map_err(|_| ())?;
+            let plain = spendauth_signing_key(scalar).map_err(|_| ())?;
+            if !signing_keys_eq(&randomized, &plain) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// `(scalar + randomizer)` with small operands stays below the field order,
+    /// so the randomized key must equal the signing key of the plain sum.
+    #[test_case]
+    const RANDOMIZE_MATCHES_SCALAR_SUM: TestType = TestType {
+        modname: module_path!(),
+        name: "randomize_matches_scalar_sum",
+        f: || {
+            // 5 + 7 = 12, all far below the field order => (a + r) mod q == a + r.
+            let randomized = spendauth_randomized_signing_key(scalar_from_u8(5), scalar_from_u8(7))
+                .map_err(|_| ())?;
+            let expected = spendauth_signing_key(scalar_from_u8(12)).map_err(|_| ())?;
+            if !signing_keys_eq(&randomized, &expected) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// Regression test for the Bn allocator exhaustion fix: with full-width
+    /// scalars the temporary `Bn` values allocated while computing the
+    /// randomized scalar must be freed before the tail call to
+    /// `spendauth_signing_key`. Otherwise the concurrent `Bn` count exceeds the
+    /// SDK pool limit and `Bn::alloc` inside `spendauth_signing_key` fails with
+    /// `CxError`, which surfaces here as an `Err`.
+    #[test_case]
+    const RANDOMIZE_WIDE_SCALARS_DOES_NOT_EXHAUST_BN_POOL: TestType = TestType {
+        modname: module_path!(),
+        name: "randomize_wide_scalars_does_not_exhaust_bn_pool",
+        f: || {
+            let scalar = wide_canonical_scalar(0x11);
+            let randomizer = wide_canonical_scalar(0x42);
+            spendauth_randomized_signing_key(scalar, randomizer).map_err(|_| ())?;
+            Ok(())
+        },
+    };
+
+    /// Exercises the modular-reduction path `scalar + randomizer >= order`.
+    /// With `scalar = order - 5` and `randomizer = 10`, the sum is `order + 5`,
+    /// which `mod_add` may leave unreduced in `[order, 2*order)`; the randomized
+    /// key must still equal the signing key of the reduced scalar `5`. Guards the
+    /// canonical reduction in `spendauth_randomized_signing_key` (without it,
+    /// `spendauth_signing_key`'s strict canonical check rejects the unreduced
+    /// scalar and key derivation fails).
+    #[test_case]
+    const RANDOMIZE_REDUCES_WHEN_SUM_EXCEEDS_ORDER: TestType = TestType {
+        modname: module_path!(),
+        name: "randomize_reduces_when_sum_exceeds_order",
+        f: || {
+            use ff::{Field, PrimeField};
+            let scalar: [u8; 32] = (pallas::Scalar::ZERO - pallas::Scalar::from(5u64)).to_repr();
+            let randomizer = scalar_from_u8(10);
+            let randomized =
+                spendauth_randomized_signing_key(scalar, randomizer).map_err(|_| ())?;
+            let expected = spendauth_signing_key(scalar_from_u8(5)).map_err(|_| ())?;
+            if !signing_keys_eq(&randomized, &expected) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// The light `rk` path must agree with the full path it replaces: computing
+    /// the randomized verification key bytes directly must give the same result
+    /// as randomizing the signing key and taking its verification key. Guards
+    /// against the two implementations drifting apart, since only the light one
+    /// is used to verify a PCZT action's `rk`.
+    #[test_case]
+    const RANDOMIZED_VK_BYTES_MATCH_FULL_PATH: TestType = TestType {
+        modname: module_path!(),
+        name: "randomized_vk_bytes_match_full_path",
+        f: || {
+            let scalar = wide_canonical_scalar(0x11);
+            let randomizer = wide_canonical_scalar(0x42);
+            let light =
+                spendauth_randomized_verification_key_bytes(scalar, randomizer).map_err(|_| ())?;
+            let full = spendauth_randomized_signing_key(scalar, randomizer).map_err(|_| ())?;
+            if light != full.verification_key_bytes() {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// Same reduction path as `RANDOMIZE_REDUCES_WHEN_SUM_EXCEEDS_ORDER`, for the
+    /// light `rk` computation: with `scalar = order - 5` and `randomizer = 10`
+    /// the sum is `order + 5`, which `mod_add` may leave unreduced, so the result
+    /// must still match the verification key of the reduced scalar `5`.
+    #[test_case]
+    const RANDOMIZED_VK_BYTES_REDUCE_WHEN_SUM_EXCEEDS_ORDER: TestType = TestType {
+        modname: module_path!(),
+        name: "randomized_vk_bytes_reduce_when_sum_exceeds_order",
+        f: || {
+            use ff::{Field, PrimeField};
+            let scalar: [u8; 32] = (pallas::Scalar::ZERO - pallas::Scalar::from(5u64)).to_repr();
+            let light = spendauth_randomized_verification_key_bytes(scalar, scalar_from_u8(10))
+                .map_err(|_| ())?;
+            let expected = spendauth_signing_key(scalar_from_u8(5)).map_err(|_| ())?;
+            if light != expected.verification_key_bytes() {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// The RedPallas signature scalar `s = nonce + c * rsk` must be reduced to a
+    /// canonical scalar (`< order`) before it is serialized: a strict
+    /// `Scalar::from_repr` on the `s` half of the signature must succeed. Guards
+    /// the canonical reduction in `redpallas_sign` (a non-canonical `s` is
+    /// rejected by the host finalizer). Signs several messages to cover the case
+    /// where `nonce + c * rsk` wraps past the order.
+    #[test_case]
+    const SIGN_PRODUCES_CANONICAL_S: TestType = TestType {
+        modname: module_path!(),
+        name: "sign_produces_canonical_s",
+        f: || {
+            use ff::PrimeField;
+            let signing_key = spendauth_signing_key(wide_canonical_scalar(0x33)).map_err(|_| ())?;
+            let random = [0x24u8; 80];
+            for msg_fill in [0x01u8, 0x5a, 0xa5, 0xfe] {
+                let sig = spendauth_sign(&signing_key, &random, &[msg_fill; 32]).map_err(|_| ())?;
+                let mut s = [0u8; 32];
+                s.copy_from_slice(&sig[32..]);
+                if bool::from(pallas::Scalar::from_repr(s).is_none()) {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
 }
