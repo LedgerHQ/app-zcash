@@ -443,15 +443,22 @@ pub fn handler_pczt_sign_ironwood(
     }
 
     let (path, alpha) = match ctx.pczt_parser.ironwood_action_signing_data(action_index) {
-        Ok(signing_data) => signing_data,
+        Ok((path, alpha)) => (*path, alpha),
         Err(e) => {
             error!("Error reading PCZT ironwood signing data: {:#?}", e);
             return Err(map_pczt_parser_error(ctx, e));
         }
     };
 
+    // Reuse the session-cached account spending key, as the Orchard signing
+    // handler does (repeated zip32_orchard_derive exhausts the SE and fails 6f00).
+    let sk = match ctx.pczt_parser.orchard_spending_key(&path) {
+        Ok(sk) => sk,
+        Err(sw) => return Err(reset_pczt_parser_with_sw(ctx, sw)),
+    };
+
     let auth_sig =
-        match orchard_spend_auth_signature_with_alpha(path, &ctx.tx_info.signature_digest, alpha) {
+        match orchard_spend_auth_signature_with_sk(sk, &ctx.tx_info.signature_digest, alpha) {
             Ok(auth_sig) => auth_sig,
             Err(sw) => return Err(reset_pczt_parser_with_sw(ctx, sw)),
         };

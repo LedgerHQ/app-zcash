@@ -562,6 +562,7 @@ impl PcztParser {
             .push(PcztIronwoodActionSigningRecord {
                 alpha,
                 path,
+                is_real_spend: self.current_ironwood_spend_value != 0,
                 signed: false,
             });
         self.reset_current_ironwood_action();
@@ -978,7 +979,7 @@ impl PcztParser {
         Ok(())
     }
 
-    fn verify_current_ironwood_rk(&self, path: &Bip32Path) -> Result<(), ParserError> {
+    fn verify_current_ironwood_rk(&self, ask: &OrchardAsk) -> Result<(), ParserError> {
         let alpha = self
             .current_ironwood_alpha
             .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
@@ -986,12 +987,11 @@ impl PcztParser {
         let alpha = ledger_zcash_crypto::pallas_scalar_from_repr(alpha)
             .map_err(|_| ParserError::from_str("Bad PCZT ironwood alpha"))?;
 
-        let ask = ok!(derive_orchard_ask(path));
-        let randomized_ask = ask
-            .randomize_ledger(&alpha)
+        // Compute rk bytes directly, as the Orchard path does: no intermediate
+        // curve-point construction, keeping the BN/point footprint low here.
+        let expected_rk = ask
+            .randomized_verification_key_bytes(&alpha)
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-        let expected_rk: [u8; 32] =
-            (&RedpallasVerificationKey::<SpendAuth>::from(&randomized_ask)).into();
 
         if expected_rk != self.current_ironwood_rk {
             return Err(ParserError::from_str(
@@ -1103,8 +1103,13 @@ impl PcztParser {
             self.ironwood_action_parsed_count, path
         );
 
-        let orchard_fvk = ok!(derive_orchard_fvk(&path));
-        self.verify_current_ironwood_rk(&path)?;
+        // Derive the FVK and ASK from the session-cached account spending key:
+        // `zip32_orchard_derive` does not reclaim its SE resources between calls,
+        // so deriving per action exhausts them and the next one fails with 6f00.
+        let sk = ok!(self.orchard_spending_key(&path));
+        let (orchard_fvk, ask) =
+            derive_orchard_fvk_and_ask_from_sk(sk).map_err(ParserError::from_sw)?;
+        self.verify_current_ironwood_rk(&ask)?;
         let network = orchard_network(&path);
         ctx.tx_info.orchard_decipher_keys =
             Some(ok!(OrchardDecipherKeys::from_fvk(&orchard_fvk, network)));
