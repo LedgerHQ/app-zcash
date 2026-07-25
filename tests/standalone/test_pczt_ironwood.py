@@ -326,11 +326,17 @@ def test_pczt_v6_header_then_legacy_continuation_rejected(backend):
     assert e.value.status == Errors.SW_BAD_STATE
 
 
-def test_pczt_migration_orchard_to_ironwood(
+def test_pczt_v6_both_pools_sign_independently(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """V6 migration tx with both Orchard and Ironwood bundles: both pools sign independently."""
+    """V6 tx carrying both an Orchard and an Ironwood bundle: each pool signs independently.
+
+    Ledger Live never builds such a transaction — it spends the sealed Orchard pool,
+    and no Ledger account holds Orchard funds — but the host is untrusted and can send
+    one, so the device must still handle it: the two bundles are parsed in sequence,
+    the fee sums both value balances, and each pool yields its own spendAuthSig.
+    """
     client = ZcashCommandSender(backend)
 
     with client.send_pczt(
@@ -340,7 +346,7 @@ def test_pczt_migration_orchard_to_ironwood(
         orchard_bundle=_valid_orchard_bundle(),
         ironwood_bundle=_valid_ironwood_bundle(),
     ):
-        _review_approve(scenario_navigator, "test_pczt_migration_orchard_to_ironwood")
+        _review_approve(scenario_navigator, "test_pczt_v6_both_pools_sign_independently")
 
     orchard_sig = client.pczt_sign_orchard(action_index=0).data
     assert len(orchard_sig) == 64

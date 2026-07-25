@@ -201,6 +201,65 @@ pub struct PcztParserCtx<'ctx> {
 #[cfg(feature = "zcash_unstable")]
 type PcztIronwoodActionSigningRecord = PcztOrchardActionSigningRecord;
 
+/// Scratch state for the single action being parsed, shared by the Orchard and
+/// Ironwood bundles.
+///
+/// Sharing is safe because a bundle is parsed to completion before the next one
+/// starts and every field is rewritten when an action begins; nothing an action
+/// leaves behind is read once it is finished, since what outlives it is copied
+/// into the bundle's signing records. Giving each pool its own copy costs about a
+/// kilobyte of static RAM, which on Nano X is taken straight out of the stack the
+/// action-finalisation path needs.
+struct PcztCurrentActionState {
+    flags: u8,
+    value_sum_magnitude: u64,
+    cv_net: [u8; 32],
+    nullifier: [u8; 32],
+    rk: [u8; 32],
+    spend_value: u64,
+    spend_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
+    spend_rho: [u8; 32],
+    spend_rseed: [u8; 32],
+    rcv: Option<[u8; 32]>,
+    output_rseed: Option<[u8; 32]>,
+    cmx: [u8; 32],
+    ephemeral_key: [u8; 32],
+    out_ciphertext: Option<[u8; ORCHARD_OUT_CIPHERTEXT_SIZE]>,
+    output_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
+    output_value: u64,
+    enc_ciphertext: Vec<u8>,
+    alpha: Option<[u8; 32]>,
+    path: Option<Bip32Path>,
+    fvk: Option<OrchardFvk>,
+}
+
+impl PcztCurrentActionState {
+    const fn new() -> Self {
+        Self {
+            flags: 0,
+            value_sum_magnitude: 0,
+            cv_net: [0; 32],
+            nullifier: [0; 32],
+            rk: [0; 32],
+            spend_value: 0,
+            spend_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
+            spend_rho: [0; 32],
+            spend_rseed: [0; 32],
+            rcv: None,
+            output_rseed: None,
+            cmx: [0; 32],
+            ephemeral_key: [0; 32],
+            out_ciphertext: None,
+            output_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
+            output_value: 0,
+            enc_ciphertext: Vec::new(),
+            alpha: None,
+            path: None,
+            fvk: None,
+        }
+    }
+}
+
 pub struct PcztParser {
     state: PcztParserState,
     transparent_input_count: usize,
@@ -232,26 +291,7 @@ pub struct PcztParser {
     orchard_value_balance: i64,
     orchard_spend_value_sum: u64,
     orchard_output_value_sum: u64,
-    current_orchard_flags: u8,
-    current_orchard_value_sum_magnitude: u64,
-    current_orchard_cv_net: [u8; 32],
-    current_orchard_nullifier: [u8; 32],
-    current_orchard_rk: [u8; 32],
-    current_orchard_spend_value: u64,
-    current_orchard_spend_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
-    current_orchard_spend_rho: [u8; 32],
-    current_orchard_spend_rseed: [u8; 32],
-    current_orchard_rcv: Option<[u8; 32]>,
-    current_orchard_output_rseed: Option<[u8; 32]>,
-    current_orchard_cmx: [u8; 32],
-    current_orchard_ephemeral_key: [u8; 32],
-    current_orchard_out_ciphertext: Option<[u8; ORCHARD_OUT_CIPHERTEXT_SIZE]>,
-    current_orchard_output_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
-    current_orchard_output_value: u64,
-    current_orchard_enc_ciphertext: Vec<u8>,
-    current_orchard_alpha: Option<[u8; 32]>,
-    current_orchard_path: Option<Bip32Path>,
-    current_orchard_fvk: Option<OrchardFvk>,
+    current_action: PcztCurrentActionState,
     // Account Orchard spending key, derived once per PCZT session and reused for
     // every action's FVK/ASK derivation and spend-auth signature. `zip32_orchard_derive`
     // (the SE key-derivation syscall) does not reclaim its resources between calls,
@@ -289,46 +329,6 @@ pub struct PcztParser {
     ironwood_spend_value_sum: u64,
     #[cfg(feature = "zcash_unstable")]
     ironwood_output_value_sum: u64,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_flags: u8,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_value_sum_magnitude: u64,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_cv_net: [u8; 32],
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_nullifier: [u8; 32],
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_rk: [u8; 32],
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_spend_value: u64,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_spend_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_spend_rho: [u8; 32],
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_spend_rseed: [u8; 32],
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_rcv: Option<[u8; 32]>,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_output_rseed: Option<[u8; 32]>,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_cmx: [u8; 32],
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_ephemeral_key: [u8; 32],
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_out_ciphertext: Option<[u8; ORCHARD_OUT_CIPHERTEXT_SIZE]>,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_output_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_output_value: u64,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_enc_ciphertext: Vec<u8>,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_alpha: Option<[u8; 32]>,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_path: Option<Bip32Path>,
-    #[cfg(feature = "zcash_unstable")]
-    current_ironwood_fvk: Option<OrchardFvk>,
     script_bytes: Vec<u8>,
     pool_field_bytes: Vec<u8>,
 }
@@ -481,26 +481,7 @@ impl PcztParser {
             orchard_value_balance: 0,
             orchard_spend_value_sum: 0,
             orchard_output_value_sum: 0,
-            current_orchard_flags: 0,
-            current_orchard_value_sum_magnitude: 0,
-            current_orchard_cv_net: [0; 32],
-            current_orchard_nullifier: [0; 32],
-            current_orchard_rk: [0; 32],
-            current_orchard_spend_value: 0,
-            current_orchard_spend_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
-            current_orchard_spend_rho: [0; 32],
-            current_orchard_spend_rseed: [0; 32],
-            current_orchard_rcv: None,
-            current_orchard_output_rseed: None,
-            current_orchard_cmx: [0; 32],
-            current_orchard_ephemeral_key: [0; 32],
-            current_orchard_out_ciphertext: None,
-            current_orchard_output_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
-            current_orchard_output_value: 0,
-            current_orchard_enc_ciphertext: Vec::new(),
-            current_orchard_alpha: None,
-            current_orchard_path: None,
-            current_orchard_fvk: None,
+            current_action: PcztCurrentActionState::new(),
             orchard_spending_key: None,
             orchard_spending_key_path: None,
             #[cfg(feature = "zcash_unstable")]
@@ -526,46 +507,6 @@ impl PcztParser {
             ironwood_spend_value_sum: 0,
             #[cfg(feature = "zcash_unstable")]
             ironwood_output_value_sum: 0,
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_flags: 0,
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_value_sum_magnitude: 0,
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_cv_net: [0; 32],
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_nullifier: [0; 32],
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_rk: [0; 32],
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_spend_value: 0,
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_spend_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_spend_rho: [0; 32],
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_spend_rseed: [0; 32],
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_rcv: None,
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_output_rseed: None,
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_cmx: [0; 32],
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_ephemeral_key: [0; 32],
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_out_ciphertext: None,
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_output_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_output_value: 0,
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_enc_ciphertext: Vec::new(),
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_alpha: None,
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_path: None,
-            #[cfg(feature = "zcash_unstable")]
-            current_ironwood_fvk: None,
             script_bytes: Vec::new(),
             pool_field_bytes: Vec::new(),
         }
