@@ -274,6 +274,9 @@ pub struct PcztParser {
     ironwood_action_count: usize,
     #[cfg(feature = "zcash_unstable")]
     ironwood_action_parsed_count: usize,
+    // Ironwood actions carrying a real spend, i.e. the ones the device will sign.
+    #[cfg(feature = "zcash_unstable")]
+    ironwood_real_spend_count: usize,
     #[cfg(feature = "zcash_unstable")]
     ironwood_signing_records: Vec<PcztIronwoodActionSigningRecord>,
     #[cfg(feature = "zcash_unstable")]
@@ -509,6 +512,8 @@ impl PcztParser {
             ironwood_action_count: 0,
             #[cfg(feature = "zcash_unstable")]
             ironwood_action_parsed_count: 0,
+            #[cfg(feature = "zcash_unstable")]
+            ironwood_real_spend_count: 0,
             #[cfg(feature = "zcash_unstable")]
             ironwood_signing_records: Vec::new(),
             #[cfg(feature = "zcash_unstable")]

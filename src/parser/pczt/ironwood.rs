@@ -444,6 +444,7 @@ impl PcztParser {
     pub(super) fn reset_ironwood_bundle_state(&mut self, action_count: usize) {
         self.ironwood_action_count = action_count;
         self.ironwood_action_parsed_count = 0;
+        self.ironwood_real_spend_count = 0;
         for record in self.ironwood_signing_records.iter_mut() {
             record.alpha = [0u8; 32];
         }
@@ -528,11 +529,19 @@ impl PcztParser {
         let note_ciphertext = self.current_ironwood_note_ciphertext(out_ciphertext)?;
 
         self.verify_current_ironwood_cv_net()?;
-        let ironwood_fvk = self
-            .current_ironwood_fvk
-            .as_ref()
-            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
-        self.verify_current_ironwood_spend_nullifier(ironwood_fvk)?;
+        // A dummy padding spend uses a throwaway key, so recipient membership and
+        // nullifier can only be checked on real spends. `spend_value` is not merely
+        // declared: `cv_net` above binds it and `validate_current_ironwood_output`
+        // below pins `output_value`, so a real spend cannot pose as a dummy.
+        let is_real_spend = self.current_ironwood_spend_value != 0;
+        if is_real_spend {
+            let ironwood_fvk = self
+                .current_ironwood_fvk
+                .as_ref()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+            self.verify_current_ironwood_spend_nullifier(ironwood_fvk)?;
+            self.ironwood_real_spend_count = self.ironwood_real_spend_count.saturating_add(1);
+        }
         self.validate_current_ironwood_output(ctx, &note_ciphertext)?;
 
         self.ironwood_spend_value_sum = self
@@ -562,7 +571,7 @@ impl PcztParser {
             .push(PcztIronwoodActionSigningRecord {
                 alpha,
                 path,
-                is_real_spend: self.current_ironwood_spend_value != 0,
+                is_real_spend,
                 signed: false,
             });
         self.reset_current_ironwood_action();
@@ -1103,13 +1112,22 @@ impl PcztParser {
             self.ironwood_action_parsed_count, path
         );
 
-        // Derive the FVK and ASK from the session-cached account spending key:
-        // `zip32_orchard_derive` does not reclaim its SE resources between calls,
-        // so deriving per action exhausts them and the next one fails with 6f00.
+        // Derive the FVK (and the ASK, for real spends only) from the session-cached
+        // account spending key: `zip32_orchard_derive` does not reclaim its SE
+        // resources between calls, so deriving per action exhausts them and the
+        // next one fails with 6f00.
+        let spend_value = self.current_ironwood_spend_value;
         let sk = ok!(self.orchard_spending_key(&path));
-        let (orchard_fvk, ask) =
-            derive_orchard_fvk_and_ask_from_sk(sk).map_err(ParserError::from_sw)?;
-        self.verify_current_ironwood_rk(&ask)?;
+        let (orchard_fvk, ask_for_rk) = if spend_value != 0 {
+            let (fvk, ask) =
+                derive_orchard_fvk_and_ask_from_sk(sk).map_err(ParserError::from_sw)?;
+            (fvk, Some(ask))
+        } else {
+            (ok!(derive_orchard_fvk_from_sk(sk)), None)
+        };
+        if let Some(ref ask) = ask_for_rk {
+            self.verify_current_ironwood_rk(ask)?;
+        }
         let network = orchard_network(&path);
         ctx.tx_info.orchard_decipher_keys =
             Some(ok!(OrchardDecipherKeys::from_fvk(&orchard_fvk, network)));
@@ -1141,6 +1159,16 @@ impl PcztParser {
 
         if action.signed {
             return Err(ParserError::from_str("PCZT ironwood action already signed"));
+        }
+
+        // A dummy padding spend is parsed without its rk and nullifier checks and is
+        // already self-signed host-side, so signing it would authorize an unverified
+        // spend side and overshoot the expected signature count. Enforce the host's
+        // contract to skip dummy indices rather than trust it.
+        if !action.is_real_spend {
+            return Err(ParserError::from_str(
+                "PCZT ironwood dummy spend must not be signed by the device",
+            ));
         }
 
         if let Some(signature_digest) = self.ironwood_signature_digest {
@@ -1180,7 +1208,9 @@ impl PcztParser {
     }
 
     pub fn ironwood_signature_count(&self) -> usize {
-        self.ironwood_action_count
+        // Only real spends are signed, so the quota must exclude dummy padding
+        // actions — otherwise the session would never reach "signatures done".
+        self.ironwood_real_spend_count
     }
 
     pub fn mark_ironwood_action_signed(
@@ -1201,6 +1231,12 @@ impl PcztParser {
 
         self.ironwood_signed_action_count = self.ironwood_signed_action_count.saturating_add(1);
 
+        // Both pools sign with the same account spending key, so it may only be
+        // zeroized once neither of them has a signature left to produce.
+        if self.are_orchard_signatures_done() && self.are_ironwood_signatures_done() {
+            self.clear_orchard_spending_key();
+        }
+
         Ok(self.ironwood_signed_action_count)
     }
 
@@ -1217,6 +1253,14 @@ impl PcztParser {
 
         self.state = PcztParserState::IronwoodActionsDone;
         self.review_outputs(ctx)?;
+
+        // V6 defers the Orchard review here, so this is the last parse step: both
+        // real-spend counts are final. When no signature will follow (every spend
+        // is dummy padding) `mark_*_action_signed` never runs, so release the
+        // cached account spending key now instead of keeping it for the session.
+        if self.are_orchard_signatures_done() && self.are_ironwood_signatures_done() {
+            self.clear_orchard_spending_key();
+        }
 
         Ok(())
     }

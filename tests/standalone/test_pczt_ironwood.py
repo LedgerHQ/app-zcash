@@ -17,6 +17,7 @@ from application_client.zcash_command_sender import (
     InsType,
     ZcashCommandSender,
 )
+from application_client.zcash_transaction import split_tx_v5_for_hash_input
 from application_client.zcash_utils import write_varint
 from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
@@ -56,6 +57,47 @@ _RSEED = bytes.fromhex("2e000000000000000000000000000000000000000000000000000000
 _SPEND_RHO = bytes.fromhex("0600000000000000000000000000000000000000000000000000000000000000")
 _SPEND_RSEED = bytes.fromhex("1a00000000000000000000000000000000000000000000000000000000000000")
 
+# Same, for a dummy padding spend (spend_value = 0) whose output is the change note:
+# cv_net = Commitment(_DUMMY_RCV, -_DUMMY_CHANGE_VALUE), and the ciphertexts decrypt
+# to that note under the device keys. The action encoding, value commitment and note
+# decryption are identical in both pools, so these are the Orchard padding vectors.
+_DUMMY_CHANGE_VALUE = 10000
+_DUMMY_CV_NET = bytes.fromhex("af7b9a0ad90cecf9dbcf08d1057da0bf8451a189cc8dfa758e1543cffb5edb97")
+_DUMMY_NULLIFIER = bytes.fromhex("57aad2670e2e4df67ca855c53973db38e7942efa8e906ee961adb71955aa8423")
+_DUMMY_CMX = bytes.fromhex("4d5af089ac858234d3472b545efe5796a609792d06bf18dbb8b3841ac0e9e031")
+_DUMMY_RCV = bytes.fromhex("4400000000000000000000000000000000000000000000000000000000000000")
+_DUMMY_RSEED = bytes.fromhex("3000000000000000000000000000000000000000000000000000000000000000")
+_DUMMY_SPEND_RHO = bytes.fromhex("0800000000000000000000000000000000000000000000000000000000000000")
+_DUMMY_SPEND_RSEED = bytes.fromhex("1c00000000000000000000000000000000000000000000000000000000000000")
+_DUMMY_EPHEMERAL_KEY = bytes.fromhex("92f7498c759a77b4065f9389d345c755ba241e68f0d8bf6d78f443257167d79f")
+_DUMMY_ENC_CIPHERTEXT = bytes.fromhex(
+    "183f95348800b0c01daaa128c74ed5a4904024192330114b7b59460db6e332321425e9875e96bf7c1ba1bcb751ab6d8b494bd4b4e2587e177c9b083bf3a015a5879b69eaf2380c26d60501ff825be33eebc8ff3a86dfb04dd6fd1e814ea5e486148518ed256ea064267fbf9bc41ec6f8bf6da17b2bd9a81b42cb92dc398a5876333e64826b62a61dba4a5d9e740cdb6f0f1ac7e5f3bd8bff60c30088334491263b61f88b5e102eeb2d539ca32e45ce8600bcaf37368a2696528ee5e5cc52f8cf52df2c7e98f682ce6a4036527adce9f167df7f90200f3cdc9b451bdb4e36c3a46c2a2c42a0f0036161040267ef5dd267721db87f5b910dccf72afc67e059450db2b3df4789348ca72ddc5c310c4504c3779c5cca6a4ff94a73da8ee09dc06adc1856654b4be95e0adcf4510a0506b8b604bbd7fc340206728018f602060be3966cc0c91f601680b6e9e0f1132188cc217fef595b57c761b9292546d1dfe7148c42e4b8140cb364c23d1f0af6f794daf89c07927ea2d3be5f31ecf3f7d4dd973db806e3c0ef7cfb461848ba8562283c18c572f5e12d20ad8fff16cd0b58530501154a79458a28d2666707938915c95d854a3de8aee39a34d35c65a4e903b6135107726842ff150afa92243751606ec24fc0df246979f93c612a1f694b52863bb652226ceb520984aabda5c9fc60969589d9c894f3deceb448d04f3e61386430275eb4a64cacdf40704ccde93ae6573c1cd02b0bcfa689cf5de779cd2cf47ec13bb2e19c0d736fc0d0b7523b46487a1457e23dc1b473f1846475dc9544a81429c9caa51f3d"
+)  # noqa: E501
+_DUMMY_OUT_CIPHERTEXT = bytes.fromhex(
+    "9f38b7e5c9bee88aa9be8bb44a386bd90fb6f915820f4a6469e120f2764774a3936e69063b514e83e587b9bd7b049d94d002c21dca9e8fa33b75aae1d584e8f4b77a0389e104596e2002aac2571fe384"
+)  # noqa: E501
+
+# Legacy V5 transaction and its prevout, used to drive the legacy signing path
+# against leftover V6 state.
+_LEGACY_V5_PREVOUT_TX = bytes.fromhex(
+    "050000800a27a726b4d0d6c200000000f9081a000198cd6cd9559cd98109ad0622f899bc38805f11648e4f985ebe344b8238f87b13010000006b48304502210095104ae9d53a95105be4ba5a31caddff2ae83ced24b21ab4aec6d735d568fad102206e054b158047529bb736c810902ea7fc8d92f3f604c1b2a8bb0b92f0e6c016a8012102010a560c7325827df0212bca20f5cf6556b1345991b6b64b469c616e758230a5ffffffff021595dd04000000001976a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88aca245117c140000001976a914c8b56e00740e62449a053c15bdd4809f720b5cb588ac000000"
+)  # noqa: E501
+_LEGACY_V5_TX = bytes.fromhex(
+    "050000800a27a726b4d0d6c2"  # version, version group id, consensus branch id
+    + (0).to_bytes(4, byteorder="big").hex()  # locktime
+    + (0).to_bytes(4, byteorder="big").hex()  # expiry
+    + "01"  # one input
+    + "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+    + "00000000"  # prevout hash and index
+    + "19"
+    + "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac00000000"  # scriptPubKey, sequence
+    + "01"  # one output
+    + "958ddd0400000000"  # amount
+    + "19"
+    + "76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"  # scriptPubKey
+    + "000000"  # empty sapling and orchard bundles
+)
+
 # In V6 neither the Orchard nor the Ironwood anchor enters the sighash.
 _ORCHARD_ANCHOR_A = bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109")
 
@@ -63,6 +105,11 @@ _ORCHARD_ANCHOR_A = bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d
 # Ironwood-only (one pool): orchard_vb=0 + ironwood_vb=300000 - 299000 = 1000 fee.
 _TRANSPARENT_OUTPUT_299K = PcztTransparentOutput(
     value=299000,
+    script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+)
+# Ironwood bundle carrying a dummy padding spend: ironwood_vb=290000 - 289000 = 1000 fee.
+_TRANSPARENT_OUTPUT_289K = PcztTransparentOutput(
+    value=289000,
     script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
 )
 # V6 migration (two pools): orchard_vb=300000 + ironwood_vb=300000 - 599000 = 1000 fee.
@@ -109,6 +156,40 @@ def _valid_ironwood_bundle_2_actions() -> PcztIronwoodBundle:
         actions=[_valid_ironwood_action(), _valid_ironwood_action()],
         flags=3,
         value_balance=600000,
+        anchor=bytes(32),
+    )
+
+
+def _dummy_ironwood_action() -> PcztIronwoodAction:
+    """Dummy padding spend (spend_value == 0) whose output is the change note."""
+    return PcztIronwoodAction(
+        cv_net=_DUMMY_CV_NET,
+        nullifier=_DUMMY_NULLIFIER,
+        spend_recipient=_SPEND_RECIPIENT,
+        spend_rho=_DUMMY_SPEND_RHO,
+        spend_rseed=_DUMMY_SPEND_RSEED,
+        rk=_RK_ALPHA_1,
+        alpha=_ALPHA,
+        signing_path=_SIGNING_PATH,
+        cmx=_DUMMY_CMX,
+        ephemeral_key=_DUMMY_EPHEMERAL_KEY,
+        enc_ciphertext=_DUMMY_ENC_CIPHERTEXT,
+        out_ciphertext=_DUMMY_OUT_CIPHERTEXT,
+        rcv=_DUMMY_RCV,
+        rseed=_DUMMY_RSEED,
+        spend_value=0,
+        value=_DUMMY_CHANGE_VALUE,
+        recipient=_INTERNAL_RECIPIENT,
+    )
+
+
+def _mixed_real_and_dummy_ironwood_bundle() -> PcztIronwoodBundle:
+    """Real spend at index 0, dummy padding spend at index 1."""
+    actions = [_valid_ironwood_action(), _dummy_ironwood_action()]
+    return PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(action.spend_value - action.value for action in actions),
+        flags=3,
         anchor=bytes(32),
     )
 
@@ -185,6 +266,64 @@ def test_pczt_ironwood_bundle_signing(
 
     auth_sig = client.pczt_sign_ironwood(action_index=0).data
     assert len(auth_sig) == 64
+
+
+def test_pczt_ironwood_dummy_spend_signature_is_refused(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The device must refuse to produce a spend-auth signature for an Ironwood
+    dummy padding spend, as it already does for Orchard.
+
+    Dummy actions are parsed without the rk and nullifier checks — those derive
+    from the host's throwaway key and cannot pass — and the PCZT IoFinalizer
+    already self-signs them. Signing one would authorize an action whose spend
+    side was never verified.
+
+    The refusal aborts the signing session (the review approval is dropped), so a
+    host must skip dummy indices rather than probe them.
+    """
+    client = ZcashCommandSender(backend)
+    IRONWOOD_BUNDLE = _mixed_real_and_dummy_ironwood_bundle()
+    DUMMY_ACTION_INDEX = 1
+    assert IRONWOOD_BUNDLE.actions[DUMMY_ACTION_INDEX].spend_value == 0
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_289K],
+        ironwood_bundle=IRONWOOD_BUNDLE,
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_dummy_spend_signature_is_refused")
+
+    # Requested before the real spend at index 0, so the signature quota is not
+    # exhausted: the rejection comes from the dummy check, not from a done session.
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.pczt_sign_ironwood(action_index=DUMMY_ACTION_INDEX)
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_v6_header_then_legacy_continuation_rejected(backend):
+    """A legacy continuation must not inherit the V6 state of an abandoned PCZT flow.
+
+    A continuation deliberately keeps the previous round's transaction state, so a
+    host can chain a V6 PCZT header into it and drive the legacy parser with a V6
+    transaction version — a state the legacy path cannot represent.
+    """
+    client = ZcashCommandSender(backend)
+
+    trusted_input = client.get_trusted_input(_LEGACY_V5_PREVOUT_TX, 0).data
+
+    client._send_pczt_header(PCZT_V6_GLOBAL)
+
+    client.tx_chunks = split_tx_v5_for_hash_input(_LEGACY_V5_TX)
+    client.trusted_inputs = [trusted_input]
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client._send_trusted_inputs_and_header(continue_hashing=True)
+
+    assert e.value.status == Errors.SW_BAD_STATE
 
 
 def test_pczt_migration_orchard_to_ironwood(
