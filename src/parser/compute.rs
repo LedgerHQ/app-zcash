@@ -116,7 +116,9 @@ pub fn tx_id(ctx: &mut LegacyParserCtx<'_>) -> Result<(), ParserError> {
             );
         }
         #[cfg(feature = "zcash_unstable")]
-        SupportedTxVersion::V6 => unreachable!("V6 transactions use the PCZT path"),
+        SupportedTxVersion::V6 => {
+            return Err(ParserError::from_str("V6 transaction in legacy path"));
+        }
     }
 
     Ok(())
