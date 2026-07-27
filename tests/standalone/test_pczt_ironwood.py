@@ -854,3 +854,128 @@ def test_pczt_ironwood_rk_mismatch_rejected(backend):
 )
 def test_pczt_ironwood_value_sum_overflow_rejected(backend):
     pass
+
+
+# ---------------------------------------------------------------------------
+# Display / clear-signing tests for Ironwood transfer flows
+# ---------------------------------------------------------------------------
+
+
+def test_pczt_ironwood_display_private_transfer(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Ironwood-only V6 transaction: device signs after displaying the review screens.
+
+    Verifies that the device completes the Ironwood signing flow when there are no
+    transparent inputs or outputs. This exercises the zcash_unstable-gated path that
+    counts ironwood_spend_value_sum toward from_private, preventing the TransferType
+    from being misclassified as PublicToPublic.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        ironwood_bundle=_valid_ironwood_bundle(),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_display_private_transfer")
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+
+def test_pczt_ironwood_display_private_transfer_with_change(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Ironwood→Ironwood self-transfer with a change note: change is hidden, signing succeeds.
+
+    Uses a mixed bundle (real spend at action 0, dummy padding spend at action 1 whose
+    output note decrypts as change via the internal IVK). With no transparent outputs, the
+    change note is the only decryptable output; the device reveals it via the
+    no-external-output path. Only action 0 (real spend) yields a spend-auth signature.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        ironwood_bundle=_mixed_real_and_dummy_ironwood_bundle(),
+    ):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_ironwood_display_private_transfer_with_change",
+        )
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+
+@pytest.mark.skip(
+    reason=(
+        "Memo display test requires a pre-computed enc_ciphertext with embedded ASCII memo; "
+        "deferred to follow-up once a suitable Speculos-compatible Ironwood vector is available"
+    )
+)
+def test_pczt_ironwood_display_private_transfer_with_memo(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Ironwood→Ironwood with ASCII memo: memo text displayed on device."""
+    pass
+
+
+def test_pczt_ironwood_display_shield(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Ironwood spend with transparent output: device displays without pool-specific naming.
+
+    The Ironwood bundle provides the shielded input; the transparent output is the
+    destination. Verifies that the signing UI contains no pool label ("Ironwood",
+    "Orchard") — only the generic transfer type and output fields are shown.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=_valid_ironwood_bundle(),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_display_shield")
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+
+def test_pczt_ironwood_display_deshield(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Ironwood→transparent (deshield): device displays 'Transfer from private to public address'.
+
+    The Ironwood bundle is the shielded source (spend_value=300000); the transparent
+    output receives the funds. With the fix, ironwood_spend_value_sum counts toward
+    from_private, producing the 'private to public' label.
+
+    Note: uses the same PCZT construction as test_pczt_ironwood_display_shield — both
+    tests drive an Ironwood spend to a transparent output. The distinction is the snapshot
+    name and the docstring intent: this test is the authoritative regression guard for the
+    deshield label, while the shield test focuses on the absence of pool-naming strings.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=_valid_ironwood_bundle(),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_display_deshield")
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
