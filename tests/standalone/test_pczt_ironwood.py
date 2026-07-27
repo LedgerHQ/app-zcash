@@ -871,6 +871,11 @@ def test_pczt_ironwood_display_private_transfer(
     transparent inputs or outputs. This exercises the zcash_unstable-gated path that
     counts ironwood_spend_value_sum toward from_private, preventing the TransferType
     from being misclassified as PublicToPublic.
+
+    Uses a mixed bundle (real spend at action 0, dummy padding spend at action 1 whose
+    output note decrypts as change via the internal IVK). A single-action bundle with
+    all-zero ciphertexts cannot work because the firmware requires at least one
+    decryptable output to display before signing.
     """
     client = ZcashCommandSender(backend)
 
@@ -878,7 +883,7 @@ def test_pczt_ironwood_display_private_transfer(
         pczt_global=PCZT_V6_GLOBAL,
         transparent_inputs=[],
         transparent_outputs=[],
-        ironwood_bundle=_valid_ironwood_bundle(),
+        ironwood_bundle=_mixed_real_and_dummy_ironwood_bundle(),
     ):
         _review_approve(scenario_navigator, "test_pczt_ironwood_display_private_transfer")
 
