@@ -152,15 +152,20 @@ layout.
   - `0x01`: last APDU packet for this command
 - P2:
   - `0x00`: PCZT data continues in later PCZT bundle commands
-  - `0x01`: this is the final PCZT data APDU
+  - `0x01`: this is the final PCZT data APDU (V5 transactions only)
 - Data: Orchard action fields, or action count `0` when there are no Orchard
   actions.
 - Response: empty.
 
 This command is still sent when a transaction has no Orchard actions. In that
-case its payload is only the CompactSize action count `0`, and P2 `0x01` marks
-the PCZT payload as complete. See [PCZT_APDU.md](./PCZT_APDU.md#pczt_orchard_action)
-for the exact payload layout.
+case its payload is only the CompactSize action count `0`.
+
+For **V5 transactions**, `P2 = 0x01` on the last APDU marks the PCZT payload
+as complete. For **V6 transactions**, the last APDU of this command must use
+`P2 = 0x00`; the FINISHED marker moves to the last
+`INS_PCZT_IRONWOOD_ACTION` packet instead. See
+[PCZT_APDU.md](./PCZT_APDU.md#pczt_orchard_action) for the exact payload
+layout.
 
 ## INS_PCZT_SIGN_TRANSPARENT
 
@@ -185,3 +190,36 @@ is accepted. Each transparent input can be signed only once.
 
 The full PCZT payload must have been received and finalized before this command
 is accepted. Each Orchard action can be signed only once.
+
+## INS_PCZT_IRONWOOD_ACTION
+
+- INS: `0x58`
+- P1:
+  - `0x00`: first APDU packet for this command
+  - `0x80`: continuation APDU packet
+  - `0x01`: last APDU packet for this command
+- P2:
+  - `0x00`: PCZT data continues in later PCZT bundle commands
+  - `0x01`: this is the final PCZT data APDU (V6 transactions only)
+- Data: Ironwood action fields. The wire layout per action is identical to
+  `INS_PCZT_ORCHARD_ACTION`.
+- Response: empty. The device prompts the user for review after receiving the
+  FINISHED marker.
+
+The Ironwood action count must be at least `1`; a count of `0` is rejected.
+`P2 = 0x01` on the last packet of this command marks the full V6 PCZT payload
+as complete and triggers the device review screen. See
+[PCZT_APDU.md](./PCZT_APDU.md#pczt_ironwood_action) for the exact payload
+layout.
+
+## INS_PCZT_SIGN_IRONWOOD
+
+- INS: `0x59`
+- P1: `0x00`
+- P2: Ironwood action index to sign.
+- Data: empty.
+- Response: Ironwood spend authorization signature `[u8; 64]` (RedPallas
+  SpendAuthSig, identical primitive to Orchard).
+
+The full PCZT payload must have been received and finalized before this command
+is accepted. Each Ironwood action can be signed only once.

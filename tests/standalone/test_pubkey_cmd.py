@@ -1,21 +1,20 @@
 import pytest
-
 from application_client.zcash_command_sender import (
     CLA,
-    GetShieldedAddressMode,
-    ZcashCommandSender,
+    P1,
     Errors,
+    GetShieldedAddressMode,
     GetVkMode,
     InsType,
-    P1,
+    ZcashCommandSender,
 )
 from application_client.zcash_response_unpacker import (
     unpack_get_public_key_response,
     unpack_len_prefixed_utf8_response,
 )
-from ragger.bip import calculate_public_key_and_chaincode, CurveChoice, pack_derivation_path
-from ragger.error import ExceptionRAPDU
 from application_client.zcash_utils import t_address_from_pubkey
+from ragger.bip import CurveChoice, calculate_public_key_and_chaincode, pack_derivation_path
+from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 

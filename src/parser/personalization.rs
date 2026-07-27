@@ -37,3 +37,30 @@ pub const ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"Z
 pub const ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION: &[u8; 16] = b"Zcash___TxInHash";
 pub const ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrAmountsHash";
 pub const ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrScriptsHash";
+
+// --- NU6.3 / V6 personalizations ---
+//
+// Verified against ZIP 229 §4.6 (l.342-346) and the vendored `orchard` 0.15.0
+// (`src/bundle/commitments.rs`); all seven strings are byte-identical.
+// The two auth-commitment strings below are not used by the device (signer-only,
+// no bindingSig computation), but are retained for verification completeness.
+
+/// Ironwood bundle digest personalizations per ZIP 229 §4.6 (l.342-346).
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_IRONWOOD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIronwd_H_v6";
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_IRONWOOD_ACTIONS_COMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActCH_v6";
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_IRONWOOD_ACTIONS_MEMOS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActMH_v6";
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_IRONWOOD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActNH_v6";
+#[cfg(feature = "zcash_unstable")]
+#[allow(dead_code)]
+pub const ZCASH_IRONWOOD_AUTH_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthIrnwdH_v6";
+
+/// Orchard V6 bundle-level personalizations per ZIP 229; action-level strings unchanged from V5.
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_ORCHARD_HASH_PERSONALIZATION_V6: &[u8; 16] = b"ZTxIdOrchardH_v6";
+#[cfg(feature = "zcash_unstable")]
+#[allow(dead_code)]
+pub const ZCASH_ORCHARD_AUTH_HASH_PERSONALIZATION_V6: &[u8; 16] = b"ZTxAuthOrchaH_v6";

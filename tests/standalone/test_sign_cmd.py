@@ -14,19 +14,6 @@ from application_client.zcash_verify_sign import (
     nu5_txid_digests,
 )
 from ecdsa.keys import BadSignatureError
-
-from ragger.error import ExceptionRAPDU
-from ragger.navigator import NavigateWithScenario
-from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
-
-from application_client.zcash_command_sender import ZcashCommandSender, Errors
-from application_client.zcash_response_unpacker import (
-    unpack_get_public_key_response,
-    unpack_trusted_input_response,
-)
-from application_client.zcash_utils import write_varint
-from application_client.zcash_verify_sign import check_tx_v5_signature_validity
-from ecdsa.keys import BadSignatureError
 from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase

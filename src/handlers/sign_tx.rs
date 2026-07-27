@@ -36,6 +36,16 @@ pub fn handler_hash_input_start(
     continue_hashing: bool,
 ) -> Result<(), AppSW> {
     if continue_hashing {
+        // A continuation keeps the transaction state of the previous round, so it may
+        // only follow a legacy round. `is_v6` is set by the PCZT path alone: seeing it
+        // here means the host interleaved two incompatible flows, and continuing would
+        // parse legacy fields under a V6 transaction version.
+        #[cfg(feature = "zcash_unstable")]
+        if ctx.tx_info.is_v6 {
+            error!("Legacy continuation after a V6 PCZT header");
+            return Err(AppSW::BadState);
+        }
+
         info!("Reset parser");
         ctx.legacy_parser = LegacyParser::new(LegacyParserMode::Signature);
         // Extract transparent output count from output parser on final state

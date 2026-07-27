@@ -66,6 +66,7 @@ testnet = []
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
 
 legacy_path = []
+zcash_unstable = []
 
 [package.metadata.ledger]
 curve = ["secp256k1", "jubjub"]

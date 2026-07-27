@@ -1,3 +1,5 @@
+#[cfg(feature = "zcash_unstable")]
+use crate::consts::{OVERWINTERED_FLAG, V6_TX_VERSION, V6_VERSION_GROUP_ID};
 use crate::parser::personalization::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
@@ -112,6 +114,10 @@ pub fn tx_id(ctx: &mut LegacyParserCtx<'_>) -> Result<(), ParserError> {
                 "V4 transaction ID hash: {}",
                 HexSlice(&ctx.trusted_input_info.tx_id)
             );
+        }
+        #[cfg(feature = "zcash_unstable")]
+        SupportedTxVersion::V6 => {
+            return Err(ParserError::from_str("V6 transaction in legacy path"));
         }
     }
 
@@ -259,8 +265,20 @@ fn compute_header_digest(tx_info: &mut TxInfo) -> Result<(), ParserError> {
 
     let mut hasher = Blake2b_256::default();
     ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-    ok!(tx_version.write(&mut hasher.as_writer()));
-    ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    #[cfg(feature = "zcash_unstable")]
+    if tx_info.is_v6 {
+        ok!(hasher.update(&(V6_TX_VERSION | OVERWINTERED_FLAG).to_le_bytes()));
+        ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
+        ok!(hasher.update(&tx_info.branch_id_raw.to_le_bytes()));
+    } else {
+        ok!(tx_version.write(&mut hasher.as_writer()));
+        ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    }
+    #[cfg(not(feature = "zcash_unstable"))]
+    {
+        ok!(tx_version.write(&mut hasher.as_writer()));
+        ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    }
     ok!(hasher.update(&tx_info.locktime.to_le_bytes()));
     ok!(hasher.update(&tx_info.expiry_height.to_le_bytes()));
     ok!(hasher.finalize(&mut tx_info.header_digest));
@@ -328,6 +346,10 @@ fn finalize_signature_hash_from_transparent_digest(
     ok!(hasher.update(transparent_digest));
     ok!(hasher.update(&sapling_digest));
     ok!(hasher.update(&orchard_digest));
+    #[cfg(feature = "zcash_unstable")]
+    if tx_info.has_ironwood_bundle {
+        ok!(hasher.update(&tx_info.ironwood_digest));
+    }
     ok!(hasher.finalize(&mut tx_info.signature_digest));
 
     debug!("Signature hash: {}", HexSlice(&tx_info.signature_digest));

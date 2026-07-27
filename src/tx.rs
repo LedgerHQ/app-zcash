@@ -11,6 +11,8 @@ use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 
 use crate::parser::orchard_decipher::OrchardDecipherKeys;
+#[cfg(feature = "zcash_unstable")]
+use crate::parser::personalization::ZCASH_IRONWOOD_HASH_PERSONALIZATION;
 use crate::parser::personalization::{
     ZCASH_OUTPUTS_HASH_PERSONALIZATION, ZCASH_PREVOUTS_HASH_PERSONALIZATION,
     ZCASH_SAPLING_HASH_PERSONALIZATION, ZCASH_SEQUENCE_HASH_PERSONALIZATION,
@@ -38,6 +40,9 @@ pub struct Hashers {
 
     // Legacy V4 txid is SHA256d over the V4-encoded transaction bytes.
     pub v4_tx_hasher: Sha2_256,
+
+    #[cfg(feature = "zcash_unstable")]
+    pub ironwood_hasher: Blake2b_256,
 }
 
 impl Hashers {
@@ -56,6 +61,9 @@ impl Hashers {
             .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION)?;
         self.orchard_hasher
             .init_with_perso(ZCASH_ORCHARD_V5_HASH_PERSONALIZATION)?;
+        #[cfg(feature = "zcash_unstable")]
+        self.ironwood_hasher
+            .init_with_perso(ZCASH_IRONWOOD_HASH_PERSONALIZATION)?;
 
         Ok(())
     }
@@ -174,17 +182,31 @@ pub struct TxInfo {
     pub orchard_digest: [u8; 32],
     pub signature_digest: [u8; 32],
 
+    #[cfg(feature = "zcash_unstable")]
+    pub ironwood_digest: [u8; 32],
+    #[cfg(feature = "zcash_unstable")]
+    pub is_v6: bool,
+    #[cfg(feature = "zcash_unstable")]
+    pub has_ironwood_bundle: bool,
+    pub branch_id_raw: u32,
+
     pub orchard_decipher_keys: Option<OrchardDecipherKeys>,
 }
 
 pub enum SupportedTxVersion {
     V4,
     V5,
+    #[cfg(feature = "zcash_unstable")]
+    V6,
 }
 
 impl TxInfo {
     // Call only after header parsing is finished, otherwise it may panic if tx_version or branch_id is not set yet.
     pub fn tx_version(&self) -> SupportedTxVersion {
+        #[cfg(feature = "zcash_unstable")]
+        if self.is_v6 {
+            return SupportedTxVersion::V6;
+        }
         match self
             .tx_version
             .expect("TX version should be set at this point of the parsing")

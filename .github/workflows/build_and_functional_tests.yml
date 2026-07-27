@@ -39,6 +39,7 @@ jobs:
     with:
       upload_app_binaries_artifact: "app_boilerplate_binaries"
       builder: ledger-app-builder
+      features: "zcash_unstable"
 
   tests_standalone:
     name: Run standalone ragger tests using the reusable workflow

@@ -66,6 +66,12 @@ use crate::consts::{
     P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
     P2_PCZT_CONTINUE, P2_PCZT_FINISHED, P2ShieldedAddrMode, P2VkMode,
 };
+#[cfg(feature = "zcash_unstable")]
+use crate::consts::{
+    INS_PCZT_IRONWOOD_ACTION, INS_PCZT_SIGN_IRONWOOD, MAX_PCZT_IRONWOOD_ACTIONS_NUMBER,
+};
+#[cfg(feature = "zcash_unstable")]
+use crate::handlers::pczt::{handler_pczt_ironwood_action, handler_pczt_sign_ironwood};
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
     consts::{
@@ -187,6 +193,16 @@ pub enum Instruction {
     PcztSignOrchard {
         action_index: usize,
     },
+    #[cfg(feature = "zcash_unstable")]
+    PcztIronwoodAction {
+        first: bool,
+        last: bool,
+        finished: bool,
+    },
+    #[cfg(feature = "zcash_unstable")]
+    PcztSignIronwood {
+        action_index: usize,
+    },
     PcztInvalid {
         sw: AppSW,
     },
@@ -289,6 +305,22 @@ impl TryFrom<ApduHeader> for Instruction {
                     action_index: p2 as usize,
                 })
             }
+            #[cfg(feature = "zcash_unstable")]
+            (INS_PCZT_IRONWOOD_ACTION, p1, P2_PCZT_CONTINUE | P2_PCZT_FINISHED)
+                if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
+            {
+                Ok(Instruction::PcztIronwoodAction {
+                    first: value.p1 == P1_FIRST,
+                    last: value.p1 == P1_LAST,
+                    finished: value.p2 == P2_PCZT_FINISHED,
+                })
+            }
+            #[cfg(feature = "zcash_unstable")]
+            (INS_PCZT_SIGN_IRONWOOD, 0, p2) if (p2 as usize) < MAX_PCZT_IRONWOOD_ACTIONS_NUMBER => {
+                Ok(Instruction::PcztSignIronwood {
+                    action_index: p2 as usize,
+                })
+            }
             (
                 INS_PCZT_HEADER
                 | INS_PCZT_TRANSPARENT_INPUT
@@ -301,6 +333,12 @@ impl TryFrom<ApduHeader> for Instruction {
             ) => Ok(Instruction::PcztInvalid {
                 sw: AppSW::WrongP1P2,
             }),
+            #[cfg(feature = "zcash_unstable")]
+            (INS_PCZT_IRONWOOD_ACTION | INS_PCZT_SIGN_IRONWOOD, _, _) => {
+                Ok(Instruction::PcztInvalid {
+                    sw: AppSW::WrongP1P2,
+                })
+            }
             (INS_SIGN_MESSAGE, p1, 0) => Ok(Instruction::SignMessage {
                 first: p1 == P1_FIRST,
                 next: p1 == P1_NEXT,
@@ -346,6 +384,13 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             Instruction::PcztSignTransparent { .. } | Instruction::PcztSignOrchard { .. },
             AppSW::Ok,
         ) if tx_ctx.is_finished() => (true, StatusType::Transaction),
+        #[cfg(feature = "zcash_unstable")]
+        (Instruction::PcztIronwoodAction { .. }, AppSW::Deny)
+        | (Instruction::PcztSignIronwood { .. }, AppSW::Ok)
+            if tx_ctx.is_finished() =>
+        {
+            (true, StatusType::Transaction)
+        }
         (_, _) => (false, StatusType::Transaction),
     };
 
@@ -463,6 +508,14 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
             | Instruction::PcztSignOrchard { .. }
             | Instruction::PcztInvalid { .. },
             true,
+        ) = (&ins, is_error)
+        {
+            tx_ctx.reset(Default::default());
+        }
+        #[cfg(feature = "zcash_unstable")]
+        if let (
+            Instruction::PcztIronwoodAction { .. } | Instruction::PcztSignIronwood { .. },
+            true,
         ) = (ins, is_error)
         {
             tx_ctx.reset(Default::default());
@@ -515,6 +568,16 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
         }
         Instruction::PcztSignOrchard { action_index } => {
             handler_pczt_sign_orchard(comm, ctx, *action_index)
+        }
+        #[cfg(feature = "zcash_unstable")]
+        Instruction::PcztIronwoodAction {
+            first,
+            last,
+            finished,
+        } => handler_pczt_ironwood_action(comm, ctx, *first, *last, *finished),
+        #[cfg(feature = "zcash_unstable")]
+        Instruction::PcztSignIronwood { action_index } => {
+            handler_pczt_sign_ironwood(comm, ctx, *action_index)
         }
         Instruction::PcztInvalid { sw } => {
             ctx.pczt_parser.reset();

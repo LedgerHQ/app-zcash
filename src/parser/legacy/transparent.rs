@@ -17,6 +17,10 @@ impl LegacyParser {
             SupportedTxVersion::V4 => {
                 ok!(prevout.write(ctx.hashers.v4_tx_hasher.as_writer()));
             }
+            #[cfg(feature = "zcash_unstable")]
+            SupportedTxVersion::V6 => {
+                return Err(ParserError::from_str("V6 transaction in legacy path"));
+            }
         }
 
         let script_size: usize = ok!(CompactSize::read_t(&mut *reader));
@@ -184,6 +188,10 @@ impl LegacyParser {
             SupportedTxVersion::V4 => {
                 ok!(script_sig.write(ctx.hashers.v4_tx_hasher.as_writer()));
             }
+            #[cfg(feature = "zcash_unstable")]
+            SupportedTxVersion::V6 => {
+                return Err(ParserError::from_str("V6 transaction in legacy path"));
+            }
         }
 
         info!("Script sig: {:?}", script_sig);
@@ -201,6 +209,10 @@ impl LegacyParser {
             }
             SupportedTxVersion::V4 => {
                 ok!(ctx.hashers.v4_tx_hasher.update(&sequence.to_le_bytes()));
+            }
+            #[cfg(feature = "zcash_unstable")]
+            SupportedTxVersion::V6 => {
+                return Err(ParserError::from_str("V6 transaction in legacy path"));
             }
         }
 
@@ -300,6 +312,10 @@ impl LegacyParser {
             }
             SupportedTxVersion::V4 => {
                 ok!(ctx.hashers.v4_tx_hasher.update(&amount.to_i64_le_bytes()));
+            }
+            #[cfg(feature = "zcash_unstable")]
+            SupportedTxVersion::V6 => {
+                return Err(ParserError::from_str("V6 transaction in legacy path"));
             }
         }
 

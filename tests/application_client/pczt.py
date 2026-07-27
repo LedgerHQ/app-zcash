@@ -78,6 +78,35 @@ class PcztOrchardBundle:
     anchor: bytes
 
 
+@dataclass
+class PcztIronwoodAction:  # pylint: disable=too-many-instance-attributes
+    cv_net: bytes
+    nullifier: bytes
+    spend_recipient: bytes
+    spend_rho: bytes
+    spend_rseed: bytes
+    rk: bytes
+    alpha: bytes
+    signing_path: str
+    cmx: bytes
+    ephemeral_key: bytes
+    enc_ciphertext: bytes
+    out_ciphertext: bytes
+    rcv: bytes
+    rseed: bytes = bytes(ORCHARD_FIELD_SIZE)
+    spend_value: int = 0
+    value: int = 0
+    recipient: bytes = bytes(ORCHARD_RAW_ADDRESS_SIZE)
+
+
+@dataclass
+class PcztIronwoodBundle:
+    actions: list[PcztIronwoodAction]
+    flags: int
+    value_balance: int
+    anchor: bytes
+
+
 def pczt_orchard_bundle_from_raw_tx(
     raw_transaction: bytes,
     signing_path: str,
