@@ -7,6 +7,7 @@ from application_client.pczt import (
     PcztIronwoodBundle,
     PcztOrchardAction,
     PcztOrchardBundle,
+    PcztTransparentInput,
     PcztTransparentOutput,
 )
 from application_client.zcash_command_sender import (
@@ -118,6 +119,16 @@ _TRANSPARENT_OUTPUT_599K = PcztTransparentOutput(
     script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
 )
 
+# Transparent input used by the shield test: 10000 into Ironwood + 1000 fee = 11000.
+_TRANSPARENT_INPUT_11K = PcztTransparentInput(
+    prevout_txid=bytes.fromhex("4242424242424242424242424242424242424242424242424242424242424242"),
+    prevout_index=0,
+    value=11000,
+    script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+    sequence=bytes.fromhex("ffffffff"),
+    signing_path="m/44'/133'/0'/0/0",
+)
+
 
 def _valid_ironwood_action() -> PcztIronwoodAction:
     return PcztIronwoodAction(
@@ -190,6 +201,20 @@ def _mixed_real_and_dummy_ironwood_bundle() -> PcztIronwoodBundle:
         actions=actions,
         value_balance=sum(action.spend_value - action.value for action in actions),
         flags=3,
+        anchor=bytes(32),
+    )
+
+
+def _ironwood_shield_bundle() -> PcztIronwoodBundle:
+    """Shield (transparent→Ironwood): dummy action receives 10000 zats from the transparent pool.
+
+    spend_value=0 (no Ironwood spend) with an output that decrypts via the internal IVK.
+    value_balance=-10000 signals that 10000 flows INTO the Ironwood pool from transparent.
+    """
+    return PcztIronwoodBundle(
+        actions=[_dummy_ironwood_action()],
+        flags=3,
+        value_balance=-_DUMMY_CHANGE_VALUE,
         anchor=bytes(32),
     )
 
@@ -937,24 +962,26 @@ def test_pczt_ironwood_display_shield(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """Ironwood spend with transparent output: device displays without pool-specific naming.
+    """Transparent→Ironwood (shield): device displays 'Transfer from public to private address'.
 
-    The Ironwood bundle provides the shielded input; the transparent output is the
-    destination. Verifies that the signing UI contains no pool label ("Ironwood",
-    "Orchard") — only the generic transfer type and output fields are shown.
+    A transparent input of 11000 zats funds the PCZT; the Ironwood bundle absorbs 10000 of
+    them (value_balance=-10000), leaving 1000 as fee. The single Ironwood action has
+    spend_value=0 (dummy padding) so the device produces no Ironwood spend-auth signature;
+    it signs the transparent input instead. With no external Ironwood outputs the internal
+    change note is revealed, giving TransferType::PublicToPrivate.
     """
     client = ZcashCommandSender(backend)
 
     with client.send_pczt(
         pczt_global=PCZT_V6_GLOBAL,
-        transparent_inputs=[],
-        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
-        ironwood_bundle=_valid_ironwood_bundle(),
+        transparent_inputs=[_TRANSPARENT_INPUT_11K],
+        transparent_outputs=[],
+        ironwood_bundle=_ironwood_shield_bundle(),
     ):
         _review_approve(scenario_navigator, "test_pczt_ironwood_display_shield")
 
-    auth_sig = client.pczt_sign_ironwood(action_index=0).data
-    assert len(auth_sig) == 64
+    auth_sig = client.pczt_sign_transparent(input_index=0).data
+    assert len(auth_sig) >= 70
 
 
 def test_pczt_ironwood_display_deshield(
