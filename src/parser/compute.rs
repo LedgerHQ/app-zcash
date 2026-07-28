@@ -1,5 +1,7 @@
 #[cfg(feature = "zcash_unstable")]
 use crate::consts::{OVERWINTERED_FLAG, V6_TX_VERSION, V6_VERSION_GROUP_ID};
+#[cfg(feature = "zcash_unstable")]
+use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use crate::parser::personalization::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
@@ -330,7 +332,15 @@ fn finalize_signature_hash_from_transparent_digest(
 
     let sapling_digest = empty_digest(ZCASH_SAPLING_HASH_PERSONALIZATION)?;
     let orchard_digest = if tx_info.orchard_digest == [0; 32] {
-        empty_digest(ZCASH_ORCHARD_V5_HASH_PERSONALIZATION)?
+        #[cfg(not(feature = "zcash_unstable"))]
+        let perso = ZCASH_ORCHARD_V5_HASH_PERSONALIZATION;
+        #[cfg(feature = "zcash_unstable")]
+        let perso = if tx_info.is_v6 {
+            ZCASH_ORCHARD_HASH_PERSONALIZATION_V6
+        } else {
+            ZCASH_ORCHARD_V5_HASH_PERSONALIZATION
+        };
+        empty_digest(perso)?
     } else {
         tx_info.orchard_digest
     };
