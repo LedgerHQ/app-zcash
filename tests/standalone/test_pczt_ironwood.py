@@ -991,13 +991,8 @@ def test_pczt_ironwood_display_deshield(
     """Ironwood→transparent (deshield): device displays 'Transfer from private to public address'.
 
     The Ironwood bundle is the shielded source (spend_value=300000); the transparent
-    output receives the funds. With the fix, ironwood_spend_value_sum counts toward
-    from_private, producing the 'private to public' label.
-
-    Note: uses the same PCZT construction as test_pczt_ironwood_display_shield — both
-    tests drive an Ironwood spend to a transparent output. The distinction is the snapshot
-    name and the docstring intent: this test is the authoritative regression guard for the
-    deshield label, while the shield test focuses on the absence of pool-naming strings.
+    output receives the funds. ironwood_spend_value_sum counts toward from_private,
+    producing the PrivateToPublic label.
     """
     client = ZcashCommandSender(backend)
 
