@@ -78,6 +78,49 @@ _DUMMY_OUT_CIPHERTEXT = bytes.fromhex(
     "9f38b7e5c9bee88aa9be8bb44a386bd90fb6f915820f4a6469e120f2764774a3936e69063b514e83e587b9bd7b049d94d002c21dca9e8fa33b75aae1d584e8f4b77a0389e104596e2002aac2571fe384"
 )  # noqa: E501
 
+# External-recipient action constants.  Ironwood uses orchard_decipher_keys and OrchardFvk
+# for all note-level operations (nullifier, cv_net, note encryption) — the same primitives as
+# Orchard.  The vectors below are therefore identical to the Orchard RECIPIENT_ORCHARD_ACTION
+# from _mixed_real_and_dummy_orchard_bundle() in test_pczt.py, which was computed for the same
+# Speculos deterministic seed and signing path.
+_EXT_RECIPIENT = bytes.fromhex(
+    "4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d"
+)
+_EXT_CV_NET = bytes.fromhex("2bbcd0793d399b207b228ca760f2b51ac8d6866e2649b3c3ff1e67b454c5a6bf")
+_EXT_NULLIFIER = bytes.fromhex("a554dda140773e5cdf5234e36227ab659452e8102d4de726c8a72fa182d94203")
+_EXT_CMX = bytes.fromhex("4b335e40a9dc718f353cb4d0e6614c59dd00fda6a37e704c08b2b8f3da1d9b1e")
+_EXT_EPHEMERAL_KEY = bytes.fromhex("3f2ebdad40909b5114a62ae394fa47b03521a8e335ca83c0d8ab25b36593fd24")
+_EXT_SPEND_RHO = bytes.fromhex("0700000000000000000000000000000000000000000000000000000000000000")
+_EXT_SPEND_RSEED = bytes.fromhex("1b00000000000000000000000000000000000000000000000000000000000000")
+_EXT_RCV = bytes.fromhex("4300000000000000000000000000000000000000000000000000000000000000")
+_EXT_RSEED = bytes.fromhex("2f00000000000000000000000000000000000000000000000000000000000000")
+_EXT_ENC_CIPHERTEXT = bytes.fromhex(
+    "061a91562732f49247090c3b9b62b76ac5c0e032362822f23416efc60c105aef"
+    "10b0a7da0f85bbac92e4d3e3fcf5e366034081d9bec64d07dce0fef608c4f57"
+    "3ae37bf3fe54809903b0b93e27be25ef0853860f9711cad533b47d7cb4bf076"
+    "77df752316252004a9a43880f45eb0dd99e1b16cfaf39ed94d7559a7057df6d"
+    "12341c3e9450f9687b0bdec3c6a5028dc730b025b25e5481964d788cb827bf7"
+    "b989835b56e41f448e42b3c55eb7a422cfdc49e32c97145f1820bf830571f34"
+    "9a807abac8c91f60ae21b676573d66a56ca2fe53fa7aebdb4f0076d618442c1"
+    "bff1db245fc7597af34f081db5539036b73b7ab02435d1278efd359fccdd1f5"
+    "2151d3cc5f477f07120685cc3bf5efd23e99f31842b3234168c6b37d912f35c"
+    "b0b847a1f5947212a4e2a5596f8b41a0d6442c5d3eb2ee679acc9e0b4507a80"
+    "6397f1efb5422d77459ea2509af8b360f1a973e1df62b4d849fd6ab3f90547f"
+    "9a3c3cc0805609fd0cb6a560bd39a77c57e9796833ecf4d77b45f8450f7fe51"
+    "6ca82004b6601200ce39460b688002df97d50660b5e5026a784e2fa071ea815"
+    "70ba5020f1d0f473fb269b806fdaeabad975345f20d9299fc2c005986037164"
+    "b858a8deeff07932df5ef5a3a23676227b631161edfcfd0d2bd29aaddefb6ff"
+    "2950e9ca7b7d23208dc80d25d2869ea80a149f8fae83d7cd03374ea71acaa0f"
+    "ddaca47dab649d81a99c32e67774c27723983886a67528a22d1a1d339dfbd6e"
+    "81c11e83c9a17fee47439124fcfe5353aff39c2de30a1681ae3d2636c8c049c"
+    "eab035cf9dbd396aa580dce3c"
+)
+_EXT_OUT_CIPHERTEXT = bytes.fromhex(
+    "d6a12d5f0f1702bc0e6978fdf44779c741dea7c2b8cdf9bda2cf8780e440c83"
+    "8adc5f97076237d279044d859aa2efe4f0ea97a236ed869a351da9947a7717c"
+    "00b3cb4d967086b9a05b5318b22b731ea8"
+)
+
 # Legacy V5 transaction and its prevout, used to drive the legacy signing path
 # against leftover V6 state.
 _LEGACY_V5_PREVOUT_TX = bytes.fromhex(
@@ -215,6 +258,56 @@ def _ironwood_shield_bundle() -> PcztIronwoodBundle:
         actions=[_dummy_ironwood_action()],
         flags=3,
         value_balance=-_DUMMY_CHANGE_VALUE,
+        anchor=bytes(32),
+    )
+
+
+def _external_recipient_ironwood_action() -> PcztIronwoodAction:
+    """Real spend (spend_value=200000) with a 180000-zat output to an external Ironwood recipient.
+
+    The enc_ciphertext decrypts via the device's external OVK, so the firmware classifies
+    this output as is_change=False.  Vectors are the Orchard RECIPIENT_ORCHARD_ACTION from
+    _mixed_real_and_dummy_orchard_bundle() — valid for Ironwood because the device uses
+    orchard_decipher_keys and OrchardFvk for both pools (same key derivation and encryption).
+    """
+    return PcztIronwoodAction(
+        cv_net=_EXT_CV_NET,
+        nullifier=_EXT_NULLIFIER,
+        spend_recipient=_SPEND_RECIPIENT,
+        spend_rho=_EXT_SPEND_RHO,
+        spend_rseed=_EXT_SPEND_RSEED,
+        rk=_RK_ALPHA_1,
+        alpha=_ALPHA,
+        signing_path=_SIGNING_PATH,
+        cmx=_EXT_CMX,
+        ephemeral_key=_EXT_EPHEMERAL_KEY,
+        enc_ciphertext=_EXT_ENC_CIPHERTEXT,
+        out_ciphertext=_EXT_OUT_CIPHERTEXT,
+        rcv=_EXT_RCV,
+        rseed=_EXT_RSEED,
+        spend_value=200000,
+        value=180000,
+        recipient=_EXT_RECIPIENT,
+    )
+
+
+def _ironwood_bundle_with_external_recipient() -> PcztIronwoodBundle:
+    """Ironwood bundle with an external-recipient payment and a hidden change note.
+
+    action 0: real spend (spend_value=200000), output 180000 to external recipient;
+              enc_ciphertext decrypts via external OVK → is_change=False → shown.
+    action 1: dummy padding (spend_value=0), output 10000 to internal IVK;
+              enc_ciphertext decrypts via internal IVK → is_change=True → hidden.
+
+    has_external_output=True → reveal_self_outputs=False → change is genuinely hidden.
+    value_balance = (200000-180000) + (0-10000) = 10000 (fee; no transparent outputs).
+    Mirrors _mixed_real_and_dummy_orchard_bundle() from test_pczt.py.
+    """
+    actions = [_external_recipient_ironwood_action(), _dummy_ironwood_action()]
+    return PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(a.spend_value - a.value for a in actions),
+        flags=3,
         anchor=bytes(32),
     )
 
@@ -429,7 +522,7 @@ def test_pczt_ironwood_user_rejection(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """User rejects the V6 Ironwood signing review; device returns Deny, no sig emitted."""
+    """User rejects a PrivateToPublic (deshield) review; device returns Deny, no sig emitted."""
     client = ZcashCommandSender(backend)
 
     with pytest.raises(ExceptionRAPDU) as e:
@@ -440,6 +533,60 @@ def test_pczt_ironwood_user_rejection(
             ironwood_bundle=_valid_ironwood_bundle(),
         ):
             scenario_navigator.review_reject(test_name="test_pczt_ironwood_user_rejection")
+
+    assert e.value.status == Errors.SW_DENY
+    assert len(e.value.data) == 0
+
+
+def test_pczt_ironwood_display_private_transfer_rejected(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """User rejects a PrivateToPrivate (Ironwood-only) review; device returns Deny, no sig emitted.
+
+    Guards the review_outputs rejection path for the PrivateToPrivate TransferType variant.
+    The APDU sequence is identical to test_pczt_ironwood_display_private_transfer; only the
+    user action (reject instead of approve) differs.
+    """
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            ironwood_bundle=_mixed_real_and_dummy_ironwood_bundle(),
+        ):
+            scenario_navigator.review_reject(
+                test_name="test_pczt_ironwood_display_private_transfer_rejected"
+            )
+
+    assert e.value.status == Errors.SW_DENY
+    assert len(e.value.data) == 0
+
+
+def test_pczt_ironwood_display_shield_rejected(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """User rejects a PublicToPrivate (shield: transparent→Ironwood) review; device returns Deny.
+
+    Guards the review_outputs rejection path for the PublicToPrivate TransferType variant.
+    The APDU sequence is identical to test_pczt_ironwood_display_shield; only the user
+    action (reject instead of approve) differs.
+    """
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_11K],
+            transparent_outputs=[],
+            ironwood_bundle=_ironwood_shield_bundle(),
+        ):
+            scenario_navigator.review_reject(
+                test_name="test_pczt_ironwood_display_shield_rejected"
+            )
 
     assert e.value.status == Errors.SW_DENY
     assert len(e.value.data) == 0
@@ -890,17 +1037,18 @@ def test_pczt_ironwood_display_private_transfer(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """Ironwood-only V6 transaction: device signs after displaying the review screens.
+    """Ironwood-only V6 PCZT: device signs after displaying the review screens.
 
-    Verifies that the device completes the Ironwood signing flow when there are no
-    transparent inputs or outputs. This exercises the zcash_unstable-gated path that
-    counts ironwood_spend_value_sum toward from_private, preventing the TransferType
-    from being misclassified as PublicToPublic.
+    No transparent inputs or outputs — all funds flow within the Ironwood pool.
+    The mixed bundle (real spend at action 0, dummy padding spend at action 1 whose
+    output note decrypts as change via the internal IVK) is used because the firmware
+    requires at least one decryptable output before it can show the review screen.
 
-    Uses a mixed bundle (real spend at action 0, dummy padding spend at action 1 whose
-    output note decrypts as change via the internal IVK). A single-action bundle with
-    all-zero ciphertexts cannot work because the firmware requires at least one
-    decryptable output to display before signing.
+    With no external output the firmware's reveal_self_outputs path triggers: the internal
+    change note is exposed so the user can review the value before signing.
+
+    This also exercises the zcash_unstable-gated path that folds ironwood_spend_value_sum
+    into from_private, preventing the TransferType from being misclassified as PublicToPublic.
     """
     client = ZcashCommandSender(backend)
 
@@ -920,12 +1068,17 @@ def test_pczt_ironwood_display_private_transfer_with_change(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """Ironwood→Ironwood self-transfer with a change note: change is hidden, signing succeeds.
+    """Ironwood→Ironwood with a hidden change note — mirrors test_pczt_sign_tx_v5_orchard_to_orchard_with_change.
 
-    Uses a mixed bundle (real spend at action 0, dummy padding spend at action 1 whose
-    output note decrypts as change via the internal IVK). With no transparent outputs, the
-    change note is the only decryptable output; the device reveals it via the
-    no-external-output path. Only action 0 (real spend) yields a spend-auth signature.
+    action 0 (real spend): output 180000 zats to an external Ironwood recipient; the
+    enc_ciphertext decrypts via the device's external OVK → classified as non-change →
+    shown on the review screen.
+
+    action 1 (dummy padding, spend_value=0): output 10000 zats to the internal IVK
+    → classified as change → hidden from the review screen.
+
+    Because an external decryptable output exists, has_external_output=True and
+    reveal_self_outputs=False: the change note is genuinely not revealed to the user.
     """
     client = ZcashCommandSender(backend)
 
@@ -933,7 +1086,7 @@ def test_pczt_ironwood_display_private_transfer_with_change(
         pczt_global=PCZT_V6_GLOBAL,
         transparent_inputs=[],
         transparent_outputs=[],
-        ironwood_bundle=_mixed_real_and_dummy_ironwood_bundle(),
+        ironwood_bundle=_ironwood_bundle_with_external_recipient(),
     ):
         _review_approve(
             scenario_navigator,
