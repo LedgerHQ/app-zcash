@@ -121,6 +121,47 @@ _EXT_OUT_CIPHERTEXT = bytes.fromhex(
     "00b3cb4d967086b9a05b5318b22b731ea8"
 )
 
+# Memo action constants — identical to the Orchard action in
+# test_pczt_sign_tx_v5_transparent_to_orchard_with_memo from test_pczt.py.
+# Ironwood uses the same note-encryption primitives (orchard_decipher_keys, OrchardFvk)
+# and the same signing path (m/32'/133'/0'), so the enc_ciphertext decrypts via the
+# device's external OVK to ASCII memo "PCZT Orchard memo test".
+_MEMO_CV_NET = bytes.fromhex("fd87b590de6e73dbf0372fc4e80e4c9a44c6f9b196fd296165276b15f38ca7be")
+_MEMO_NULLIFIER = bytes.fromhex("781c4faf960206510fdc72739267fa193d9e012dbc68998d35539837e520ae2a")
+_MEMO_SPEND_RHO = bytes.fromhex("0100000000000000000000000000000000000000000000000000000000000000")
+_MEMO_SPEND_RSEED = bytes.fromhex("1500000000000000000000000000000000000000000000000000000000000000")
+_MEMO_CMX = bytes.fromhex("8fa021d7ce7e10ac828106e295d0daaec54ca3101f22054e90a4bb9b61a38000")
+_MEMO_EPHEMERAL_KEY = bytes.fromhex("7895cdaf491fc7b6754bbe1339eab4f4d142e59fff9cf8d3820217f1e940801b")
+_MEMO_ENC_CIPHERTEXT = bytes.fromhex(
+    "ffebe7c7d7f8e08fd0baffb71f54ca6fad3b8a1b1702be187bcc24f1874a48bc"
+    "3013c44c8d0aaadfbdbebeb31c3eda96e539d9853c28766cee658408606d473c"
+    "76b102d20e11eb6a69bc90a1cc543f49d32d30b47241d1632e6dcba30492b6a7"
+    "bdbaafb9f9dd1e68c2ac12d17b485aed2fb8ba6162f4ec70f8b3c045c4db74fd"
+    "7861cfb6ce2dc74c2a4219fa429332ed86e891aeca5cf2dfd0517f99fee0f0dd"
+    "cc5a1a2729bac0626f895a1b572fa8eddaf3b72d2cbb6c1681aeb865740d439b"
+    "7c90334512faa315207d540eb411dfe8d38b3f6673cb65e12816f42bee50abb9"
+    "66437fa386c34ac54611c86cc093ddee1cfe098903f3be4a8de20de1c48fdbd8"
+    "ca8a9900eeee734dfff526c39ad353a81de786deb8278bdc870b9d65cc99422e"
+    "54d0bf7e8e0fcf88a0a701ee59195aaa130b8950bf39bc598520f913af4bf770"
+    "dfcf37e1ed4d19549759e1642945affbe385eb80497b9652e33a5366667b4fd9"
+    "c212b061c6c2c47d3f289dee39fea4eba73faf6c91428ca0b97d2be3feb7c0e1"
+    "ea5ee0250aed9a96d7fe9e91c525f46debe71ddbbc0f8d05576ea27a2249f5b9"
+    "a341561772b6b480404d5e839af42a56d71f20ad5538214b9925f7931d926017"
+    "353759398d25a5a2611cf243ff44f732cdc57312b7dfe386118a1e9377f36d7e"
+    "e312be7ce3c0efa96228a83653a607e00d556f8e04defbb39a2179bb2ed8a038"
+    "9bb157c75913236e6f9ddf21dcc7108b804c1fa194b2603058e03da7ab3f6ee5"
+    "dacb4fc3769879d72fc21f68116f0af30414236191a3d962f29d7edab27b8e9e"
+    "bd96e21f"
+)  # noqa: E501
+_MEMO_OUT_CIPHERTEXT = bytes.fromhex(
+    "9964518f9947818c4b75d0aad44fd05bb75a2ed34ff2a915c080e829a150cd84"
+    "91272ea43bf99db6fc677560484f7667c8ee7307c1acc44873068ef0475b940a"
+    "62834f31fad9a486f183a5e2d030a01b"
+)  # noqa: E501
+_MEMO_RCV = bytes.fromhex("3d00000000000000000000000000000000000000000000000000000000000000")
+_MEMO_RSEED = bytes.fromhex("2900000000000000000000000000000000000000000000000000000000000000")
+_MEMO_VALUE = 90000
+
 # Legacy V5 transaction and its prevout, used to drive the legacy signing path
 # against leftover V6 state.
 _LEGACY_V5_PREVOUT_TX = bytes.fromhex(
@@ -167,6 +208,15 @@ _TRANSPARENT_INPUT_11K = PcztTransparentInput(
     prevout_txid=bytes.fromhex("4242424242424242424242424242424242424242424242424242424242424242"),
     prevout_index=0,
     value=11000,
+    script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+    sequence=bytes.fromhex("ffffffff"),
+    signing_path="m/44'/133'/0'/0/0",
+)
+# Transparent input used by the memo shield test: 90000 into Ironwood + 10000 fee = 100000.
+_TRANSPARENT_INPUT_100K = PcztTransparentInput(
+    prevout_txid=bytes.fromhex("4242424242424242424242424242424242424242424242424242424242424242"),
+    prevout_index=0,
+    value=100000,
     script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
     sequence=bytes.fromhex("ffffffff"),
     signing_path="m/44'/133'/0'/0/0",
@@ -258,6 +308,51 @@ def _ironwood_shield_bundle() -> PcztIronwoodBundle:
         actions=[_dummy_ironwood_action()],
         flags=3,
         value_balance=-_DUMMY_CHANGE_VALUE,
+        anchor=bytes(32),
+    )
+
+
+def _memo_ironwood_action() -> PcztIronwoodAction:
+    """Dummy padding spend (spend_value=0) whose output carries an ASCII memo.
+
+    The enc_ciphertext decrypts via the device's external OVK (m/32'/133'/0') to
+    ASCII memo "PCZT Orchard memo test", exercising the memo display path.
+    Parameters are identical to the Orchard action from
+    test_pczt_sign_tx_v5_transparent_to_orchard_with_memo because Ironwood uses the
+    same note-encryption primitives and signing path.
+    """
+    return PcztIronwoodAction(
+        cv_net=_MEMO_CV_NET,
+        nullifier=_MEMO_NULLIFIER,
+        spend_recipient=_SPEND_RECIPIENT,
+        spend_rho=_MEMO_SPEND_RHO,
+        spend_rseed=_MEMO_SPEND_RSEED,
+        rk=_RK_ALPHA_1,
+        alpha=_ALPHA,
+        signing_path=_SIGNING_PATH,
+        cmx=_MEMO_CMX,
+        ephemeral_key=_MEMO_EPHEMERAL_KEY,
+        enc_ciphertext=_MEMO_ENC_CIPHERTEXT,
+        out_ciphertext=_MEMO_OUT_CIPHERTEXT,
+        rcv=_MEMO_RCV,
+        rseed=_MEMO_RSEED,
+        spend_value=0,
+        value=_MEMO_VALUE,
+        recipient=_EXT_RECIPIENT,
+    )
+
+
+def _ironwood_memo_bundle() -> PcztIronwoodBundle:
+    """Shield (transparent→Ironwood) where the single Ironwood output carries an ASCII memo.
+
+    spend_value=0 (dummy padding); value_balance=-90000 signals that 90000 zats flow INTO
+    the Ironwood pool from the transparent input.  The output decrypts via the external OVK
+    (is_change=False) so the device displays it together with the decoded memo text.
+    """
+    return PcztIronwoodBundle(
+        actions=[_memo_ironwood_action()],
+        flags=3,
+        value_balance=-_MEMO_VALUE,
         anchor=bytes(32),
     )
 
@@ -1051,6 +1146,11 @@ def test_pczt_ironwood_display_private_transfer(
 
     This also exercises the zcash_unstable-gated path that folds ironwood_spend_value_sum
     into from_private, preventing the TransferType from being misclassified as PublicToPublic.
+
+    Note: _mixed_real_and_dummy_ironwood_bundle() is intentionally synthetic — the fee
+    (290000 zats) is 29× the output (10000 zats). This tests the reveal_self_outputs path
+    in isolation. test_pczt_ironwood_display_private_transfer_with_change is the canonical
+    realistic-shape regression baseline (fee 1000 zats, external output 180000 zats).
     """
     client = ZcashCommandSender(backend)
 
@@ -1099,18 +1199,37 @@ def test_pczt_ironwood_display_private_transfer_with_change(
     assert len(auth_sig) == 64
 
 
-@pytest.mark.skip(
-    reason=(
-        "Memo display test requires a pre-computed enc_ciphertext with embedded ASCII memo; "
-        "deferred to follow-up once a suitable Speculos-compatible Ironwood vector is available"
-    )
-)
 def test_pczt_ironwood_display_private_transfer_with_memo(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """Ironwood→Ironwood with ASCII memo: memo text displayed on device."""
-    pass
+    """Transparent→Ironwood (shield) with ASCII memo: memo text displayed on device.
+
+    A transparent input of 100000 zats funds the shield; the Ironwood action receives
+    90000 zats (value_balance=-90000, fee=10000). The enc_ciphertext decrypts via the
+    device's external OVK (m/32'/133'/0') to ASCII memo "PCZT Orchard memo test",
+    exercising ironwood_output_memo_display, ironwood_memo_display,
+    is_ironwood_displayable_ascii_memo, and the BLAKE2b memo-hash fallback path.
+
+    The action vector is byte-identical to the Orchard action from
+    test_pczt_sign_tx_v5_transparent_to_orchard_with_memo because Ironwood uses the
+    same note-encryption primitives (orchard_decipher_keys, OrchardFvk) and signing path.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_100K],
+        transparent_outputs=[],
+        ironwood_bundle=_ironwood_memo_bundle(),
+    ):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_ironwood_display_private_transfer_with_memo",
+        )
+
+    auth_sig = client.pczt_sign_transparent(input_index=0).data
+    assert len(auth_sig) >= 70
 
 
 def test_pczt_ironwood_display_shield(
@@ -1137,27 +1256,3 @@ def test_pczt_ironwood_display_shield(
 
     auth_sig = client.pczt_sign_transparent(input_index=0).data
     assert len(auth_sig) >= 70
-
-
-def test_pczt_ironwood_display_deshield(
-    backend,
-    scenario_navigator: NavigateWithScenario,
-):
-    """Ironwood→transparent (deshield): device displays 'Transfer from private to public address'.
-
-    The Ironwood bundle is the shielded source (spend_value=300000); the transparent
-    output receives the funds. ironwood_spend_value_sum counts toward from_private,
-    producing the PrivateToPublic label.
-    """
-    client = ZcashCommandSender(backend)
-
-    with client.send_pczt(
-        pczt_global=PCZT_V6_GLOBAL,
-        transparent_inputs=[],
-        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
-        ironwood_bundle=_valid_ironwood_bundle(),
-    ):
-        _review_approve(scenario_navigator, "test_pczt_ironwood_display_deshield")
-
-    auth_sig = client.pczt_sign_ironwood(action_index=0).data
-    assert len(auth_sig) == 64
