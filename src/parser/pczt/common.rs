@@ -143,9 +143,12 @@ impl PcztParser {
         }
 
         let spent_from_public = self.transparent_input_count > 0;
-        let spent_from_orchard = self.orchard_spend_value_sum > 0;
+        let spent_from_private = self.orchard_spend_value_sum > 0;
+        // Ironwood is a shielded pool; any Ironwood spend must set the from_private flag.
+        #[cfg(feature = "zcash_unstable")]
+        let spent_from_private = spent_from_private || self.ironwood_spend_value_sum > 0;
         let transfer_type =
-            TransferType::classify(spent_from_public, spent_from_orchard, &ctx.tx_info.outputs);
+            TransferType::classify(spent_from_public, spent_from_private, &ctx.tx_info.outputs);
         let review_result = ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type);
 
         if !ok!(review_result) {
