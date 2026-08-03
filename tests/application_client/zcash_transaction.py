@@ -10,7 +10,7 @@ V6_VERSION_GROUP_ID = 0xD884B698
 # Orchard and Ironwood actions share this layout and this ZIP-244 digest grouping.
 ACTION_COMPACT_SIZE = 32 + 32 + 32 + 52  # nullifier + cmx + ephemeral_key + enc_ciphertext[..52]
 ACTION_MEMO_SIZE = 512
-ACTION_NONCOMPACT_SIZE = 32 + 32 + 16 + 80  # nullifier + cmx + enc_ciphertext[564..] + out_ciphertext
+ACTION_NONCOMPACT_SIZE = 32 + 32 + 16 + 80  # cv + rk + enc_ciphertext[564..] + out_ciphertext
 MEMO_CHUNK_SIZE = 128
 # flags + valueBalance, plus the anchor for a v5 Orchard bundle only: v6 moved the anchor to
 # the authorizing digest, which a trusted input never computes.
@@ -80,16 +80,10 @@ class Transaction:
 # serialized at the end of the transaction data
 # (as if it was a v4 transaction format).
 def is_v6_transaction(buf: bytes) -> bool:
-    return (
-        len(buf) >= 8
-        and unpack_from("<I", buf, 0)[0] == V6_TX_HEADER
-        and unpack_from("<I", buf, 4)[0] == V6_VERSION_GROUP_ID
-    )
+    return len(buf) >= 8 and unpack_from("<I", buf, 0)[0] == V6_TX_HEADER and unpack_from("<I", buf, 4)[0] == V6_VERSION_GROUP_ID
 
 
-def append_action_bundle_chunks(
-    chunks: list[bytes], buf: bytes, i: int, action_count: int, digest_data_size: int
-) -> int:
+def append_action_bundle_chunks(chunks: list[bytes], buf: bytes, i: int, action_count: int, digest_data_size: int) -> int:
     if action_count == 0:
         return i
 
