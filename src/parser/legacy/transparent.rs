@@ -14,12 +14,12 @@ impl LegacyParser {
             SupportedTxVersion::V5 => {
                 ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
             }
-            SupportedTxVersion::V4 => {
-                ok!(prevout.write(ctx.hashers.v4_tx_hasher.as_writer()));
-            }
             #[cfg(feature = "zcash_unstable")]
             SupportedTxVersion::V6 => {
-                return Err(ParserError::from_str("V6 transaction in legacy path"));
+                ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
+            }
+            SupportedTxVersion::V4 => {
+                ok!(prevout.write(ctx.hashers.v4_tx_hasher.as_writer()));
             }
         }
 
@@ -185,12 +185,12 @@ impl LegacyParser {
             SupportedTxVersion::V5 => {
                 ok!(script_sig.write(ctx.hashers.scripts_hasher.as_writer()));
             }
-            SupportedTxVersion::V4 => {
-                ok!(script_sig.write(ctx.hashers.v4_tx_hasher.as_writer()));
-            }
             #[cfg(feature = "zcash_unstable")]
             SupportedTxVersion::V6 => {
-                return Err(ParserError::from_str("V6 transaction in legacy path"));
+                ok!(script_sig.write(ctx.hashers.scripts_hasher.as_writer()));
+            }
+            SupportedTxVersion::V4 => {
+                ok!(script_sig.write(ctx.hashers.v4_tx_hasher.as_writer()));
             }
         }
 
@@ -207,12 +207,12 @@ impl LegacyParser {
             SupportedTxVersion::V5 => {
                 ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
             }
-            SupportedTxVersion::V4 => {
-                ok!(ctx.hashers.v4_tx_hasher.update(&sequence.to_le_bytes()));
-            }
             #[cfg(feature = "zcash_unstable")]
             SupportedTxVersion::V6 => {
-                return Err(ParserError::from_str("V6 transaction in legacy path"));
+                ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
+            }
+            SupportedTxVersion::V4 => {
+                ok!(ctx.hashers.v4_tx_hasher.update(&sequence.to_le_bytes()));
             }
         }
 
@@ -310,12 +310,12 @@ impl LegacyParser {
             SupportedTxVersion::V5 => {
                 ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
             }
-            SupportedTxVersion::V4 => {
-                ok!(ctx.hashers.v4_tx_hasher.update(&amount.to_i64_le_bytes()));
-            }
             #[cfg(feature = "zcash_unstable")]
             SupportedTxVersion::V6 => {
-                return Err(ParserError::from_str("V6 transaction in legacy path"));
+                ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
+            }
+            SupportedTxVersion::V4 => {
+                ok!(ctx.hashers.v4_tx_hasher.update(&amount.to_i64_le_bytes()));
             }
         }
 
@@ -372,14 +372,17 @@ impl LegacyParser {
         // NOTE: take/deallocate self.script_bytes here
         script_pubkey.0.0 = mem::take(&mut self.script_bytes);
 
-        match ctx.tx_info.tx_version.expect("should be set at this point") {
-            TxVersion::V5 => {
+        match ctx.tx_info.tx_version() {
+            SupportedTxVersion::V5 => {
                 ok!(script_pubkey.write(&mut ctx.hashers.outputs_hasher.as_writer()));
             }
-            TxVersion::V4 => {
+            #[cfg(feature = "zcash_unstable")]
+            SupportedTxVersion::V6 => {
+                ok!(script_pubkey.write(&mut ctx.hashers.outputs_hasher.as_writer()));
+            }
+            SupportedTxVersion::V4 => {
                 ok!(script_pubkey.write(&mut ctx.hashers.v4_tx_hasher.as_writer()));
             }
-            _ => unreachable!("we should only support V4 and V5 at this point"),
         }
 
         info!("Output script pubkey: {:?}", script_pubkey);
@@ -406,23 +409,24 @@ impl LegacyParser {
         self.sapling_spend_count = ok!(CompactSize::read_t(&mut *reader));
         self.sapling_output_count = ok!(CompactSize::read_t(&mut *reader));
         self.orchard_action_count = ok!(CompactSize::read_t(&mut *reader));
+        // ZIP-230 adds a fourth pool: a v6 transaction announces its Ironwood action count
+        // even when the Orchard one is zero.
+        #[cfg(feature = "zcash_unstable")]
+        if let SupportedTxVersion::V6 = ctx.tx_info.tx_version() {
+            self.ironwood_action_count = ok!(CompactSize::read_t(&mut *reader));
+        }
 
         info!("Sapling spend remaining: {}", self.sapling_spend_count);
         info!("Sapling output count: {}", self.sapling_output_count);
         info!("Orchard action count: {}", self.orchard_action_count);
+        #[cfg(feature = "zcash_unstable")]
+        info!("Ironwood action count: {}", self.ironwood_action_count);
 
-        self.state = if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {
-            LegacyParserState::ProcessSapling
-        } else if self.orchard_action_count > 0 {
-            ok!(ctx
-                .hashers
-                .tx_compact_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
-            LegacyParserState::ProcessOrchardCompact
-        } else {
-            LegacyParserState::ProcessExtra
-        };
+        if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {
+            self.state = LegacyParserState::ProcessSapling;
+            return Ok(());
+        }
 
-        Ok(())
+        self.enter_next_action_bundle(ctx, None)
     }
 }

@@ -328,16 +328,6 @@ impl LegacyParser {
             .sapling_hasher
             .update(&self.sapling_balance.to_le_bytes()));
 
-        if self.orchard_action_count > 0 {
-            ok!(ctx
-                .hashers
-                .tx_compact_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
-            self.state = LegacyParserState::ProcessOrchardCompact;
-        } else {
-            self.state = LegacyParserState::ProcessExtra;
-        }
-
-        Ok(())
+        self.enter_next_action_bundle(ctx, None)
     }
 }

@@ -1,9 +1,10 @@
-use ::orchard::bundle::commitments::ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION;
 use alloc::{string::ToString, vec::Vec};
 use core::{iter, mem};
 use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 
+#[cfg(feature = "zcash_unstable")]
+use super::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use super::personalization::{
     ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
 };
@@ -50,6 +51,19 @@ mod orchard;
 mod output_parser;
 mod sapling;
 mod transparent;
+
+/// One of the shielded action bundles carried by a transaction.
+///
+/// Orchard and Ironwood share the same on-wire action layout and the same ZIP-244
+/// three-part digest structure; they differ only by personalization and by which bundle
+/// hasher they feed. Whether the anchor belongs to the txid digest depends on the
+/// transaction version, not on the bundle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ActionBundle {
+    Orchard,
+    #[cfg(feature = "zcash_unstable")]
+    Ironwood,
+}
 
 #[derive(Debug, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
@@ -104,13 +118,20 @@ pub enum LegacyParserState {
     ProcessSaplingOutputsNonCompact,
     ProcessSaplingOutputHashing,
 
-    ProcessOrchardCompact,
-    ProcessOrchardMemo {
+    ProcessActionsCompact {
+        bundle: ActionBundle,
+    },
+    ProcessActionsMemo {
+        bundle: ActionBundle,
         size: usize,
         remaining_size: usize,
     },
-    ProcessOrchardNonCompact,
-    ProcessOrchardHashing,
+    ProcessActionsNonCompact {
+        bundle: ActionBundle,
+    },
+    ProcessActionsHashing {
+        bundle: ActionBundle,
+    },
 
     ProcessExtra,
     TransactionParsed,
@@ -140,7 +161,10 @@ pub struct LegacyParser {
     sapling_output_count: usize,
     sapling_output_parsed_count: usize,
     orchard_action_count: usize,
-    orchard_action_parsed_count: usize,
+    #[cfg(feature = "zcash_unstable")]
+    ironwood_action_count: usize,
+    /// Shared by both action bundles, which are streamed one after the other.
+    action_parsed_count: usize,
 
     sapling_balance: i64,
 
@@ -166,7 +190,9 @@ impl LegacyParser {
             sapling_output_count: 0,
             sapling_output_parsed_count: 0,
             orchard_action_count: 0,
-            orchard_action_parsed_count: 0,
+            #[cfg(feature = "zcash_unstable")]
+            ironwood_action_count: 0,
+            action_parsed_count: 0,
 
             sapling_balance: 0,
             script_bytes: Vec::new(),
@@ -232,18 +258,19 @@ impl LegacyParser {
                 LegacyParserState::ProcessSaplingOutputHashing => {
                     self.parse_sapling_output_hashing(ctx, &mut reader)?
                 }
-                LegacyParserState::ProcessOrchardCompact => {
-                    self.parse_orchard_compact(ctx, &mut reader)?
+                LegacyParserState::ProcessActionsCompact { bundle } => {
+                    self.parse_actions_compact(ctx, &mut reader, bundle)?
                 }
-                LegacyParserState::ProcessOrchardMemo {
+                LegacyParserState::ProcessActionsMemo {
+                    bundle,
                     size,
                     remaining_size,
-                } => self.parse_orchard_memo(ctx, &mut reader, size, remaining_size)?,
-                LegacyParserState::ProcessOrchardNonCompact => {
-                    self.parse_orchard_noncompact(ctx, &mut reader)?
+                } => self.parse_actions_memo(ctx, &mut reader, bundle, size, remaining_size)?,
+                LegacyParserState::ProcessActionsNonCompact { bundle } => {
+                    self.parse_actions_noncompact(ctx, &mut reader, bundle)?
                 }
-                LegacyParserState::ProcessOrchardHashing => {
-                    self.parse_orchard_hashing(ctx, &mut reader)?
+                LegacyParserState::ProcessActionsHashing { bundle } => {
+                    self.parse_actions_hashing(ctx, &mut reader, bundle)?
                 }
                 LegacyParserState::ProcessExtra => self.parse_process_extra(ctx, &mut reader)?,
                 LegacyParserState::TransactionParsed
@@ -285,6 +312,21 @@ impl LegacyParser {
         info!("Input count: {}", input_count);
 
         match (self.mode, version, ctx.tx_state.is_tx_parsed_once) {
+            // V6 (ZIP-230) is only reachable in TrustedInput mode: the app never signs
+            // a v6 transaction on the legacy path; signing goes through the PCZT path.
+            #[cfg(feature = "zcash_unstable")]
+            (LegacyParserMode::TrustedInput, TxVersion::V6, _) => {
+                debug!("Init V6 tx hashers");
+                // Re-use the V5 transparent/sapling hasher initialisation, then override
+                // the Orchard bundle personalization for V6 and set the is_v6 flag so
+                // that tx_version() returns SupportedTxVersion::V6 throughout.
+                ok!(ctx.hashers.init_v5_tx_hashers());
+                ok!(ctx
+                    .hashers
+                    .orchard_hasher
+                    .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION_V6));
+                ctx.tx_info.is_v6 = true;
+            }
             // Normal flow for TrustedInput and Signature modes
             (LegacyParserMode::TrustedInput, TxVersion::V5, _)
             | (LegacyParserMode::Signature, TxVersion::V5, false) => {
