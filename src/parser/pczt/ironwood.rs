@@ -197,12 +197,56 @@ impl PcztParser {
     ) -> Result<(), ParserError> {
         const OUTPUT_METADATA_WITHOUT_RCV_LEN: usize = ORCHARD_RAW_ADDRESS_SIZE + 8 + 32;
         const OUTPUT_METADATA_WITH_RCV_LEN: usize = OUTPUT_METADATA_WITHOUT_RCV_LEN + 32;
+        const OUTPUT_METADATA_WITH_NOTE_VERSION_LEN: usize = OUTPUT_METADATA_WITH_RCV_LEN + 1;
 
         match reader.remaining_len() {
             OUTPUT_METADATA_WITHOUT_RCV_LEN => {
                 return Err(ParserError::from_str("Missing PCZT ironwood rcv"));
             }
             OUTPUT_METADATA_WITH_RCV_LEN => {}
+            OUTPUT_METADATA_WITH_NOTE_VERSION_LEN => {
+                ok!(reader.read_exact(&mut self.current_action.output_recipient));
+                debug!(
+                    "PCZT ironwood action #{} recipient: {}",
+                    self.ironwood_action_parsed_count,
+                    HexSlice(&self.current_action.output_recipient)
+                );
+                self.current_action.output_value = self.read_ironwood_value(
+                    reader,
+                    "Bad PCZT ironwood output value",
+                    "PCZT ironwood output value out of range",
+                )?;
+                debug!(
+                    "PCZT ironwood action #{} output value: {}",
+                    self.ironwood_action_parsed_count, self.current_action.output_value
+                );
+                let mut rseed = [0u8; 32];
+                ok!(reader.read_exact(&mut rseed));
+                debug!(
+                    "PCZT ironwood action #{} output rseed: {}",
+                    self.ironwood_action_parsed_count,
+                    HexSlice(&rseed)
+                );
+                self.current_action.output_rseed = Some(rseed);
+                let mut rcv = [0u8; 32];
+                ok!(reader.read_exact(&mut rcv));
+                debug!(
+                    "PCZT ironwood action #{} rcv: {}",
+                    self.ironwood_action_parsed_count,
+                    HexSlice(&rcv)
+                );
+                self.current_action.rcv = Some(rcv);
+                self.current_action.note_plaintext_version = ok!(reader.read_u8());
+                if self.current_action.note_plaintext_version != 0x02
+                    && self.current_action.note_plaintext_version != 0x03
+                {
+                    return Err(ParserError::from_str(
+                        "Unknown PCZT ironwood notePlaintextVersion",
+                    ));
+                }
+                Self::ensure_ironwood_apdu_group_end(reader)?;
+                return self.finish_current_ironwood_action(ctx);
+            }
             _ => {
                 return Err(ParserError::from_str(
                     "Bad PCZT ironwood output metadata length",
@@ -439,6 +483,7 @@ impl PcztParser {
         self.current_action.alpha = None;
         self.current_action.path = None;
         self.current_action.fvk = None;
+        self.current_action.note_plaintext_version = 0x02;
     }
 
     pub(super) fn reset_ironwood_bundle_state(&mut self, action_count: usize) {
@@ -685,6 +730,25 @@ impl PcztParser {
         ctx: &mut PcztParserCtx<'_>,
         note_ciphertext: &TransmittedNoteCiphertext,
     ) -> Result<(), ParserError> {
+        // V3 note plaintexts carry recipient and value in the metadata fields and do
+        // not encrypt a note plaintext the device can decipher; handle them directly.
+        if self.current_action.note_plaintext_version == 0x03
+            && self.current_action.output_value != 0
+        {
+            let Some(keys) = ctx.tx_info.orchard_decipher_keys.as_ref() else {
+                return Err(ParserError::from_str(
+                    "No decipher keys for V3 ironwood output display",
+                ));
+            };
+            let network = keys.network;
+            let output = DecipheredOrchardOutput {
+                value: self.current_action.output_value,
+                raw_address: self.current_action.output_recipient,
+                memo: None,
+            };
+            return self.push_deciphered_ironwood_output(ctx, output, network, false);
+        }
+
         if self.try_decipher_current_ironwood_output(ctx, note_ciphertext)? {
             return Ok(());
         }
@@ -701,6 +765,12 @@ impl PcztParser {
     fn validate_current_ironwood_dummy_output(&self) -> Result<bool, ParserError> {
         if self.current_action.output_value != 0 {
             return Ok(false);
+        }
+
+        // V3 dummy padding notes use a different commitment derivation that the
+        // device does not implement; accept the host-provided cmx from the wire.
+        if self.current_action.note_plaintext_version == 0x03 {
+            return Ok(true);
         }
 
         let Some(rseed) = self.current_action.output_rseed else {
