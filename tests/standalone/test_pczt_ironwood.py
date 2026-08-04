@@ -78,6 +78,16 @@ _DUMMY_OUT_CIPHERTEXT = bytes.fromhex(
     "9f38b7e5c9bee88aa9be8bb44a386bd90fb6f915820f4a6469e120f2764774a3936e69063b514e83e587b9bd7b049d94d002c21dca9e8fa33b75aae1d584e8f4b77a0389e104596e2002aac2571fe384"
 )  # noqa: E501
 
+# V3 (ZIP 2005 Ironwood) dummy-output constants.
+# cv_net = ValueCommitment(0, rcv=0x44) = 0x44 · R, where R is the Pallas value-commitment
+# randomness basepoint.  _DUMMY_RCV (scalar 0x44) is reused as the rcv for V3 dummy actions.
+# cmx is all-zero: the firmware accepts the host-supplied cmx without recomputation for V3
+# zero-value outputs.
+_V3_DUMMY_CV_NET = bytes.fromhex(
+    "7d042e0903e7984caac7cdc7c081eeaa0289caf7af0ed179815822e2fd8f6e97"
+)
+_V3_DUMMY_CMX = bytes(32)
+
 # External-recipient action constants.  Ironwood uses orchard_decipher_keys and OrchardFvk
 # for all note-level operations (nullifier, cv_net, note encryption) — the same primitives as
 # Orchard.  The vectors below are therefore identical to the Orchard RECIPIENT_ORCHARD_ACTION
@@ -1256,3 +1266,172 @@ def test_pczt_ironwood_display_shield(
 
     auth_sig = client.pczt_sign_transparent(input_index=0).data
     assert len(auth_sig) >= 70
+
+
+# ---------------------------------------------------------------------------
+# PCZT v2 header and NoteVersion::V3 tests (G1–G5)
+# ---------------------------------------------------------------------------
+
+
+def test_pczt_v2_header_accepted_for_v6(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """PCZT version 2 header is accepted for a V6 Ironwood transaction."""
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=_valid_ironwood_bundle(),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_v2_header_accepted_for_v6")
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+
+def test_pczt_v1_header_rejected_for_v6(backend):
+    """PCZT version 1 header is rejected for a V6 transaction."""
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+            ironwood_bundle=_valid_ironwood_bundle(),
+            pczt_version=1,
+        ):
+            pytest.fail("Device accepted PCZT v1 for a V6 transaction")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_v2_0x02_notes_path_unchanged(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """116-byte output metadata with note_plaintext_version=0x02 is accepted;
+    behavior is identical to the 115-byte path."""
+    client = ZcashCommandSender(backend)
+    action = _valid_ironwood_action()
+    action.note_plaintext_version = 0x02
+    bundle = PcztIronwoodBundle(
+        actions=[action],
+        flags=3,
+        value_balance=action.spend_value - action.value,
+        anchor=bytes(32),
+    )
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=bundle,
+    ):
+        _review_approve(scenario_navigator, "test_pczt_v2_0x02_notes_path_unchanged")
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+
+def test_pczt_v2_0x03_real_output_accepted(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Non-zero Ironwood output with note_plaintext_version=0x03 is accepted:
+    the device reads value and recipient from wire metadata, skipping decryption."""
+    client = ZcashCommandSender(backend)
+    action = _dummy_ironwood_action()
+    action.note_plaintext_version = 0x03
+    bundle = PcztIronwoodBundle(
+        actions=[action],
+        flags=3,
+        value_balance=action.spend_value - action.value,
+        anchor=bytes(32),
+    )
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_11K],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    ):
+        _review_approve(scenario_navigator, "test_pczt_v2_0x03_real_output_accepted")
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+
+def test_pczt_v2_0x03_dummy_accepted(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Zero-value Ironwood output with note_plaintext_version=0x03 is accepted:
+    the device accepts the host-supplied cmx without recomputation."""
+    client = ZcashCommandSender(backend)
+
+    v3_dummy = PcztIronwoodAction(
+        cv_net=_V3_DUMMY_CV_NET,
+        nullifier=_DUMMY_NULLIFIER,
+        spend_recipient=_SPEND_RECIPIENT,
+        spend_rho=_DUMMY_SPEND_RHO,
+        spend_rseed=_DUMMY_SPEND_RSEED,
+        rk=_RK_ALPHA_1,
+        alpha=_ALPHA,
+        signing_path=_SIGNING_PATH,
+        cmx=_V3_DUMMY_CMX,
+        ephemeral_key=_DUMMY_EPHEMERAL_KEY,
+        enc_ciphertext=_DUMMY_ENC_CIPHERTEXT,
+        out_ciphertext=_DUMMY_OUT_CIPHERTEXT,
+        rcv=_DUMMY_RCV,
+        rseed=_DUMMY_RSEED,
+        spend_value=0,
+        value=0,
+        recipient=_INTERNAL_RECIPIENT,
+        note_plaintext_version=0x03,
+    )
+
+    actions = [_valid_ironwood_action(), v3_dummy]
+    bundle = PcztIronwoodBundle(
+        actions=actions,
+        flags=3,
+        value_balance=sum(a.spend_value - a.value for a in actions),
+        anchor=bytes(32),
+    )
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=bundle,
+    ):
+        _review_approve(scenario_navigator, "test_pczt_v2_0x03_dummy_accepted")
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+
+def test_pczt_v1_metadata_backward_compat_in_v2_bundle(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """115-byte output metadata (no note_plaintext_version) remains valid in a PCZT v2 V6
+    transaction — the firmware accepts both 115 and 116 bytes."""
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=_valid_ironwood_bundle(),
+    ):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_v1_metadata_backward_compat_in_v2_bundle",
+        )
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64

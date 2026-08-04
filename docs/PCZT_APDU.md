@@ -60,6 +60,13 @@ Single packet:
   - `coin_type u32`
   - `tx_modifiable u8`
 
+The PCZT version field encodes the PCZT wire-format revision:
+
+- Version `1` is required for V5 (Orchard) transactions.
+- Version `2` is required for V6 (Ironwood) transactions.
+
+The app rejects a mismatch between the PCZT version and the transaction version.
+
 ## PCZT_TRANSPARENT_INPUT
 
 Packet sequence:
@@ -196,3 +203,14 @@ triggering the device review screen and enabling signing commands.
 Ironwood action validation applies the same cryptographic checks as Orchard
 (see above): `rk` recomputation, `cv_net` verification, recipient derivation,
 `nullifier` recomputation, and output note-commitment check for dummy outputs.
+
+When the output metadata packet is 116 bytes, the final byte is `notePlaintextVersion`
+(`0x02` for Orchard-compatible notes, `0x03` for ZIP 2005 Ironwood notes):
+
+- `0x02` notes follow the standard Orchard decryption and dummy-commitment paths.
+- `0x03` non-zero-value outputs: the device reads `value` and `recipient` directly from
+  the output metadata fields and does not attempt to decrypt `enc_ciphertext`.
+- `0x03` zero-value (dummy) outputs: the device accepts the host-supplied `cmx` without
+  recomputing the note commitment.
+
+The 115-byte form (no `notePlaintextVersion` byte) remains valid and is treated as `0x02`.
