@@ -1,6 +1,6 @@
 [package]
 name = "zcash"
-version = "3.0.2"
+version = "3.0.3"
 authors = ["Ledger"]
 edition = "2024"
 
@@ -52,8 +52,8 @@ debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
 legacy_path = []
 
 [package.metadata.ledger]
-curve = ["secp256k1"]
-path = ["44'/133'"]
+curve = ["secp256k1", "jubjub"]
+path = ["44'/133'", "32'/133'"]
 name = "Zcash"
 flags = "0x800"
 
