@@ -169,7 +169,9 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
         balance_start = i
         i += 8
 
-        if sap_sp > 0:
+        # A v6 spends non-compact digest omits the anchor (ZIP-229), which moves to the
+        # authorizing data, so no anchor is streamed at all for a v6.
+        if sap_sp > 0 and not is_v6:
             # anchor
             i += 32
 
@@ -214,12 +216,11 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
     else:
         chunks.append(locktime + pack("b", 0x04) + expiry)
 
-    # Real Orchard and Ironwood transactions include authorization data after the digest
-    # section. It is excluded from ZIP-244 txid/signature hashing, so the host-side
-    # chunker intentionally ignores the trailing bytes here.
-    if i != len(buf) and orch == 0 and ironwood == 0:
+    # Every byte of a fixture must be accounted for. Leftovers mean the fixture and this
+    # chunker disagree on the layout, which is exactly the misframing worth catching.
+    if i != len(buf):
         print(f"Not consumed bytes: {buf[i:].hex()}")
-        assert i == len(buf), "Transaction splitting did not consume all bytes!"
+    assert i == len(buf), "Transaction splitting did not consume all bytes!"
 
     return chunks
 

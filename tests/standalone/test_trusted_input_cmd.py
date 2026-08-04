@@ -199,7 +199,7 @@ def test_trusted_input_mixed_v5(backend):
 def test_trusted_input_ironwood_v6(backend):
     # Mainnet 1facde4c098e686a8945bdfbb609e4cc4ebed610194117e7dd7cf2a2d9979a2f, block 3429153:
     # a v6 deshielding transaction whose Orchard bundle is empty and whose two shielded
-    # actions live in the Ironwood bundle (ZIP-230).
+    # actions live in the Ironwood bundle (ZIP-229).
     TX_BYTES = bytes.fromhex(
         "0600008098b684d85b16a537" + "00000000" + "21533400" + "00"  # header + locktime + expiry + input count
         "01"
@@ -238,6 +238,134 @@ def test_trusted_input_ironwood_v6(backend):
     assert txid.hex() == "2f9a97d9a2f27cdde717411910d6be4ecce409b6fbbd45896a688e094cdeac1f"
     assert idx == trusted_input_idx
     assert amount == 65_124_345_000
+
+
+# The three v6/v5 Sapling-spend fixtures below are synthetic: no v6 transaction with a
+# Sapling spend is known on chain. Their expected txids come from an independent Python
+# implementation of the ZIP-244 digest tree with the ZIP-229 v6 changes, written from the
+# specification text; that implementation is trusted only because it reproduces the real
+# mainnet txid asserted by test_trusted_input_ironwood_v6 above. Deriving them from this
+# app's own output would assert nothing.
+#
+# The Sapling anchor in these fixtures is 32 bytes of 0xA7, a value that appears nowhere
+# else, so a leak into a v6 stream or digest cannot pass unnoticed.
+
+
+def test_trusted_input_sapling_v6_spend_only(backend):
+    # v6 deshielding shape: one Sapling spend, no Sapling output, one transparent output.
+    # ZIP-229 makes the anchor authorizing data, so the spends non-compact digest hashes
+    # cv ‖ rk under ZTxIdSSpendNH_v6 and no anchor is streamed. Keeping the anchor in the
+    # digest, or keeping the v5 personalization, yields a different txid.
+    TX_BYTES = bytes.fromhex(
+        # header + version group id + consensus branch id, lock time, expiry height
+        "0600008098b684d85b16a537"
+        + "00000000"
+        + "50533400"
+        # transparent input count, transparent output count
+        + "00"
+        + "01"
+        + "15cd5b07000000001976a914303132333435363738393a3b3c3d3e3f4041424388ac"
+        # sapling spends, sapling outputs, orchard actions, ironwood actions
+        + "01000000"
+        # sapling valueBalance; a v6 anchor is authorizing data, so none is sent
+        + "eb32a4f8ffffffff"
+        # sapling spend: cv, nullifier, rk
+        + "7796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa19387e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f"
+        + "85a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae9082746"
+    )
+
+    trusted_input_idx = 0
+
+    client = ZcashCommandSender(backend)
+
+    resp = client.get_trusted_input(TX_BYTES, trusted_input_idx).data
+    txid, idx, amount, _, _ = unpack_trusted_input_response(resp)
+
+    assert txid.hex() == "0ddb71d54856404ba5d44b6ebdf281fce4cad49f91c30e9507c686f6378f6e5c"
+    assert idx == trusted_input_idx
+    assert amount == 123_456_789
+
+
+def test_trusted_input_sapling_v6_spend_and_output(backend):
+    # Same v6 anchor rule, with a Sapling output present so that the outputs subtree is
+    # exercised too. Every Sapling output node keeps its v5 personalization in v6.
+    TX_BYTES = bytes.fromhex(
+        # header + version group id + consensus branch id, lock time, expiry height
+        "0600008098b684d85b16a537"
+        + "00000000"
+        + "50533400"
+        # transparent input count, transparent output count
+        + "00"
+        + "01"
+        + "15cd5b07000000001976a914303132333435363738393a3b3c3d3e3f4041424388ac"
+        # sapling spends, sapling outputs, orchard actions, ironwood actions
+        + "01010000"
+        # sapling valueBalance; a v6 anchor is authorizing data, so none is sent
+        + "c0bdf0ffffffffff"
+        # sapling spend: cv, nullifier, rk
+        + "7796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa19387e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f"
+        + "85a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae9082746"
+        # sapling output: compact part
+        + "c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988ceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708f"
+        + "d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e302"
+        # sapling output: memo
+        + "21405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2"
+        + "e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382"
+        + "a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e5042342"
+        + "61809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e302"
+        + "21405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2"
+        + "e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382"
+        + "a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e5042342"
+        + "61809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e302"
+        # sapling output: non-compact part
+        + "c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e6052443628121405f7e9dbcdbfa1938577695b4d3f2dcfb1a39587796b5d4f31231506f8ead"
+        + "cceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d"
+    )
+
+    trusted_input_idx = 0
+
+    client = ZcashCommandSender(backend)
+
+    resp = client.get_trusted_input(TX_BYTES, trusted_input_idx).data
+    txid, idx, amount, _, _ = unpack_trusted_input_response(resp)
+
+    assert txid.hex() == "c003a2dcc024c685151fd06d979b9ac5177fbe4e900ce6169a52b32302644df1"
+    assert idx == trusted_input_idx
+    assert amount == 123_456_789
+
+
+def test_trusted_input_sapling_v5_spend_only(backend):
+    # The v5 counterpart of the first fixture, so that the unchanged v5 rules stay pinned:
+    # the anchor is streamed and hashed into every spend under ZTxIdSSpendNHash. It also
+    # covers the spends-without-outputs shape, which no other fixture has.
+    TX_BYTES = bytes.fromhex(
+        # header + version group id + consensus branch id, lock time, expiry height
+        "050000800a27a726b4d0d6c2"
+        + "00000000"
+        + "50533400"
+        # transparent input count, transparent output count
+        + "00"
+        + "01"
+        + "15cd5b07000000001976a914303132333435363738393a3b3c3d3e3f4041424388ac"
+        # sapling spends, sapling outputs, orchard actions
+        + "010000"
+        # sapling valueBalance + anchor
+        + "eb32a4f8ffffffffa7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
+        # sapling spend: cv, nullifier, rk
+        + "7796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa19387e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f"
+        + "85a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae9082746"
+    )
+
+    trusted_input_idx = 0
+
+    client = ZcashCommandSender(backend)
+
+    resp = client.get_trusted_input(TX_BYTES, trusted_input_idx).data
+    txid, idx, amount, _, _ = unpack_trusted_input_response(resp)
+
+    assert txid.hex() == "4b539042d6e3f9a0128e1c41b11d92dcf9d6058e3cdac6b9f901afdf4eae60d5"
+    assert idx == trusted_input_idx
+    assert amount == 123_456_789
 
 
 def test_trusted_input_v4_nu6(backend):
