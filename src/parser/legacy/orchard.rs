@@ -1,6 +1,6 @@
 //! Streaming of the shielded action bundles feeding the ZIP-244 transaction ID.
 //!
-//! Orchard and Ironwood (ZIP-230, v6 only) share the same on-chain action layout and the
+//! Orchard and Ironwood (ZIP-229, v6 only) share the same on-chain action layout and the
 //! same three-part digest, so both are streamed by the states below. They differ only by
 //! personalization and by the bundle hasher they feed. Whether the anchor belongs to the
 //! transaction ID digest depends on the transaction version rather than on the bundle.
@@ -19,20 +19,29 @@ use super::super::personalization::{
 };
 use super::*;
 
+pub(crate) const ORCHARD_CV_SIZE: usize = HASH_SIZE;
+pub(crate) const ORCHARD_RK_SIZE: usize = HASH_SIZE;
 pub(crate) const ORCHARD_NULLIFIER_SIZE: usize = HASH_SIZE;
 pub(crate) const ORCHARD_CMX_SIZE: usize = HASH_SIZE;
 pub(crate) const ORCHARD_EPHEMERAL_KEY_SIZE: usize = HASH_SIZE;
 pub(crate) const ORCHARD_COMPACT_ENC_CIPHERTEXT_SIZE: usize = 52;
-pub(crate) const ORCHARD_OUT_CIPHERTEXT_SIZE: usize = 16;
-pub(crate) const ORCHARD_ZKPROOF_SIZE: usize = 80;
+/// Trailing AEAD tag of `encCiphertext`, i.e. `encCiphertext[564..]`. Distinct from
+/// `orchard_decipher::ORCHARD_OUT_CIPHERTEXT_SIZE`, which is the 80-byte `outCiphertext`.
+pub(crate) const ORCHARD_ENC_CIPHERTEXT_TAG_SIZE: usize = 16;
+pub(crate) const ORCHARD_OUT_CIPHERTEXT_SIZE: usize = 80;
 pub(crate) const ORCHARD_FLAGS_SIZE: usize = 1;
 pub(crate) const ORCHARD_BALANCE_SIZE: usize = 8;
+// ZIP-244 T.4a hashes nullifier ‖ cmx ‖ ephemeralKey ‖ encCiphertext[..52].
 pub(crate) const ORCHARD_ACTIONS_COMPACT_SIZE: usize = ORCHARD_NULLIFIER_SIZE
     + ORCHARD_CMX_SIZE
     + ORCHARD_EPHEMERAL_KEY_SIZE
     + ORCHARD_COMPACT_ENC_CIPHERTEXT_SIZE;
-pub(crate) const ORCHARD_ACTIONS_NONCOMPACT_SIZE: usize =
-    ORCHARD_NULLIFIER_SIZE + ORCHARD_CMX_SIZE + ORCHARD_OUT_CIPHERTEXT_SIZE + ORCHARD_ZKPROOF_SIZE;
+// ZIP-244 T.4c hashes cv ‖ rk ‖ encCiphertext[564..] ‖ outCiphertext. No zkproof takes
+// part in it: the proofs belong to the authorizing data.
+pub(crate) const ORCHARD_ACTIONS_NONCOMPACT_SIZE: usize = ORCHARD_CV_SIZE
+    + ORCHARD_RK_SIZE
+    + ORCHARD_ENC_CIPHERTEXT_TAG_SIZE
+    + ORCHARD_OUT_CIPHERTEXT_SIZE;
 
 // flags + valueBalance, plus the anchor for a v5 Orchard bundle. In a v6 transaction both
 // bundles moved the anchor to the authorizing digest, which a trusted input never computes,

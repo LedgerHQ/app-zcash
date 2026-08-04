@@ -409,7 +409,7 @@ impl LegacyParser {
         self.sapling_spend_count = ok!(CompactSize::read_t(&mut *reader));
         self.sapling_output_count = ok!(CompactSize::read_t(&mut *reader));
         self.orchard_action_count = ok!(CompactSize::read_t(&mut *reader));
-        // ZIP-230 adds a fourth pool: a v6 transaction announces its Ironwood action count
+        // ZIP-229 adds a fourth pool: a v6 transaction announces its Ironwood action count
         // even when the Orchard one is zero.
         #[cfg(feature = "zcash_unstable")]
         if let SupportedTxVersion::V6 = ctx.tx_info.tx_version() {
