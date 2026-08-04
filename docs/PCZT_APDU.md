@@ -208,8 +208,9 @@ When the output metadata packet is 116 bytes, the final byte is `notePlaintextVe
 (`0x02` for Orchard-compatible notes, `0x03` for ZIP 2005 Ironwood notes):
 
 - `0x02` notes follow the standard Orchard decryption and dummy-commitment paths.
-- `0x03` non-zero-value outputs: the device reads `value` and `recipient` directly from
-  the output metadata fields and does not attempt to decrypt `enc_ciphertext`.
+- `0x03` non-zero-value outputs: the device deciphers `enc_ciphertext` via the standard
+  IVK/OVK trial-decryption path. The note commitment check is skipped for `0x03` plaintexts;
+  the epk check provides the binding to `enc_ciphertext`, which is part of the sighash.
 - `0x03` zero-value (dummy) outputs: the device accepts the host-supplied `cmx` without
   recomputing the note commitment.
 

@@ -71,6 +71,8 @@ mod transparent;
 const MAGIC_BYTES: &[u8; 4] = b"PCZT";
 const PCZT_VERSION_1: u32 = 1;
 const PCZT_VERSION_2: u32 = 2;
+const NOTE_VERSION_ORCHARD: u8 = 0x02;
+const NOTE_VERSION_IRONWOOD: u8 = 0x03;
 const DEFAULT_SEQUENCE: u32 = 0xFFFF_FFFF;
 const PREVOUT_SIZE: usize = 32 + 4;
 const COMPRESSED_PUBKEY_SIZE: usize = 33;
@@ -258,7 +260,7 @@ impl PcztCurrentActionState {
             alpha: None,
             path: None,
             fvk: None,
-            note_plaintext_version: 0x02,
+            note_plaintext_version: NOTE_VERSION_ORCHARD,
         }
     }
 }

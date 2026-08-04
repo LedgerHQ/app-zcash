@@ -237,8 +237,8 @@ impl PcztParser {
                 );
                 self.current_action.rcv = Some(rcv);
                 self.current_action.note_plaintext_version = ok!(reader.read_u8());
-                if self.current_action.note_plaintext_version != 0x02
-                    && self.current_action.note_plaintext_version != 0x03
+                if self.current_action.note_plaintext_version != NOTE_VERSION_ORCHARD
+                    && self.current_action.note_plaintext_version != NOTE_VERSION_IRONWOOD
                 {
                     return Err(ParserError::from_str(
                         "Unknown PCZT ironwood notePlaintextVersion",
@@ -483,7 +483,7 @@ impl PcztParser {
         self.current_action.alpha = None;
         self.current_action.path = None;
         self.current_action.fvk = None;
-        self.current_action.note_plaintext_version = 0x02;
+        self.current_action.note_plaintext_version = NOTE_VERSION_ORCHARD;
     }
 
     pub(super) fn reset_ironwood_bundle_state(&mut self, action_count: usize) {
@@ -730,25 +730,6 @@ impl PcztParser {
         ctx: &mut PcztParserCtx<'_>,
         note_ciphertext: &TransmittedNoteCiphertext,
     ) -> Result<(), ParserError> {
-        // V3 note plaintexts carry recipient and value in the metadata fields and do
-        // not encrypt a note plaintext the device can decipher; handle them directly.
-        if self.current_action.note_plaintext_version == 0x03
-            && self.current_action.output_value != 0
-        {
-            let Some(keys) = ctx.tx_info.orchard_decipher_keys.as_ref() else {
-                return Err(ParserError::from_str(
-                    "No decipher keys for V3 ironwood output display",
-                ));
-            };
-            let network = keys.network;
-            let output = DecipheredOrchardOutput {
-                value: self.current_action.output_value,
-                raw_address: self.current_action.output_recipient,
-                memo: None,
-            };
-            return self.push_deciphered_ironwood_output(ctx, output, network, false);
-        }
-
         if self.try_decipher_current_ironwood_output(ctx, note_ciphertext)? {
             return Ok(());
         }
@@ -769,7 +750,7 @@ impl PcztParser {
 
         // V3 dummy padding notes use a different commitment derivation that the
         // device does not implement; accept the host-provided cmx from the wire.
-        if self.current_action.note_plaintext_version == 0x03 {
+        if self.current_action.note_plaintext_version == NOTE_VERSION_IRONWOOD {
             return Ok(true);
         }
 

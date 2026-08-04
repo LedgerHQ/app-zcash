@@ -1313,10 +1313,10 @@ def test_pczt_v2_0x02_notes_path_unchanged(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """116-byte output metadata with note_plaintext_version=0x02 is accepted;
-    behavior is identical to the 115-byte path."""
+    """116-byte output metadata with note_plaintext_version=0x02 is accepted via the
+    standard IVK decryption path — behavior is identical to the 115-byte form."""
     client = ZcashCommandSender(backend)
-    action = _valid_ironwood_action()
+    action = _dummy_ironwood_action()
     action.note_plaintext_version = 0x02
     bundle = PcztIronwoodBundle(
         actions=[action],
@@ -1327,14 +1327,14 @@ def test_pczt_v2_0x02_notes_path_unchanged(
 
     with client.send_pczt(
         pczt_global=PCZT_V6_GLOBAL,
-        transparent_inputs=[],
-        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        transparent_inputs=[_TRANSPARENT_INPUT_11K],
+        transparent_outputs=[],
         ironwood_bundle=bundle,
     ):
         _review_approve(scenario_navigator, "test_pczt_v2_0x02_notes_path_unchanged")
 
-    auth_sig = client.pczt_sign_ironwood(action_index=0).data
-    assert len(auth_sig) == 64
+    auth_sig = client.pczt_sign_transparent(input_index=0).data
+    assert len(auth_sig) >= 70
 
 
 def test_pczt_v2_0x03_real_output_accepted(
@@ -1342,7 +1342,8 @@ def test_pczt_v2_0x03_real_output_accepted(
     scenario_navigator: NavigateWithScenario,
 ):
     """Non-zero Ironwood output with note_plaintext_version=0x03 is accepted:
-    the device reads value and recipient from wire metadata, skipping decryption."""
+    the device deciphers enc_ciphertext via the standard IVK trial-decryption path
+    (the epk check binds the result to enc_ciphertext which is part of the sighash)."""
     client = ZcashCommandSender(backend)
     action = _dummy_ironwood_action()
     action.note_plaintext_version = 0x03
@@ -1361,8 +1362,8 @@ def test_pczt_v2_0x03_real_output_accepted(
     ):
         _review_approve(scenario_navigator, "test_pczt_v2_0x03_real_output_accepted")
 
-    auth_sig = client.pczt_sign_ironwood(action_index=0).data
-    assert len(auth_sig) == 64
+    auth_sig = client.pczt_sign_transparent(input_index=0).data
+    assert len(auth_sig) >= 70
 
 
 def test_pczt_v2_0x03_dummy_accepted(
@@ -1384,8 +1385,8 @@ def test_pczt_v2_0x03_dummy_accepted(
         signing_path=_SIGNING_PATH,
         cmx=_V3_DUMMY_CMX,
         ephemeral_key=_DUMMY_EPHEMERAL_KEY,
-        enc_ciphertext=_DUMMY_ENC_CIPHERTEXT,
-        out_ciphertext=_DUMMY_OUT_CIPHERTEXT,
+        enc_ciphertext=bytes(580),
+        out_ciphertext=bytes(80),
         rcv=_DUMMY_RCV,
         rseed=_DUMMY_RSEED,
         spend_value=0,

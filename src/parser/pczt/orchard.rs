@@ -453,6 +453,7 @@ impl PcztParser {
         self.current_action.alpha = None;
         self.current_action.path = None;
         self.current_action.fvk = None;
+        self.current_action.note_plaintext_version = NOTE_VERSION_ORCHARD;
     }
 
     pub(super) fn reset_orchard_bundle_state(&mut self, action_count: usize) {

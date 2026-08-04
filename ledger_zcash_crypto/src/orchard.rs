@@ -294,9 +294,13 @@ fn parse_and_validate_note_plaintext(
         return Ok(None);
     }
 
-    let cmx = note_commitment(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?;
-    if !bytes_eq(&cmx, &compact.cmx) {
-        return Ok(None);
+    // The V3 note commitment formula differs from V2 and is not implemented on-device.
+    // For V3 the epk check provides the binding to enc_ciphertext, which is in the sighash.
+    if plaintext[0] != 0x03 {
+        let cmx = note_commitment(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?;
+        if !bytes_eq(&cmx, &compact.cmx) {
+            return Ok(None);
+        }
     }
 
     let mut raw_address = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
@@ -463,7 +467,9 @@ fn parse_note_plaintext_diversifier(
 fn parse_note_plaintext_prefix(
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
 ) -> Option<OrchardNotePlaintextPrefix> {
-    if plaintext[0] != 0x02 {
+    // Accept both Orchard V2 (0x02) and Ironwood V3 (0x03) note plaintext versions.
+    // The version byte is the only structural difference between the two formats.
+    if plaintext[0] != 0x02 && plaintext[0] != 0x03 {
         return None;
     }
 
