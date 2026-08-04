@@ -1269,7 +1269,7 @@ def test_pczt_ironwood_display_shield(
 
 
 # ---------------------------------------------------------------------------
-# PCZT v2 header and NoteVersion::V3 tests (G1–G5)
+# PCZT v2 header and NoteVersion::V3 output handling
 # ---------------------------------------------------------------------------
 
 
