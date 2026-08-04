@@ -1,7 +1,20 @@
 import json
 from dataclasses import dataclass
-from struct import pack
+from struct import pack, unpack_from
 from .zcash_utils import UINT64_MAX, read_compactsize
+
+V6_TX_HEADER = 0x80000006
+V6_VERSION_GROUP_ID = 0xD884B698
+
+# Orchard and Ironwood actions share this layout and this ZIP-244 digest grouping.
+ACTION_COMPACT_SIZE = 32 + 32 + 32 + 52  # nullifier + cmx + ephemeral_key + enc_ciphertext[..52]
+ACTION_MEMO_SIZE = 512
+ACTION_NONCOMPACT_SIZE = 32 + 32 + 16 + 80  # cv + rk + enc_ciphertext[564..] + out_ciphertext
+MEMO_CHUNK_SIZE = 128
+# flags + valueBalance, plus the anchor for a v5 Orchard bundle only: v6 moved the anchor to
+# the authorizing digest, which a trusted input never computes.
+ACTION_DIGEST_DATA_SIZE = 1 + 8
+ACTION_DIGEST_DATA_SIZE_V5 = ACTION_DIGEST_DATA_SIZE + 32
 
 class TransactionError(Exception):
     pass
@@ -60,6 +73,37 @@ class Transaction:
 # NOTE: lockTime and expiryHeight are, for some reason,
 # serialized at the end of the transaction data
 # (as if it was a v4 transaction format).
+def is_v6_transaction(buf: bytes) -> bool:
+    return (
+        len(buf) >= 8
+        and unpack_from("<I", buf, 0)[0] == V6_TX_HEADER
+        and unpack_from("<I", buf, 4)[0] == V6_VERSION_GROUP_ID
+    )
+
+def append_action_bundle_chunks(
+    chunks: list[bytes], buf: bytes, i: int, action_count: int, digest_data_size: int
+) -> int:
+    if action_count == 0:
+        return i
+
+    for _ in range(action_count):
+        chunks.append(buf[i:i + ACTION_COMPACT_SIZE])
+        i += ACTION_COMPACT_SIZE
+
+    memo_remaining = action_count * ACTION_MEMO_SIZE
+    while memo_remaining > 0:
+        memo_chunk = min(MEMO_CHUNK_SIZE, memo_remaining)
+        chunks.append(buf[i:i + memo_chunk])
+        i += memo_chunk
+        memo_remaining -= memo_chunk
+
+    for _ in range(action_count):
+        chunks.append(buf[i:i + ACTION_NONCOMPACT_SIZE])
+        i += ACTION_NONCOMPACT_SIZE
+
+    chunks.append(buf[i:i + digest_data_size])
+    return i + digest_data_size
+
 def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
     # pylint: disable=R0914 disable=R0915 disable=R0912
 
@@ -70,6 +114,7 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
 
     header_v5_size = 4 * 5
     header_v4_size = 4 * 3
+    is_v6 = not is_v4_nu6 and is_v6_transaction(buf)
 
     if is_v4_nu6:
         i += header_v4_size
@@ -106,11 +151,14 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
         i = i + plen
         chunks.append(buf[script_pk_start:i])
 
-    # Sapling and Orchard fields
+    # Sapling, Orchard and — for v6 only — Ironwood action counts
     sapling_start = i
     sap_sp, i = read_compactsize(buf, i)
     sap_out,i = read_compactsize(buf, i)
     orch, i   = read_compactsize(buf, i)
+    ironwood = 0
+    if is_v6:
+        ironwood, i = read_compactsize(buf, i)
     chunks.append(buf[sapling_start:i])
 
     # Sapling data (if any)
@@ -119,7 +167,9 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
         balance_start = i
         i += 8
 
-        if sap_sp > 0:
+        # A v6 spends non-compact digest omits the anchor (ZIP-229), which moves to the
+        # authorizing data, so no anchor is streamed at all for a v6.
+        if sap_sp > 0 and not is_v6:
             # anchor
             i += 32
 
@@ -152,32 +202,10 @@ def split_tx_to_chunks(buf: bytes, is_v4_nu6: bool = False) -> list[bytes]:
             i += 32 + 16 + 80
             chunks.append(buf[non_compact_start:i])
 
-    # Orchard data (if any)
-    if orch > 0:
-        # Orchard actions: compact part
-        for _ in range(orch):
-            compact_start = i
-            i += 32 + 32 + 32 + 52  # nullifier + cmx + ephemeral_key + enc_ciphertext[..52]
-            chunks.append(buf[compact_start:i])
-
-        # Orchard memos (512 bytes per action), split into 128-byte chunks
-        memo_remaining = orch * 512
-        while memo_remaining > 0:
-            memo_chunk = min(128, memo_remaining)
-            chunks.append(buf[i:i + memo_chunk])
-            i += memo_chunk
-            memo_remaining -= memo_chunk
-
-        # Orchard actions: non-compact part
-        for _ in range(orch):
-            non_compact_start = i
-            i += 32 + 32 + 16 + 80  # nullifier + cmx + out_ciphertext + zkproof
-            chunks.append(buf[non_compact_start:i])
-
-        # Orchard digest data (flags + valueBalance + anchor)
-        digest_start = i
-        i += 1 + 8 + 32
-        chunks.append(buf[digest_start:i])
+    # Shielded action bundles, streamed one after the other
+    digest_data_size = ACTION_DIGEST_DATA_SIZE if is_v6 else ACTION_DIGEST_DATA_SIZE_V5
+    i = append_action_bundle_chunks(chunks, buf, i, orch, digest_data_size)
+    i = append_action_bundle_chunks(chunks, buf, i, ironwood, digest_data_size)
 
     # Extra data
     if is_v4_nu6:
