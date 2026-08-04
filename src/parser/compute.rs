@@ -11,6 +11,7 @@ use corez::io::Write;
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
 use ledger_device_sdk::log::{debug, info};
 use zcash_encoding::CompactSize;
+use zcash_protocol::consensus::BranchId;
 
 use crate::{
     consts::SIGHASH_ALL,
@@ -25,6 +26,110 @@ use crate::{
     },
 };
 
+/// Writes the version prefix that `header_digest` commits to. A v6 header encodes the
+/// overwintered flag and the version group id separately from the version number
+/// (ZIP-244 §T.1 + ZIP-229); v5 uses the `TxVersion` encoding.
+fn write_header_version(
+    tx_info: &TxInfo,
+    hasher: &mut Blake2b_256,
+    is_v6: bool,
+) -> Result<(), ParserError> {
+    #[cfg(feature = "zcash_unstable")]
+    if is_v6 {
+        ok!(hasher.update(&(V6_TX_VERSION | OVERWINTERED_FLAG).to_le_bytes()));
+        ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
+        return Ok(());
+    }
+
+    let _ = is_v6;
+    let tx_version = tx_info
+        .tx_version
+        .expect("tx_version should be set at this point");
+    ok!(tx_version.write(&mut hasher.as_writer()));
+
+    Ok(())
+}
+
+/// The shared v5 txid digest tree. A v6 transaction reuses it verbatim and only appends
+/// the Ironwood bundle digest (ZIP-229); `is_v6` is a compile-time `false` unless the
+/// `zcash_unstable` feature is on, so every v6 statement below is gated out with it.
+fn tx_id_v5_v6(
+    ctx: &mut LegacyParserCtx<'_>,
+    branch_id: BranchId,
+    is_v6: bool,
+) -> Result<(), ParserError> {
+    let prevouts_hash = finalize_and_log_hash(&mut ctx.hashers.prevouts_hasher, "Prevouts hash")?;
+
+    let sequence_hash = finalize_and_log_hash(&mut ctx.hashers.sequence_hasher, "Sequence hash")?;
+
+    let outputs_hash = finalize_and_log_hash(&mut ctx.hashers.outputs_hasher, "Outputs hash")?;
+
+    let header_hash = {
+        let mut hash = [0u8; 32];
+
+        let mut hasher = Blake2b_256::default();
+        ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
+
+        write_header_version(ctx.tx_info, &mut hasher, is_v6)?;
+
+        ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+
+        ok!(hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
+        ok!(hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
+
+        ok!(hasher.finalize(&mut hash));
+        hash
+    };
+    debug!("Header hash: {}", HexSlice(&header_hash));
+
+    let transparent_hash = {
+        let mut hash = [0u8; 32];
+
+        let mut hasher = Blake2b_256::default();
+        ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
+
+        ok!(hasher.update(&prevouts_hash));
+        ok!(hasher.update(&sequence_hash));
+        ok!(hasher.update(&outputs_hash));
+
+        ok!(hasher.finalize(&mut hash));
+        hash
+    };
+    debug!("Transparent hash: {}", HexSlice(&transparent_hash));
+
+    let sapling_hash = finalize_and_log_hash(&mut ctx.hashers.sapling_hasher, "Sapling hash")?;
+
+    let orchard_hash = finalize_and_log_hash(&mut ctx.hashers.orchard_hasher, "Orchard hash")?;
+
+    let mut personalization = [0u8; 16];
+    personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
+    personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
+
+    let mut hasher = Blake2b_256::default();
+    ok!(hasher.init_with_perso(&personalization));
+
+    ok!(hasher.update(&header_hash));
+    ok!(hasher.update(&transparent_hash));
+    ok!(hasher.update(&sapling_hash));
+    ok!(hasher.update(&orchard_hash));
+
+    #[cfg(feature = "zcash_unstable")]
+    if is_v6 {
+        let ironwood_hash =
+            finalize_and_log_hash(&mut ctx.hashers.ironwood_hasher, "Ironwood hash")?;
+        ok!(hasher.update(&ironwood_hash));
+    }
+
+    ok!(hasher.finalize(&mut ctx.trusted_input_info.tx_id));
+
+    debug!(
+        "Transaction ID hash: {}",
+        HexSlice(&ctx.trusted_input_info.tx_id)
+    );
+
+    Ok(())
+}
+
 pub fn tx_id(ctx: &mut LegacyParserCtx<'_>) -> Result<(), ParserError> {
     let branch_id = ctx
         .tx_info
@@ -32,169 +137,12 @@ pub fn tx_id(ctx: &mut LegacyParserCtx<'_>) -> Result<(), ParserError> {
         .expect("branch_id should be set at this point");
 
     match ctx.tx_info.tx_version() {
-        // v6 reuses the v5 digest tree and appends the Ironwood bundle to it (ZIP-230).
         #[cfg(feature = "zcash_unstable")]
         version @ (SupportedTxVersion::V5 | SupportedTxVersion::V6) => {
-            let is_v6 = matches!(version, SupportedTxVersion::V6);
-
-            let prevouts_hash =
-                finalize_and_log_hash(&mut ctx.hashers.prevouts_hasher, "Prevouts hash")?;
-
-            let sequence_hash =
-                finalize_and_log_hash(&mut ctx.hashers.sequence_hasher, "Sequence hash")?;
-
-            let outputs_hash =
-                finalize_and_log_hash(&mut ctx.hashers.outputs_hasher, "Outputs hash")?;
-
-            let header_hash = {
-                let mut hash = [0u8; 32];
-
-                let mut hasher = Blake2b_256::default();
-                ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-
-                if is_v6 {
-                    // The V6 header encodes the overwintered flag and the version group id
-                    // separately from the version number (ZIP-244 §T.1 + ZIP-230 §4.4).
-                    ok!(hasher.update(&(V6_TX_VERSION | OVERWINTERED_FLAG).to_le_bytes()));
-                    ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
-                    ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
-                } else {
-                    let tx_version = ctx
-                        .tx_info
-                        .tx_version
-                        .expect("tx_version should be set at this point");
-                    ok!(tx_version.write(&mut hasher.as_writer()));
-                    ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
-                }
-
-                ok!(hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
-                ok!(hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
-
-                ok!(hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Header hash: {}", HexSlice(&header_hash));
-
-            let transparent_hash = {
-                let mut hash = [0u8; 32];
-
-                let mut hasher = Blake2b_256::default();
-                ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
-
-                ok!(hasher.update(&prevouts_hash));
-                ok!(hasher.update(&sequence_hash));
-                ok!(hasher.update(&outputs_hash));
-
-                ok!(hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Transparent hash: {}", HexSlice(&transparent_hash));
-
-            let sapling_hash =
-                finalize_and_log_hash(&mut ctx.hashers.sapling_hasher, "Sapling hash")?;
-
-            let orchard_hash =
-                finalize_and_log_hash(&mut ctx.hashers.orchard_hasher, "Orchard hash")?;
-
-            let mut personalization = [0u8; 16];
-            personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
-            personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
-
-            let mut hasher = Blake2b_256::default();
-            ok!(hasher.init_with_perso(&personalization));
-
-            ok!(hasher.update(&header_hash));
-            ok!(hasher.update(&transparent_hash));
-            ok!(hasher.update(&sapling_hash));
-            ok!(hasher.update(&orchard_hash));
-
-            if is_v6 {
-                let ironwood_hash =
-                    finalize_and_log_hash(&mut ctx.hashers.ironwood_hasher, "Ironwood hash")?;
-                ok!(hasher.update(&ironwood_hash));
-            }
-
-            ok!(hasher.finalize(&mut ctx.trusted_input_info.tx_id));
-
-            debug!(
-                "Transaction ID hash: {}",
-                HexSlice(&ctx.trusted_input_info.tx_id)
-            );
+            tx_id_v5_v6(ctx, branch_id, matches!(version, SupportedTxVersion::V6))?
         }
         #[cfg(not(feature = "zcash_unstable"))]
-        SupportedTxVersion::V5 => {
-            let tx_version = ctx
-                .tx_info
-                .tx_version
-                .expect("tx_version should be set at this point");
-
-            let prevouts_hash =
-                finalize_and_log_hash(&mut ctx.hashers.prevouts_hasher, "Prevouts hash")?;
-
-            let sequence_hash =
-                finalize_and_log_hash(&mut ctx.hashers.sequence_hasher, "Sequence hash")?;
-
-            let outputs_hash =
-                finalize_and_log_hash(&mut ctx.hashers.outputs_hasher, "Outputs hash")?;
-
-            let header_hash = {
-                let mut hash = [0u8; 32];
-
-                let mut hasher = Blake2b_256::default();
-                ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-
-                ok!(tx_version.write(&mut hasher.as_writer()));
-
-                ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
-
-                ok!(hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
-                ok!(hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
-
-                ok!(hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Header hash: {}", HexSlice(&header_hash));
-
-            let transparent_hash = {
-                let mut hash = [0u8; 32];
-
-                let mut hasher = Blake2b_256::default();
-                ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
-
-                ok!(hasher.update(&prevouts_hash));
-                ok!(hasher.update(&sequence_hash));
-                ok!(hasher.update(&outputs_hash));
-
-                ok!(hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Transparent hash: {}", HexSlice(&transparent_hash));
-
-            let sapling_hash =
-                finalize_and_log_hash(&mut ctx.hashers.sapling_hasher, "Sapling hash")?;
-
-            let orchard_hash =
-                finalize_and_log_hash(&mut ctx.hashers.orchard_hasher, "Orchard hash")?;
-
-            let mut personalization = [0u8; 16];
-            personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
-            personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
-
-            let mut hasher = Blake2b_256::default();
-            ok!(hasher.init_with_perso(&personalization));
-
-            ok!(hasher.update(&header_hash));
-            ok!(hasher.update(&transparent_hash));
-            ok!(hasher.update(&sapling_hash));
-            ok!(hasher.update(&orchard_hash));
-
-            ok!(hasher.finalize(&mut ctx.trusted_input_info.tx_id));
-
-            debug!(
-                "Transaction ID hash: {}",
-                HexSlice(&ctx.trusted_input_info.tx_id)
-            );
-        }
+        SupportedTxVersion::V5 => tx_id_v5_v6(ctx, branch_id, false)?,
         SupportedTxVersion::V4 => {
             let mut first_round_hash = [0u8; 32];
             ok!(ctx.hashers.v4_tx_hasher.finalize(&mut first_round_hash));
