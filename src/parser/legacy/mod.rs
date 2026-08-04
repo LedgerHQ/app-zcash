@@ -107,7 +107,9 @@ pub enum LegacyParserState {
 
     ProcessSapling,
     ProcessSaplingSpends {
-        anchor: [u8; 32],
+        /// `None` for a v6 transaction, whose spends non-compact digest omits the
+        /// anchor (ZIP-229), so the host streams none.
+        anchor: Option<[u8; 32]>,
     },
     ProcessSaplingSpendsHashing,
     ProcessSaplingOutputsCompact,
@@ -312,7 +314,7 @@ impl LegacyParser {
         info!("Input count: {}", input_count);
 
         match (self.mode, version, ctx.tx_state.is_tx_parsed_once) {
-            // V6 (ZIP-230) is only reachable in TrustedInput mode: the app never signs
+            // V6 (ZIP-229) is only reachable in TrustedInput mode: the app never signs
             // a v6 transaction on the legacy path; signing goes through the PCZT path.
             #[cfg(feature = "zcash_unstable")]
             (LegacyParserMode::TrustedInput, TxVersion::V6, _) => {
