@@ -20,6 +20,7 @@ pub struct Hashers {
     pub scripts_hasher: Blake2b_256,
 
     pub orchard_hasher: Blake2b_256,
+    pub ironwood_hasher: Blake2b_256,
     pub sapling_hasher: Blake2b_256,
 
     pub tx_memo_hasher: Blake2b_256,
@@ -41,7 +42,9 @@ pub struct TxOutput {
 
 #[derive(Default)]
 pub struct TxInfo {
+    /// Left unset for a v6 transaction, which `TxVersion` cannot represent on this branch.
     pub tx_version: Option<TxVersion>,
+    pub is_v6: bool,
     pub branch_id: Option<BranchId>,
     pub locktime: u32,
     pub sighash_type: u8,
@@ -64,11 +67,18 @@ pub struct TxInfo {
 pub enum SupportedTxVersion {
     V4,
     V5,
+    /// ZIP-229. Only reachable while computing the txid of a previous transaction: the app
+    /// never signs a v6 transaction on this path.
+    V6,
 }
 
 impl TxInfo {
     // Call only after header parsing is finished, otherwise it may panic if tx_version or branch_id is not set yet.
     pub fn tx_version(&self) -> SupportedTxVersion {
+        if self.is_v6 {
+            return SupportedTxVersion::V6;
+        }
+
         match self
             .tx_version
             .expect("TX version should be set at this point of the parsing")

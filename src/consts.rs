@@ -33,3 +33,11 @@ pub const P2_FINALIZE_FULL_DEFAULT: u8 = 0x00;
 
 pub const TRUSTED_INPUT_SIZE: usize = 2 + 2 + 32 + 4 + 8; // magic + rand + txid + idx + amount
 pub const TRUSTED_INPUT_TOTAL_SIZE: usize = TRUSTED_INPUT_SIZE + 8;
+
+// v6 transaction header (ZIP-229). The pinned `zcash_primitives` only parses v6 under the
+// `zcash_unstable = "nu7"` cfg, which would enable in-development paths across the whole
+// dependency tree, so the header is recognized locally instead.
+const OVERWINTERED_FLAG: u32 = 1 << 31;
+const V6_TX_VERSION: u32 = 6;
+pub const V6_TX_HEADER: u32 = V6_TX_VERSION | OVERWINTERED_FLAG;
+pub const V6_VERSION_GROUP_ID: u32 = 0xD884_B698;

@@ -9,6 +9,7 @@ use zcash_primitives::transaction::txid::{
 };
 use zcash_protocol::value::ZatBalance;
 
+use super::personalization::ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION_V6;
 use super::*;
 
 const SAPLING_CMU_SIZE: usize = HASH_SIZE;
@@ -40,8 +41,23 @@ impl Parser {
         self.sapling_balance = sapling_balance.into();
 
         if self.sapling_spend_count > 0 {
-            let mut anchor = [0u8; 32];
-            ok!(reader.read_exact(&mut anchor));
+            // In v6 the Sapling anchor is authorizing data (ZIP-229), so it is neither
+            // hashed into the spends non-compact digest nor streamed by the host, and
+            // that digest takes its own personalization. v4 and v5 are unchanged.
+            let (anchor, non_compact_personalization) = match ctx.tx_info.tx_version() {
+                SupportedTxVersion::V6 => (
+                    None,
+                    ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION_V6,
+                ),
+                SupportedTxVersion::V4 | SupportedTxVersion::V5 => {
+                    let mut anchor = [0u8; 32];
+                    ok!(reader.read_exact(&mut anchor));
+                    (
+                        Some(anchor),
+                        ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION,
+                    )
+                }
+            };
 
             // Init hashers
             ok!(ctx
@@ -51,7 +67,7 @@ impl Parser {
             ok!(ctx
                 .hashers
                 .tx_non_compact_hasher
-                .init_with_perso(ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION));
+                .init_with_perso(non_compact_personalization));
 
             self.state = ParserState::ProcessSaplingSpends { anchor };
         } else if self.sapling_output_count > 0 {
@@ -87,7 +103,7 @@ impl Parser {
         &mut self,
         ctx: &mut ParserCtx<'_>,
         reader: &mut ByteReader<'_>,
-        anchor: [u8; 32],
+        anchor: Option<[u8; 32]>,
     ) -> Result<(), ParserError> {
         info!(
             "Process sapling spends, remaining: {}",
@@ -101,8 +117,10 @@ impl Parser {
             tmp
         }));
 
-        // update non compact hash with anchor
-        ok!(ctx.hashers.tx_non_compact_hasher.update(&anchor));
+        // update non compact hash with anchor, for v4 and v5 only
+        if let Some(anchor) = anchor {
+            ok!(ctx.hashers.tx_non_compact_hasher.update(&anchor));
+        }
 
         // update compact hash with nullifier
         ok!(ctx.hashers.tx_compact_hasher.update(&{
@@ -178,11 +196,22 @@ impl Parser {
                 .init_with_perso(ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION));
 
             self.state = ParserState::ProcessSaplingOutputsCompact;
-        } else {
-            self.state = ParserState::ProcessExtra;
+            return Ok(());
         }
 
-        Ok(())
+        // Spends without outputs, the shape of a Sapling deshielding transaction.
+        // ZIP-244 T.3 still commits to an outputs digest and to valueBalance, so the
+        // empty outputs digest stands in and the component is closed here.
+        let sapling_output = {
+            let mut sapling_output = [0u8; 32];
+            let mut tmp_output_hasher = Blake2b_256::new();
+            ok!(tmp_output_hasher.init_with_perso(ZCASH_SAPLING_OUTPUTS_HASH_PERSONALIZATION));
+            ok!(tmp_output_hasher.finalize(&mut sapling_output));
+
+            sapling_output
+        };
+
+        self.finish_sapling(ctx, sapling_output)
     }
 
     pub fn parse_sapling_outputs_compact(
@@ -320,24 +349,24 @@ impl Parser {
         ok!(sapling_output_hasher.finalize(&mut sapling_output));
         debug!("Sapling output digest: {}", HexSlice(&sapling_output));
 
+        self.finish_sapling(ctx, sapling_output)
+    }
+
+    /// Closes the Sapling component: appends its outputs digest and its value balance
+    /// to the Sapling hasher (ZIP-244 T.3), then moves on to the action bundles.
+    fn finish_sapling(
+        &mut self,
+        ctx: &mut ParserCtx<'_>,
+        sapling_output_digest: [u8; 32],
+    ) -> Result<(), ParserError> {
         // Update sapling full hasher with sapling output digest
-        ok!(ctx.hashers.sapling_hasher.update(&sapling_output));
+        ok!(ctx.hashers.sapling_hasher.update(&sapling_output_digest));
         // Update sapling full hasher with sapling balance
         ok!(ctx
             .hashers
             .sapling_hasher
             .update(&self.sapling_balance.to_le_bytes()));
 
-        if self.orchard_action_count > 0 {
-            ok!(ctx
-                .hashers
-                .tx_compact_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
-            self.state = ParserState::ProcessOrchardCompact;
-        } else {
-            self.state = ParserState::ProcessExtra;
-        }
-
-        Ok(())
+        self.enter_next_action_bundle(ctx, None)
     }
 }

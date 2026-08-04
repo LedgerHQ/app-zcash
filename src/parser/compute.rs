@@ -6,6 +6,7 @@ use zcash_primitives::transaction::txid::{
 };
 
 use crate::{
+    consts::{V6_TX_HEADER, V6_VERSION_GROUP_ID},
     parser::{
         ParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, finalize_and_log_hash, ok,
     },
@@ -17,18 +18,16 @@ use crate::{
 };
 
 pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
-    let tx_version = ctx
-        .tx_info
-        .tx_version
-        .expect("tx_version should be set at this point");
-
     let branch_id = ctx
         .tx_info
         .branch_id
         .expect("branch_id should be set at this point");
 
     match ctx.tx_info.tx_version() {
-        SupportedTxVersion::V5 => {
+        // v6 reuses the v5 digest tree and appends the Ironwood bundle to it (ZIP-229).
+        version @ (SupportedTxVersion::V5 | SupportedTxVersion::V6) => {
+            let is_v6 = matches!(version, SupportedTxVersion::V6);
+
             let prevouts_hash =
                 finalize_and_log_hash(&mut ctx.hashers.prevouts_hasher, "Prevouts hash")?;
 
@@ -44,7 +43,17 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
                 let mut hasher = Blake2b_256::default();
                 ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
 
-                ok!(tx_version.write(&mut hasher.as_writer()));
+                if is_v6 {
+                    // `TxVersion` cannot represent v6 on this branch, so write the header itself.
+                    ok!(hasher.update(&V6_TX_HEADER.to_le_bytes()));
+                    ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
+                } else {
+                    let tx_version = ctx
+                        .tx_info
+                        .tx_version
+                        .expect("tx_version should be set at this point");
+                    ok!(tx_version.write(&mut hasher.as_writer()));
+                }
 
                 ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
 
@@ -88,6 +97,12 @@ pub fn tx_id(ctx: &mut ParserCtx<'_>) -> Result<(), ParserError> {
             ok!(hasher.update(&transparent_hash));
             ok!(hasher.update(&sapling_hash));
             ok!(hasher.update(&orchard_hash));
+
+            if is_v6 {
+                let ironwood_hash =
+                    finalize_and_log_hash(&mut ctx.hashers.ironwood_hasher, "Ironwood hash")?;
+                ok!(hasher.update(&ironwood_hash));
+            }
 
             ok!(hasher.finalize(&mut ctx.trusted_input_info.tx_id));
 

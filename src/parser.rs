@@ -29,6 +29,9 @@ use zcash_transparent::address::Script;
 use zcash_transparent::bundle::OutPoint;
 
 use crate::parser::compute::{finalize_signature_hash, finalize_signature_input_hash};
+use crate::parser::personalization::{
+    ZCASH_IRONWOOD_HASH_PERSONALIZATION, ZCASH_ORCHARD_HASH_PERSONALIZATION_V6,
+};
 use crate::parser::reader::ByteReader;
 use crate::settings::Settings;
 use crate::tx::{Hashers, SupportedTxVersion, TrustedInputInfo, TxInfo, TxOutput, TxSigningState};
@@ -37,24 +40,30 @@ use crate::utils::{CheckDispOutput, HexSlice, check_output_displayable, secure_m
 use crate::{AppSW, swap};
 use crate::{app_ui::sign::ui_display_tx, utils::base58_address::Base58Address};
 use crate::{
-    consts::{MAX_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, TRUSTED_INPUT_TOTAL_SIZE},
+    consts::{
+        MAX_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, TRUSTED_INPUT_TOTAL_SIZE, V6_TX_HEADER,
+        V6_VERSION_GROUP_ID,
+    },
     utils::base58_address::ToBase58Address,
 };
 use error::ok;
 use ledger_device_sdk::log::{debug, error, info};
 
 pub use error::{ParserError, ParserSourceError};
+pub use orchard::ActionBundle;
 pub use output_parser::{OutputParser, OutputParserCtx};
 
 mod compute;
 mod error;
 mod orchard;
 mod output_parser;
+mod personalization;
 mod reader;
 mod sapling;
 mod transparent;
 
 const HASH_SIZE: usize = 32;
+const UINT32_SIZE: usize = 4;
 
 pub(super) fn hash_reader_chunk(
     reader: &mut ByteReader<'_>,
@@ -134,7 +143,9 @@ pub enum ParserState {
 
     ProcessSapling,
     ProcessSaplingSpends {
-        anchor: [u8; 32],
+        /// `None` for a v6 transaction, whose spends non-compact digest omits the
+        /// anchor (ZIP-229), so the host streams none.
+        anchor: Option<[u8; 32]>,
     },
     ProcessSaplingSpendsHashing,
     ProcessSaplingOutputsCompact,
@@ -145,13 +156,20 @@ pub enum ParserState {
     ProcessSaplingOutputsNonCompact,
     ProcessSaplingOutputHashing,
 
-    ProcessOrchardCompact,
-    ProcessOrchardMemo {
+    ProcessActionsCompact {
+        bundle: ActionBundle,
+    },
+    ProcessActionsMemo {
+        bundle: ActionBundle,
         size: usize,
         remaining_size: usize,
     },
-    ProcessOrchardNonCompact,
-    ProcessOrchardHashing,
+    ProcessActionsNonCompact {
+        bundle: ActionBundle,
+    },
+    ProcessActionsHashing {
+        bundle: ActionBundle,
+    },
 
     ProcessExtra,
     TransactionParsed,
@@ -181,7 +199,9 @@ pub struct Parser {
     sapling_output_count: usize,
     sapling_output_parsed_count: usize,
     orchard_action_count: usize,
-    orchard_action_parsed_count: usize,
+    ironwood_action_count: usize,
+    /// Shared by both action bundles, which are streamed one after the other.
+    action_parsed_count: usize,
 
     sapling_balance: i64,
 
@@ -203,7 +223,8 @@ impl Parser {
             sapling_output_count: 0,
             sapling_output_parsed_count: 0,
             orchard_action_count: 0,
-            orchard_action_parsed_count: 0,
+            ironwood_action_count: 0,
+            action_parsed_count: 0,
 
             sapling_balance: 0,
             script_bytes: Vec::new(),
@@ -269,18 +290,19 @@ impl Parser {
                 ParserState::ProcessSaplingOutputHashing => {
                     self.parse_sapling_output_hashing(ctx, &mut reader)?
                 }
-                ParserState::ProcessOrchardCompact => {
-                    self.parse_orchard_compact(ctx, &mut reader)?
+                ParserState::ProcessActionsCompact { bundle } => {
+                    self.parse_actions_compact(ctx, &mut reader, bundle)?
                 }
-                ParserState::ProcessOrchardMemo {
+                ParserState::ProcessActionsMemo {
+                    bundle,
                     size,
                     remaining_size,
-                } => self.parse_orchard_memo(ctx, &mut reader, size, remaining_size)?,
-                ParserState::ProcessOrchardNonCompact => {
-                    self.parse_orchard_noncompact(ctx, &mut reader)?
+                } => self.parse_actions_memo(ctx, &mut reader, bundle, size, remaining_size)?,
+                ParserState::ProcessActionsNonCompact { bundle } => {
+                    self.parse_actions_noncompact(ctx, &mut reader, bundle)?
                 }
-                ParserState::ProcessOrchardHashing => {
-                    self.parse_orchard_hashing(ctx, &mut reader)?
+                ParserState::ProcessActionsHashing { bundle } => {
+                    self.parse_actions_hashing(ctx, &mut reader, bundle)?
                 }
                 ParserState::ProcessExtra => self.parse_process_extra(ctx, &mut reader)?,
                 ParserState::TransactionParsed
@@ -298,62 +320,117 @@ impl Parser {
         Ok(())
     }
 
+    /// Consumes the 8-byte version prefix when it announces a v6 transaction (ZIP-229),
+    /// and leaves the reader untouched otherwise so that `TxVersion` can read it.
+    ///
+    /// ZIP-229 states as a non-requirement that v6 carries `zip233Amount`, so this prefix
+    /// is fixed at 8 bytes; a later format that grows it would need a new version number.
+    fn take_v6_header(reader: &mut ByteReader<'_>) -> Result<bool, ParserError> {
+        const PREFIX_SIZE: usize = 2 * UINT32_SIZE;
+
+        let prefix = reader.remaining_slice();
+        if prefix.len() < PREFIX_SIZE {
+            return Ok(false);
+        }
+
+        let mut word = [0u8; UINT32_SIZE];
+        word.copy_from_slice(&prefix[..UINT32_SIZE]);
+        let version = u32::from_le_bytes(word);
+        word.copy_from_slice(&prefix[UINT32_SIZE..PREFIX_SIZE]);
+        let version_group_id = u32::from_le_bytes(word);
+
+        if version != V6_TX_HEADER || version_group_id != V6_VERSION_GROUP_ID {
+            return Ok(false);
+        }
+
+        ok!(reader.advance(PREFIX_SIZE));
+        Ok(true)
+    }
+
+    /// Initializes the per-component hashers feeding the ZIP-244 transaction ID. Only the
+    /// Orchard bundle personalization changes between v5 and v6.
+    fn init_txid_hashers(
+        ctx: &mut ParserCtx<'_>,
+        orchard_personalization: &[u8; 16],
+    ) -> Result<(), ParserError> {
+        ok!(ctx
+            .hashers
+            .prevouts_hasher
+            .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION));
+        ok!(ctx
+            .hashers
+            .sequence_hasher
+            .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION));
+        ok!(ctx
+            .hashers
+            .outputs_hasher
+            .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION));
+        ok!(ctx
+            .hashers
+            .amounts_hasher
+            .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION));
+        ok!(ctx
+            .hashers
+            .scripts_hasher
+            .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION));
+        ok!(ctx
+            .hashers
+            .sapling_hasher
+            .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION));
+        ok!(ctx
+            .hashers
+            .orchard_hasher
+            .init_with_perso(orchard_personalization));
+
+        Ok(())
+    }
+
     pub fn parse_header(
         &mut self,
         ctx: &mut ParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
-        let version = ok!(TxVersion::read(&mut *reader));
+        let is_v6 = Self::take_v6_header(reader)?;
+        let version = if is_v6 {
+            None
+        } else {
+            Some(ok!(TxVersion::read(&mut *reader)))
+        };
 
         let value = ok!(reader.read_u32_le());
         let consensus_branch_id = ok!(BranchId::try_from(value));
 
         info!(
-            "Transaction version: {:?}, consensus branch id: {:?}",
-            version, consensus_branch_id
+            "Transaction version: {:?} (v6: {}), consensus branch id: {:?}",
+            version, is_v6, consensus_branch_id
         );
-        ctx.tx_info.tx_version = Some(version);
+        ctx.tx_info.tx_version = version;
+        ctx.tx_info.is_v6 = is_v6;
         ctx.tx_info.branch_id = Some(consensus_branch_id);
 
         let input_count: usize = ok!(CompactSize::read_t(&mut *reader));
         info!("Input count: {}", input_count);
 
         match (self.mode, version, ctx.tx_state.is_tx_parsed_once) {
+            // A v6 transaction only ever reaches this parser as the previous transaction of
+            // an input, to recompute its txid; signing one goes through the PCZT path. Its
+            // `version` is None because `TxVersion` cannot represent v6 on this branch.
+            (ParserMode::TrustedInput, None, _) => {
+                debug!("Init V6 tx hashers");
+                Self::init_txid_hashers(ctx, ZCASH_ORCHARD_HASH_PERSONALIZATION_V6)?;
+                ok!(ctx
+                    .hashers
+                    .ironwood_hasher
+                    .init_with_perso(ZCASH_IRONWOOD_HASH_PERSONALIZATION));
+            }
             // Normal flow for TrustedInput and Signature modes
-            (ParserMode::TrustedInput, TxVersion::V5, _)
-            | (ParserMode::Signature, TxVersion::V5, false) => {
+            (ParserMode::TrustedInput, Some(TxVersion::V5), _)
+            | (ParserMode::Signature, Some(TxVersion::V5), false) => {
                 debug!("Init V5 tx hashers");
-                ok!(ctx
-                    .hashers
-                    .prevouts_hasher
-                    .init_with_perso(ZCASH_PREVOUTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .sequence_hasher
-                    .init_with_perso(ZCASH_SEQUENCE_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .outputs_hasher
-                    .init_with_perso(ZCASH_OUTPUTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .amounts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .scripts_hasher
-                    .init_with_perso(ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .sapling_hasher
-                    .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION));
-                ok!(ctx
-                    .hashers
-                    .orchard_hasher
-                    .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION));
+                Self::init_txid_hashers(ctx, ZCASH_ORCHARD_HASH_PERSONALIZATION)?;
             }
             // In case of Signature mode, continue computing Tx hash from previous state
-            (ParserMode::Signature, TxVersion::V5, true) => {
+            (ParserMode::Signature, Some(version @ TxVersion::V5), true) => {
                 info!("Resume TX hashing for signing");
                 info!("TX Version {:X?}", version);
                 info!("TX prevout hash {}", HexSlice(&ctx.tx_info.prevouts_hash));
@@ -380,7 +457,7 @@ impl Parser {
                     .init_with_perso(ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION));
             }
             // Support V4 in trusted input mode (Transaction ID computation)
-            (ParserMode::TrustedInput, TxVersion::V4, _) => {
+            (ParserMode::TrustedInput, Some(version @ TxVersion::V4), _) => {
                 debug!("Init V4 txid hasher");
                 ctx.hashers.v4_tx_hasher = Sha2_256::new();
                 version

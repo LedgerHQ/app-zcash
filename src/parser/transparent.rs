@@ -11,7 +11,7 @@ impl Parser {
         let prevout = ok!(OutPoint::read(&mut *reader));
 
         match ctx.tx_info.tx_version() {
-            SupportedTxVersion::V5 => {
+            SupportedTxVersion::V5 | SupportedTxVersion::V6 => {
                 ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
             }
             SupportedTxVersion::V4 => {
@@ -178,7 +178,7 @@ impl Parser {
         script_sig.0.0 = mem::take(&mut self.script_bytes);
 
         match ctx.tx_info.tx_version() {
-            SupportedTxVersion::V5 => {
+            SupportedTxVersion::V5 | SupportedTxVersion::V6 => {
                 ok!(script_sig.write(ctx.hashers.scripts_hasher.as_writer()));
             }
             SupportedTxVersion::V4 => {
@@ -196,7 +196,7 @@ impl Parser {
         info!("Sequence: {:X?}", sequence);
 
         match ctx.tx_info.tx_version() {
-            SupportedTxVersion::V5 => {
+            SupportedTxVersion::V5 | SupportedTxVersion::V6 => {
                 ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
             }
             SupportedTxVersion::V4 => {
@@ -287,7 +287,7 @@ impl Parser {
         }
 
         match ctx.tx_info.tx_version() {
-            SupportedTxVersion::V5 => {
+            SupportedTxVersion::V5 | SupportedTxVersion::V6 => {
                 ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
             }
             SupportedTxVersion::V4 => {
@@ -348,14 +348,13 @@ impl Parser {
         // NOTE: take/deallocate self.script_bytes here
         script_pubkey.0.0 = mem::take(&mut self.script_bytes);
 
-        match ctx.tx_info.tx_version.expect("should be set at this point") {
-            TxVersion::V5 => {
+        match ctx.tx_info.tx_version() {
+            SupportedTxVersion::V5 | SupportedTxVersion::V6 => {
                 ok!(script_pubkey.write(&mut ctx.hashers.outputs_hasher.as_writer()));
             }
-            TxVersion::V4 => {
+            SupportedTxVersion::V4 => {
                 ok!(script_pubkey.write(&mut ctx.hashers.v4_tx_hasher.as_writer()));
             }
-            _ => unreachable!("we should only support V4 and V5 at this point"),
         }
 
         info!("Output script pubkey: {:?}", script_pubkey);
@@ -382,23 +381,22 @@ impl Parser {
         self.sapling_spend_count = ok!(CompactSize::read_t(&mut *reader));
         self.sapling_output_count = ok!(CompactSize::read_t(&mut *reader));
         self.orchard_action_count = ok!(CompactSize::read_t(&mut *reader));
+        // ZIP-229 adds a fourth pool: a v6 transaction announces its Ironwood action count
+        // even when the Orchard one is zero.
+        if let SupportedTxVersion::V6 = ctx.tx_info.tx_version() {
+            self.ironwood_action_count = ok!(CompactSize::read_t(&mut *reader));
+        }
 
         info!("Sapling spend remaining: {}", self.sapling_spend_count);
         info!("Sapling output count: {}", self.sapling_output_count);
         info!("Orchard action count: {}", self.orchard_action_count);
+        info!("Ironwood action count: {}", self.ironwood_action_count);
 
-        self.state = if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {
-            ParserState::ProcessSapling
-        } else if self.orchard_action_count > 0 {
-            ok!(ctx
-                .hashers
-                .tx_compact_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
-            ParserState::ProcessOrchardCompact
-        } else {
-            ParserState::ProcessExtra
-        };
+        if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {
+            self.state = ParserState::ProcessSapling;
+            return Ok(());
+        }
 
-        Ok(())
+        self.enter_next_action_bundle(ctx, None)
     }
 }
