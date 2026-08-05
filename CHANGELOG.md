@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.9.0
+
+- Add PCZT v2 support (Ironwood NoteVersion::V3 outputs)
+
 ## 3.8.0
 
 - Extend private address flow with public address
