@@ -72,6 +72,7 @@ const MAGIC_BYTES: &[u8; 4] = b"PCZT";
 const PCZT_VERSION_1: u32 = 1;
 const PCZT_VERSION_2: u32 = 2;
 const NOTE_VERSION_ORCHARD: u8 = 0x02;
+#[cfg(feature = "zcash_unstable")]
 const NOTE_VERSION_IRONWOOD: u8 = 0x03;
 const DEFAULT_SEQUENCE: u32 = 0xFFFF_FFFF;
 const PREVOUT_SIZE: usize = 32 + 4;
