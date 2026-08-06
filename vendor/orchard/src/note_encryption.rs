@@ -866,9 +866,14 @@ mod tests {
         // V3 (ZIP 2005) note: same Sinsemilla commitment message as V2, but rcm uses BLAKE2b-512
         // over (rseed ‖ 0x0B ‖ g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi) — see note_commitment_v3.
         let value = NoteValue::from_raw(10000); // same as _DUMMY_CHANGE_VALUE
-        let note =
-            Option::from(Note::from_parts(recipient, value, rho, rseed, NoteVersion::V3))
-                .expect("note construction failed — recipient or rho may be invalid");
+        let note = Option::from(Note::from_parts(
+            recipient,
+            value,
+            rho,
+            rseed,
+            NoteVersion::V3,
+        ))
+        .expect("note construction failed — recipient or rho may be invalid");
 
         // Fixed encryption esk: small scalar 0x37 (well within the Pallas scalar field order).
         // IronwoodNoteEncryption::new_with_esk uses this directly for ECDH; it is NOT derived
