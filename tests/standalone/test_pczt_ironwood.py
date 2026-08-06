@@ -1112,6 +1112,160 @@ def test_pczt_ironwood_max_actions_exceeded_rejected(backend):
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
+def test_pczt_ironwood_cmx_mismatch_rejected(backend):
+    """Ironwood output with a cmx that does not match NoteCommitment(recipient, value, rseed) is rejected.
+
+    The device recomputes the note commitment from the decrypted note fields; if it differs from
+    compact.cmx the decryption is treated as a failure.  When no other decryption path succeeds
+    (IVK mismatch, OVK mismatch, value != 0 so dummy branch is skipped), the transaction is
+    rejected with SW_INVALID_TRANSACTION.
+
+    This guards the clear-signing invariant: the displayed recipient/value must match compact.cmx,
+    the field that enters the signature digest.  Without this check a compromised PCZT builder
+    that knows the device's IVK could substitute a different cmx (committing to an attacker-
+    controlled recipient) while presenting an honest enc_ciphertext that decrypts correctly.
+    """
+    client = ZcashCommandSender(backend)
+
+    bad_action = _dummy_ironwood_action()
+    bad_action.cmx = bytes(32)  # all-zero: does not match NoteCommitment(recipient, value, rseed)
+
+    bad_bundle = PcztIronwoodBundle(
+        actions=[bad_action],
+        flags=3,
+        value_balance=-_DUMMY_CHANGE_VALUE,  # negative: funds flow in from transparent input
+        anchor=bytes(32),
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_11K],
+            transparent_outputs=[],
+            ironwood_bundle=bad_bundle,
+        ):
+            pass  # device rejects during action parsing, before review
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_ironwood_v3_note_tampered_cmx_rejected(backend):
+    """ZIP 2005 V3 Ironwood output whose compact.cmx does not match note_commitment_v3() is rejected.
+
+    A V3 enc_ciphertext is constructed by XOR-flipping the first byte of _DUMMY_ENC_CIPHERTEXT:
+      - The note is encrypted with ChaCha20, so flipping enc[0] flips plaintext[0].
+      - _DUMMY_ENC_CIPHERTEXT decrypts to plaintext[0] = 0x02 (NoteVersion::V2).
+      - Flipping enc[0] XOR 0x01 makes the device recover plaintext[0] = 0x03 (NoteVersion::V3).
+      - All other plaintext bytes — diversifier, value, rseed — are unchanged (same key, same
+        recipient, same esk derivation from _DUMMY_RSEED), so the ephemeral-key check passes.
+
+    The note commitment check then calls note_commitment_v3(g_d, pk_d, value, rho, rseed) which
+    produces the real V3 cmx (different from _DUMMY_CMX because rcm derivation differs). Since
+    compact.cmx is set to all-zero bytes (0x00 × 32), the mismatch is detected and the action
+    is rejected with SW_INVALID_TRANSACTION.
+
+    This directly exercises the clear-signing invariant added in parse_and_validate_note_plaintext:
+    a PCZT builder that knows the device's IVK cannot substitute a different cmx while presenting
+    a valid enc_ciphertext, because note_commitment_v3 binds the cmx to the exact note content.
+    """
+    client = ZcashCommandSender(backend)
+
+    # V3 enc_ciphertext: XOR the first byte of the V2 ciphertext so the decrypted lead byte
+    # becomes 0x03 instead of 0x02.  ChaCha20 is stream-XOR, so flipping enc[0] XOR 0x01
+    # flips plaintext[0] by 0x01, changing 0x02→0x03 without disturbing any other bytes.
+    # The _DUMMY_EPHEMERAL_KEY remains valid because esk = PRF_expand(rseed, [0x04]||rho) is
+    # version-independent — only the decrypted lead byte changes.
+    _v3_enc_ciphertext = bytes([_DUMMY_ENC_CIPHERTEXT[0] ^ 0x01]) + _DUMMY_ENC_CIPHERTEXT[1:]
+
+    bad_action = _dummy_ironwood_action()
+    bad_action.enc_ciphertext = _v3_enc_ciphertext
+    bad_action.cmx = bytes(32)  # tampered: all-zero, does not match note_commitment_v3(...)
+    bad_action.note_plaintext_version = 0x03  # signal V3 decryption path
+
+    bad_bundle = PcztIronwoodBundle(
+        actions=[bad_action],
+        flags=3,
+        value_balance=-_DUMMY_CHANGE_VALUE,
+        anchor=bytes(32),
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_11K],
+            transparent_outputs=[],
+            ironwood_bundle=bad_bundle,
+        ):
+            pass  # device rejects during action parsing, before review
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+@pytest.mark.skip(
+    reason="Requires the correct V3 (ZIP 2005) note commitment for the dummy action parameters. "
+           "The V3 cmx is computed by note_commitment_v3(g_d, pk_d, value=10000, rho=Rho(DUMMY_NULLIFIER), "
+           "rseed=DUMMY_RSEED) which uses a BLAKE2b-512 rcm derivation that additionally binds g_d, pk_d, "
+           "value, rho, and psi.  Run the `gen_v3_ironwood_test_vectors` test in "
+           "vendor/orchard/src/note_encryption.rs under Speculos to obtain _V3_REAL_CMX and _V3_REAL_EPK, "
+           "then replace the placeholders below.  The enc_ciphertext is _DUMMY_ENC_CIPHERTEXT[0] XOR 0x01 "
+           "followed by the remaining bytes unchanged (see test_pczt_ironwood_v3_note_tampered_cmx_rejected)."
+)
+def test_pczt_ironwood_v3_real_output_accepted(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """ZIP 2005 V3 Ironwood output with the correct note_commitment_v3() cmx is accepted.
+
+    This is the positive counterpart to test_pczt_ironwood_v3_note_tampered_cmx_rejected:
+    it verifies that note_commitment_v3 produces the correct output for acceptance, not just
+    that a wrong cmx is rejected.
+
+    Unblock by running `gen_v3_ironwood_test_vectors` in vendor/orchard under Speculos and
+    filling in the constants below.
+    """
+    # Placeholder constants — replace with output from gen_v3_ironwood_test_vectors.
+    _V3_REAL_EPK = bytes(32)   # replace with gen_v3_ironwood_test_vectors output
+    _V3_REAL_CMX = bytes(32)   # replace with gen_v3_ironwood_test_vectors output
+    _V3_REAL_ENC_CIPHERTEXT = bytes(580)  # replace with gen_v3_ironwood_test_vectors output
+
+    client = ZcashCommandSender(backend)
+    action = PcztIronwoodAction(
+        cv_net=_DUMMY_CV_NET,
+        nullifier=_DUMMY_NULLIFIER,
+        spend_recipient=_SPEND_RECIPIENT,
+        spend_rho=_DUMMY_SPEND_RHO,
+        spend_rseed=_DUMMY_SPEND_RSEED,
+        rk=_RK_ALPHA_1,
+        alpha=_ALPHA,
+        signing_path=_SIGNING_PATH,
+        cmx=_V3_REAL_CMX,
+        ephemeral_key=_V3_REAL_EPK,
+        enc_ciphertext=_V3_REAL_ENC_CIPHERTEXT,
+        out_ciphertext=bytes(80),
+        rcv=_DUMMY_RCV,
+        rseed=bytes(32),  # metadata rseed unused for IVK-decryptable non-dummy output
+        spend_value=0,
+        value=_DUMMY_CHANGE_VALUE,
+        recipient=_INTERNAL_RECIPIENT,
+        note_plaintext_version=0x03,
+    )
+    bundle = PcztIronwoodBundle(
+        actions=[action],
+        flags=3,
+        value_balance=-_DUMMY_CHANGE_VALUE,
+        anchor=bytes(32),
+    )
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_11K],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_v3_real_output_accepted")
+
+    auth_sig = client.pczt_sign_transparent(input_index=0).data
+    assert len(auth_sig) >= 70
+
+
 @pytest.mark.skip(
     reason="Requires a Pallas-valid (rk, alpha) pair where rk is deliberately wrong — "
            "needs Pallas group arithmetic unavailable in this test harness. "
@@ -1341,9 +1495,18 @@ def test_pczt_v2_0x03_real_output_accepted(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """Non-zero Ironwood output with note_plaintext_version=0x03 is accepted:
-    the device deciphers enc_ciphertext via the standard IVK trial-decryption path
-    (the epk check binds the result to enc_ciphertext which is part of the sighash)."""
+    """Non-zero Ironwood output with note_plaintext_version=0x03 is accepted.
+
+    The device deciphers enc_ciphertext via the standard IVK trial-decryption path and
+    verifies the note commitment using the V3 rcm derivation (orchard_rcm_v3 / note_commitment_v3).
+
+    Note: _DUMMY_ENC_CIPHERTEXT carries a V2 plaintext (lead byte 0x02 inside the decrypted
+    data), so the device follows the V2 commitment branch here.  A genuine V3 plaintext
+    (lead byte 0x03) would exercise note_commitment_v3.  Acceptance of metadata
+    note_plaintext_version=0x03 with a V2-format ciphertext demonstrates backward compatibility
+    of the metadata field; the cmx check is always active regardless of which version byte
+    appears in the decrypted plaintext.
+    """
     client = ZcashCommandSender(backend)
     action = _dummy_ironwood_action()
     action.note_plaintext_version = 0x03

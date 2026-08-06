@@ -209,9 +209,13 @@ When the output metadata packet is 116 bytes, the final byte is `notePlaintextVe
 
 - `0x02` notes follow the standard Orchard decryption and dummy-commitment paths.
 - `0x03` non-zero-value outputs: the device deciphers `enc_ciphertext` via the standard
-  IVK/OVK trial-decryption path. The note commitment check is skipped for `0x03` plaintexts;
-  the epk check provides the binding to `enc_ciphertext`, which is part of the sighash.
+  IVK/OVK trial-decryption path. After successful decryption the device verifies `cmx` using
+  the ZIP 2005 quantum-recoverable commitment formula (`note_commitment_v3`), which uses a
+  BLAKE2b-512 rcm derivation that additionally binds `g_d`, `pk_d`, `value`, `rho`, and `psi`.
+  This ensures the displayed recipient and value are tied to the exact `cmx` that enters the
+  signature digest.
 - `0x03` zero-value (dummy) outputs: the device accepts the host-supplied `cmx` without
-  recomputing the note commitment.
+  recomputing the note commitment. Dummy outputs carry no displayed value or recipient;
+  their value contribution is independently constrained via `cv_net`.
 
 The 115-byte form (no `notePlaintextVersion` byte) remains valid and is treated as `0x02`.

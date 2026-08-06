@@ -808,4 +808,121 @@ mod tests {
             Some((note, recipient))
         );
     }
+
+    /// Generates deterministic V3 (ZIP 2005) Ironwood note-encryption test vectors for use
+    /// in the Ragger Python functional tests (`tests/standalone/test_pczt_ironwood.py`).
+    ///
+    /// **This test must be run on the embedded target (via Speculos)** because the
+    /// `vendor/orchard` crate depends on `ledger_zcash_crypto`, which in turn depends on
+    /// `ledger_device_sdk` — a no-std crate for the Ledger hardware wallet that does not
+    /// compile on macOS.  Run with:
+    ///   `cargo test -p orchard -- gen_v3_ironwood_test_vectors --nocapture`
+    /// from inside a Speculos Docker session.
+    ///
+    /// **Why this is device-compatible:**
+    /// The enc_ciphertext is encrypted with `k_enc = KDF(ECDH(esk, pk_d), epk)`.
+    /// The device decrypts with `k_enc = KDF(ECDH(ivk, epk), epk) = KDF(ECDH(esk, pk_d), epk)`
+    /// because `pk_d = ivk·g_d` and `epk = esk·g_d`, so both DH computations yield `esk·ivk·g_d`.
+    /// Therefore the device's IVK will successfully decrypt this enc_ciphertext without us
+    /// needing to know the IVK value.
+    #[test]
+    fn gen_v3_ironwood_test_vectors() {
+        // _INTERNAL_RECIPIENT from test_pczt_ironwood.py: 11-byte diversifier + 32-byte pk_d.
+        // This is the device's internal address at m/32'/133'/0' (Speculos deterministic seed).
+        let recipient_bytes: [u8; 43] = [
+            // diversifier (11 bytes)
+            0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe,
+            // pk_d (32 bytes)
+            0x68, 0x14, 0xce, 0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09,
+            0x46, 0xf1, 0xab, 0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f,
+            0xd0, 0x52, 0xe2, 0x0a,
+        ];
+        let diversifier = Diversifier::from_bytes(recipient_bytes[..11].try_into().unwrap());
+        let pk_d =
+            DiversifiedTransmissionKey::from_bytes(recipient_bytes[11..].try_into().unwrap())
+                .unwrap();
+        let recipient = Address::from_parts(diversifier, pk_d);
+
+        // _DUMMY_NULLIFIER from test_pczt_ironwood.py — spend nullifier of the dummy action.
+        // rho = Rho::from_nf_old(nf_old) matches what the device reconstructs from the wire.
+        let nullifier_bytes: [u8; 32] = [
+            0x57, 0xaa, 0xd2, 0x67, 0x0e, 0x2e, 0x4d, 0xf6, 0x7c, 0xa8, 0x55, 0xc5, 0x39, 0x73,
+            0xdb, 0x38, 0xe7, 0x94, 0x2e, 0xfa, 0x8e, 0x90, 0x6e, 0xe9, 0x61, 0xad, 0xb7, 0x19,
+            0x55, 0xaa, 0x84, 0x23,
+        ];
+        let nf_old = Nullifier::from_bytes(&nullifier_bytes).unwrap();
+        let rho = Rho::from_nf_old(nf_old);
+
+        // Fixed rseed distinct from _DUMMY_RSEED (0x30) to produce a different V3 cmx.
+        let rseed_bytes: [u8; 32] = {
+            let mut b = [0u8; 32];
+            b[0] = 0x35;
+            b
+        };
+        let rseed = Option::from(RandomSeed::from_bytes(rseed_bytes, &rho)).expect(
+            "rseed 0x35... is valid for this rho; if this fails try a different leading byte",
+        );
+
+        // V3 (ZIP 2005) note: same Sinsemilla commitment message as V2, but rcm uses BLAKE2b-512
+        // over (rseed ‖ 0x0B ‖ g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi) — see note_commitment_v3.
+        let value = NoteValue::from_raw(10000); // same as _DUMMY_CHANGE_VALUE
+        let note =
+            Option::from(Note::from_parts(recipient, value, rho, rseed, NoteVersion::V3))
+                .expect("note construction failed — recipient or rho may be invalid");
+
+        // Fixed encryption esk: small scalar 0x37 (well within the Pallas scalar field order).
+        // IronwoodNoteEncryption::new_with_esk uses this directly for ECDH; it is NOT derived
+        // from rseed, so enc_ciphertext is independent of the note's internal esk.
+        let esk_bytes: [u8; 32] = {
+            let mut b = [0u8; 32];
+            b[0] = 0x37;
+            b
+        };
+        let esk = EphemeralSecretKey::from_bytes(&esk_bytes).unwrap();
+
+        let encryptor = IronwoodNoteEncryption::new_with_esk(esk, None, note, [0u8; 512]);
+        let cmx = ExtractedNoteCommitment::from(note.commitment());
+        let ephemeral_key = IronwoodDomain::epk_bytes(encryptor.epk());
+        let enc_ciphertext_array = encryptor.encrypt_note_plaintext();
+        let enc_ciphertext: &[u8] = enc_ciphertext_array.as_ref();
+
+        // Helper: format bytes as a Python hex string literal, 64 hex chars per line.
+        let hex_lines = |bytes: &[u8]| -> String {
+            bytes
+                .chunks(32)
+                .map(|c| c.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\"\n    \"")
+        };
+
+        println!("\n# ---- V3 Ironwood test vectors (gen_v3_ironwood_test_vectors) ----");
+        println!(
+            "# Generated with: cargo test -p orchard -- gen_v3_ironwood_test_vectors --nocapture"
+        );
+        println!("# recipient  = _INTERNAL_RECIPIENT");
+        println!("# nullifier  = _DUMMY_NULLIFIER  (rho = Rho::from_nf_old(nullifier))");
+        println!("# note_value = 10000  (= _DUMMY_CHANGE_VALUE)");
+        println!("# rseed      = 0x35 followed by 31 zero bytes (note rseed, not metadata rseed)");
+        println!("# esk        = 0x37 followed by 31 zero bytes (fixed encryption scalar)");
+        println!("# version    = NoteVersion::V3  (plaintext lead byte 0x03)\n");
+        println!(
+            "_V3_REAL_EPK = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(&ephemeral_key.0)
+        );
+        println!(
+            "_V3_REAL_CMX = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(&cmx.to_bytes())
+        );
+        println!(
+            "_V3_REAL_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(enc_ciphertext)
+        );
+
+        // Sanity check: the note commitment is stable (not randomised).
+        assert_eq!(
+            cmx,
+            ExtractedNoteCommitment::from(note.commitment()),
+            "note commitment must be deterministic"
+        );
+    }
 }

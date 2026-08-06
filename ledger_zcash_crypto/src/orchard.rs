@@ -21,7 +21,7 @@ use pasta_curves::pallas;
 
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
-    ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
+    ORCHARD_QR_RCM_DOMAIN_SEPARATOR, ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
     bytes::reverse_copy,
     pallas_base_from_repr, pallas_basepoint_mul, pallas_point_from_bytes, pallas_point_to_bytes,
     pallas_scalar_from_repr, prf_expand_with_domain_separator_and_inputs,
@@ -294,13 +294,21 @@ fn parse_and_validate_note_plaintext(
         return Ok(None);
     }
 
-    // The V3 note commitment formula differs from V2 and is not implemented on-device.
-    // For V3 the epk check provides the binding to enc_ciphertext, which is in the sighash.
-    if plaintext[0] != 0x03 {
-        let cmx = note_commitment(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?;
-        if !bytes_eq(&cmx, &compact.cmx) {
-            return Ok(None);
-        }
+    // Recompute and verify the note commitment for both V2 and V3.
+    //
+    // For V3 (Ironwood / ZIP 2005), the commitment formula is the same Sinsemilla short
+    // commit as V2 but with a quantum-recoverable rcm derivation that additionally binds
+    // g_d, pk_d, value, rho, and psi (see `note_commitment_v3`). Skipping this check for
+    // V3 would allow a malicious PCZT builder that knows the device's IVK to present a
+    // valid enc_ciphertext for one recipient while setting compact.cmx to commit to a
+    // different note — a clear-signing bypass on the output recipient.
+    let cmx = if plaintext[0] == 0x03 {
+        note_commitment_v3(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?
+    } else {
+        note_commitment(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?
+    };
+    if !bytes_eq(&cmx, &compact.cmx) {
+        return Ok(None);
     }
 
     let mut raw_address = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
@@ -520,6 +528,70 @@ fn note_commitment(
     Ok(cmx.to_repr())
 }
 
+/// Derives the quantum-recoverable rcm for a V3 (Ironwood / ZIP 2005) note.
+///
+/// Per ZIP 2005 §3.2.1:
+///
+/// ```text
+/// rcm_v3 = ToScalar^Orchard(
+///   PRF^expand_rseed([0x0B] ‖ g_d ‖ pk_d ‖ I2LEOSP_64(v) ‖ rho ‖ psi)
+/// )
+/// ```
+///
+/// Unlike the V2 rcm derivation (which only takes rseed and rho), the V3 trapdoor
+/// additionally commits to the recipient's `g_d` and `pk_d` and to the note `value`,
+/// providing post-quantum binding of the note commitment to all note fields.
+fn orchard_rcm_v3(
+    rseed: &[u8; HASH_SIZE],
+    g_d: &[u8; HASH_SIZE],
+    pk_d: &[u8; HASH_SIZE],
+    value: u64,
+    rho: &pallas::Base,
+    psi: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    let value_bytes = value.to_le_bytes();
+    let rho_repr = rho.to_repr();
+    let uniform = prf_expand_with_domain_separator_and_inputs(
+        rseed,
+        ORCHARD_QR_RCM_DOMAIN_SEPARATOR,
+        &[g_d, pk_d, &value_bytes, &rho_repr, psi],
+    )?;
+    to_pallas_scalar_bytes(&uniform)
+}
+
+/// Derives the note commitment for a V3 (Ironwood / ZIP 2005) note.
+///
+/// The Sinsemilla message is identical to V2 — `(g_d, pk_d, value, rho, psi)` — but the
+/// trapdoor `rcm` uses the quantum-recoverable derivation from `orchard_rcm_v3`, which
+/// binds the trapdoor to all note fields and therefore ties `cmx` to the specific recipient.
+#[inline(never)]
+fn note_commitment_v3(
+    g_d: &[u8; HASH_SIZE],
+    pk_d: &[u8; HASH_SIZE],
+    value: u64,
+    rho: &pallas::Base,
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    let psi = orchard_psi(rseed, rho)?;
+    let rcm = orchard_rcm_v3(rseed, g_d, pk_d, value, rho, &psi)?;
+    let rcm = pallas_scalar_from_repr(rcm)?;
+
+    let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
+    let mut offset = 0;
+    append_le_bits(&mut message, &mut offset, g_d, 32 * 8);
+    append_le_bits(&mut message, &mut offset, pk_d, 32 * 8);
+    append_le_bits(&mut message, &mut offset, &value.to_le_bytes(), 64);
+    append_le_bits(&mut message, &mut offset, &rho.to_repr(), L_ORCHARD_BASE);
+    append_le_bits(&mut message, &mut offset, &psi, L_ORCHARD_BASE);
+
+    let Some(cmx) = sinsemilla_short_commit(NOTE_COMMITMENT_PERSONALIZATION, &message, &rcm)?
+    else {
+        return Err(Error::InvalidKeyDiscarded);
+    };
+
+    Ok(cmx.to_repr())
+}
+
 #[inline(never)]
 fn note_commitment_point(
     g_d: &[u8; HASH_SIZE],
@@ -563,4 +635,90 @@ fn bytes_eq(lhs: &[u8; HASH_SIZE], rhs: &[u8; HASH_SIZE]) -> bool {
         diff |= l ^ r;
     }
     diff == 0
+}
+
+/// Unit tests for the V3 (ZIP 2005) note commitment path.
+///
+/// These tests run under Speculos — the `ledger_zcash_crypto` crate links against
+/// `ledger_device_sdk` which does not compile on a native macOS / Linux host.
+/// Run with:
+///   `cargo test -p ledger_zcash_crypto -- orchard::tests --nocapture`
+/// from a Speculos session configured with `runner = "speculos -m apex_p"`.
+///
+/// The note parameters here match the constants used in the Python Ragger tests in
+/// `tests/standalone/test_pczt_ironwood.py` (`_DUMMY_NULLIFIER`, `_DUMMY_RSEED`,
+/// `_INTERNAL_RECIPIENT`, `_DUMMY_CHANGE_VALUE`) so that both test layers exercise
+/// the same commitment computation.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `_DUMMY_NULLIFIER` from test_pczt_ironwood.py
+    const DUMMY_NULLIFIER: [u8; 32] = [
+        0x57, 0xaa, 0xd2, 0x67, 0x0e, 0x2e, 0x4d, 0xf6, 0x7c, 0xa8, 0x55, 0xc5, 0x39, 0x73,
+        0xdb, 0x38, 0xe7, 0x94, 0x2e, 0xfa, 0x8e, 0x90, 0x6e, 0xe9, 0x61, 0xad, 0xb7, 0x19,
+        0x55, 0xaa, 0x84, 0x23,
+    ];
+    // `_DUMMY_RSEED` from test_pczt_ironwood.py
+    const DUMMY_RSEED: [u8; 32] = [
+        0x30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+    // First 11 bytes of `_INTERNAL_RECIPIENT` from test_pczt_ironwood.py
+    const INTERNAL_DIVERSIFIER: [u8; 11] =
+        [0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe];
+    // Bytes 11..43 of `_INTERNAL_RECIPIENT` from test_pczt_ironwood.py
+    const INTERNAL_PK_D: [u8; 32] = [
+        0x68, 0x14, 0xce, 0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09,
+        0x46, 0xf1, 0xab, 0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f,
+        0xd0, 0x52, 0xe2, 0x0a,
+    ];
+    // `_DUMMY_CHANGE_VALUE` from test_pczt_ironwood.py
+    const VALUE: u64 = 10000;
+
+    /// `note_commitment_v3` must produce a result that differs from `note_commitment`
+    /// for the same `(g_d, pk_d, value, rho, rseed)` inputs.
+    ///
+    /// The two functions share the same Sinsemilla message but use different trapdoors:
+    /// - V2: `rcm = ToScalar(PRF_expand(rseed, [0x05] ‖ rho))`
+    /// - V3: `rcm_v3 = ToScalar(PRF_expand(rseed, [0x0B] ‖ g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi))`
+    ///
+    /// If the two formulas were accidentally identical, the clear-signing bypass
+    /// (`test_pczt_ironwood_v3_note_tampered_cmx_rejected`) would not be caught.
+    #[test]
+    fn note_commitment_v3_differs_from_v2_for_same_inputs() {
+        let rho = pallas_base_from_repr(DUMMY_NULLIFIER)
+            .expect("DUMMY_NULLIFIER encodes a valid Pallas base field element");
+        let g_d = crate::diversify_hash_ledger(&INTERNAL_DIVERSIFIER)
+            .expect("INTERNAL_DIVERSIFIER is a valid Orchard diversifier");
+
+        let cmx_v2 = note_commitment(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+            .expect("V2 note_commitment must succeed for valid inputs");
+        let cmx_v3 = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+            .expect("note_commitment_v3 must succeed for valid inputs");
+
+        // The V3 rcm derivation additionally commits to g_d, pk_d, and value, so the
+        // two formulas must yield distinct commitments for the same note fields.
+        assert_ne!(
+            cmx_v2, cmx_v3,
+            "note_commitment_v3 must produce a distinct cmx from note_commitment \
+             (rcm derivations differ: V2 binds only rseed+rho, V3 also binds g_d+pk_d+value)"
+        );
+    }
+
+    /// `note_commitment_v3` must be deterministic: identical inputs produce identical output.
+    #[test]
+    fn note_commitment_v3_is_deterministic() {
+        let rho = pallas_base_from_repr(DUMMY_NULLIFIER)
+            .expect("DUMMY_NULLIFIER encodes a valid Pallas base field element");
+        let g_d = crate::diversify_hash_ledger(&INTERNAL_DIVERSIFIER)
+            .expect("INTERNAL_DIVERSIFIER is a valid Orchard diversifier");
+
+        let cmx_first = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+            .expect("first call to note_commitment_v3 must succeed");
+        let cmx_second = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+            .expect("second call to note_commitment_v3 must succeed");
+
+        assert_eq!(cmx_first, cmx_second, "note_commitment_v3 must be deterministic");
+    }
 }

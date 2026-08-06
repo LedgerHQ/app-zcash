@@ -13,6 +13,11 @@ impl PcztParser {
         }
 
         let version = ok!(reader.read_u32_le());
+        #[cfg(not(feature = "zcash_unstable"))]
+        if version != PCZT_VERSION_1 {
+            return Err(ParserError::from_str("Unsupported PCZT version"));
+        }
+        #[cfg(feature = "zcash_unstable")]
         if version != PCZT_VERSION_1 && version != PCZT_VERSION_2 {
             return Err(ParserError::from_str("Unsupported PCZT version"));
         }

@@ -50,6 +50,8 @@ const ORCHARD_RIVK_INTERNAL_DOMAIN_SEPARATOR: u8 = 0x83;
 const ORCHARD_ESK_DOMAIN_SEPARATOR: u8 = 0x04;
 const ORCHARD_RCM_DOMAIN_SEPARATOR: u8 = 0x05;
 const ORCHARD_PSI_DOMAIN_SEPARATOR: u8 = 0x09;
+// ZIP 2005 §3.2.1: quantum-recoverable rcm derivation domain separator.
+const ORCHARD_QR_RCM_DOMAIN_SEPARATOR: u8 = 0x0B;
 const PRF_EXPAND_BYTES: usize = 64;
 const ORCHARD_VALUE_COMMITMENT_VALUE_BASEPOINT_BYTES: [u8; 32] = [
     0x67, 0x43, 0xf9, 0x3a, 0x6e, 0xbd, 0xa7, 0x2a, 0x8c, 0x7c, 0x5a, 0x2b, 0x7f, 0xa3, 0x04, 0xfe,
