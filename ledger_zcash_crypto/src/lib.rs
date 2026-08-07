@@ -233,6 +233,20 @@ pub fn orchard_note_commitment_bytes(
     orchard::note_commitment_bytes(raw_address, value, rho, rseed)
 }
 
+/// Computes the V3 (ZIP 2005 / Ironwood) note commitment for a dummy output.
+///
+/// Identical Sinsemilla message as V2 (`g_d ‖ pk_d ‖ value ‖ rho ‖ psi`) but the
+/// trapdoor uses the quantum-recoverable rcm derivation (domain separator 0x0B,
+/// fields g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi hashed alongside rseed).
+pub fn orchard_note_commitment_v3_bytes(
+    recipient: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    nullifier: &[u8; 32],
+    rseed: &[u8; 32],
+) -> Result<[u8; 32], Error> {
+    orchard::orchard_note_commitment_v3(recipient, value, nullifier, rseed)
+}
+
 /// Parses a compressed Pallas point encoding and rejects the identity.
 ///
 /// Returns canonical little-endian affine coordinates on success.

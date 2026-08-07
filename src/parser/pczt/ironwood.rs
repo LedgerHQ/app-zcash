@@ -579,6 +579,7 @@ impl PcztParser {
         // nullifier can only be checked on real spends. `spend_value` is not merely
         // declared: `cv_net` above binds it and `validate_current_ironwood_output`
         // below pins `output_value`, so a real spend cannot pose as a dummy.
+        // V2 and V3 dummies both have their cmx recomputed and verified.
         let is_real_spend = self.current_action.spend_value != 0;
         if is_real_spend {
             let ironwood_fvk = self
@@ -748,9 +749,44 @@ impl PcztParser {
             return Ok(false);
         }
 
-        // V3 dummy padding notes use a different commitment derivation that the
-        // device does not implement; accept the host-provided cmx from the wire.
         if self.current_action.note_plaintext_version == NOTE_VERSION_IRONWOOD {
+            let Some(rseed) = self.current_action.output_rseed else {
+                return Err(ParserError::from_str("Missing PCZT ironwood output rseed"));
+            };
+
+            let expected_cmx = ledger_zcash_crypto::orchard_note_commitment_v3_bytes(
+                &self.current_action.output_recipient,
+                self.current_action.output_value,
+                &self.current_action.nullifier,
+                &rseed,
+            )
+            .map_err(|err| match err {
+                ledger_zcash_crypto::Error::MalformedPallasBase => {
+                    ParserError::from_str("Bad PCZT ironwood dummy nullifier")
+                }
+                ledger_zcash_crypto::Error::MalformedPallasPoint
+                | ledger_zcash_crypto::Error::InvalidDiversifyHashPoint => {
+                    ParserError::from_str("Bad PCZT ironwood output recipient")
+                }
+                ledger_zcash_crypto::Error::MalformedPallasScalar
+                | ledger_zcash_crypto::Error::InvalidKeyDiscarded => {
+                    ParserError::from_str("Bad PCZT ironwood output rseed")
+                }
+                _ => ParserError::from_sw(AppSW::TechnicalProblem),
+            })?;
+
+            if expected_cmx != self.current_action.cmx {
+                debug!(
+                    "PCZT ironwood V3 dummy output cmx mismatch: expected {}, actual {}",
+                    HexSlice(&expected_cmx),
+                    HexSlice(&self.current_action.cmx)
+                );
+                return Err(ParserError::from_str(
+                    "PCZT ironwood V3 dummy output cmx mismatch",
+                ));
+            }
+
+            debug!("PCZT ironwood V3 dummy output accepted");
             return Ok(true);
         }
 

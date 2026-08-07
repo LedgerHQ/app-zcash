@@ -213,9 +213,15 @@ When the output metadata packet is 116 bytes, the final byte is `notePlaintextVe
   the ZIP 2005 quantum-recoverable commitment formula (`note_commitment_v3`), which uses a
   BLAKE2b-512 rcm derivation that additionally binds `g_d`, `pk_d`, `value`, `rho`, and `psi`.
   This ensures the displayed recipient and value are tied to the exact `cmx` that enters the
-  signature digest.
-- `0x03` zero-value (dummy) outputs: the device accepts the host-supplied `cmx` without
-  recomputing the note commitment. Dummy outputs carry no displayed value or recipient;
-  their value contribution is independently constrained via `cv_net`.
+  signature digest. Note: the commitment formula is selected by the authenticated **decrypted
+  plaintext** lead byte (`plaintext[0]`), not by the unauthenticated metadata byte
+  `notePlaintextVersion`. A host may set `notePlaintextVersion = 0x03` while providing a
+  V2-format ciphertext (which decrypts to `plaintext[0] = 0x02`); in that case the V2 formula
+  runs regardless of the metadata byte. See `test_pczt_v2_0x03_real_output_accepted` for a
+  test that exercises this case.
+- `0x03` zero-value (dummy) outputs: the device recomputes `cmx` using the V3
+  quantum-recoverable commitment formula and verifies it against the wire value. Dummy outputs
+  carry no displayed value or recipient; their value contribution is independently constrained
+  via `cv_net`.
 
 The 115-byte form (no `notePlaintextVersion` byte) remains valid and is treated as `0x02`.
