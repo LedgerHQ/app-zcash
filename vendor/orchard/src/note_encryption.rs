@@ -932,4 +932,73 @@ mod tests {
             "note commitment must be deterministic"
         );
     }
+
+    /// Compute the V3 note commitment for the zero-value dummy output used in
+    /// `test_pczt_v2_0x03_dummy_accepted`.  Outputs the `_V3_DUMMY_CMX` Python constant.
+    ///
+    /// Run from within `vendor/orchard/` (host target, no `ledger` feature):
+    /// ```sh
+    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    /// cargo test --target "$HOST" -- gen_v3_dummy_cmx --nocapture
+    /// ```
+    #[test]
+    fn gen_v3_dummy_cmx() {
+        // _INTERNAL_RECIPIENT — same as gen_v3_ironwood_test_vectors.
+        let recipient_bytes: [u8; 43] = [
+            0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe,
+            0x68, 0x14, 0xce, 0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09,
+            0x46, 0xf1, 0xab, 0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f,
+            0xd0, 0x52, 0xe2, 0x0a,
+        ];
+        let diversifier = Diversifier::from_bytes(recipient_bytes[..11].try_into().unwrap());
+        let pk_d =
+            DiversifiedTransmissionKey::from_bytes(recipient_bytes[11..].try_into().unwrap())
+                .unwrap();
+        let recipient = Address::from_parts(diversifier, pk_d);
+
+        // _DUMMY_NULLIFIER — same as gen_v3_ironwood_test_vectors.
+        let nullifier_bytes: [u8; 32] = [
+            0x57, 0xaa, 0xd2, 0x67, 0x0e, 0x2e, 0x4d, 0xf6, 0x7c, 0xa8, 0x55, 0xc5, 0x39, 0x73,
+            0xdb, 0x38, 0xe7, 0x94, 0x2e, 0xfa, 0x8e, 0x90, 0x6e, 0xe9, 0x61, 0xad, 0xb7, 0x19,
+            0x55, 0xaa, 0x84, 0x23,
+        ];
+        let nf_old = Nullifier::from_bytes(&nullifier_bytes).unwrap();
+        let rho = Rho::from_nf_old(nf_old);
+
+        // _DUMMY_RSEED = 0x30 followed by 31 zero bytes (distinct from the real-output rseed 0x35).
+        let rseed_bytes: [u8; 32] = {
+            let mut b = [0u8; 32];
+            b[0] = 0x30;
+            b
+        };
+        let rseed = Option::from(RandomSeed::from_bytes(rseed_bytes, &rho))
+            .expect("rseed 0x30... is valid for this rho");
+
+        // Zero-value V3 dummy note.
+        let note: Note = Option::from(Note::from_parts(
+            recipient,
+            NoteValue::from_raw(0),
+            rho,
+            rseed,
+            NoteVersion::V3,
+        ))
+        .expect("note construction failed");
+
+        let cmx = ExtractedNoteCommitment::from(note.commitment());
+        let cmx_bytes = cmx.to_bytes();
+
+        println!("\n# ---- V3 dummy cmx (gen_v3_dummy_cmx) ----");
+        println!(
+            "# Generated with: cargo test --target $HOST -p orchard -- gen_v3_dummy_cmx --nocapture"
+        );
+        println!("# recipient = _INTERNAL_RECIPIENT, value = 0, nullifier = _DUMMY_NULLIFIER");
+        println!("# rseed     = 0x30 followed by 31 zero bytes (_DUMMY_RSEED)\n");
+        println!(
+            "_V3_DUMMY_CMX = bytes.fromhex(\n    \"{}\"\n)",
+            cmx_bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        );
+    }
 }
