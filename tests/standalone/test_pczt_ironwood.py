@@ -81,12 +81,14 @@ _DUMMY_OUT_CIPHERTEXT = bytes.fromhex(
 # V3 (ZIP 2005 Ironwood) dummy-output constants.
 # cv_net = ValueCommitment(0, rcv=0x44) = 0x44 · R, where R is the Pallas value-commitment
 # randomness basepoint.  _DUMMY_RCV (scalar 0x44) is reused as the rcv for V3 dummy actions.
-# cmx is all-zero: the firmware accepts the host-supplied cmx without recomputation for V3
-# zero-value outputs.
+# cmx = note_commitment_v3(_INTERNAL_RECIPIENT, value=0, _DUMMY_NULLIFIER, _DUMMY_RSEED).
+# Computed by gen_v3_dummy_cmx in vendor/orchard/src/note_encryption.rs.
 _V3_DUMMY_CV_NET = bytes.fromhex(
     "7d042e0903e7984caac7cdc7c081eeaa0289caf7af0ed179815822e2fd8f6e97"
 )
-_V3_DUMMY_CMX = bytes(32)
+_V3_DUMMY_CMX = bytes.fromhex(
+    "f5bc3b62d60bd6ba9af4d7b0fc65cfe2036fa307f5e7a13cb7007c68d4ab300d"
+)
 
 # External-recipient action constants.  Ironwood uses orchard_decipher_keys and OrchardFvk
 # for all note-level operations (nullifier, cv_net, note encryption) — the same primitives as
@@ -1546,8 +1548,8 @@ def test_pczt_v2_0x03_dummy_accepted(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """Zero-value Ironwood output with note_plaintext_version=0x03 is accepted:
-    the device accepts the host-supplied cmx without recomputation."""
+    """Zero-value Ironwood output with note_plaintext_version=0x03 is accepted when
+    the host-supplied cmx matches note_commitment_v3(recipient, 0, nullifier, rseed)."""
     client = ZcashCommandSender(backend)
 
     v3_dummy = PcztIronwoodAction(
