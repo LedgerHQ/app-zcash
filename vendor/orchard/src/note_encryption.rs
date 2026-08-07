@@ -818,9 +818,9 @@ mod tests {
     /// **This test must be run on the embedded target (via Speculos)** because the
     /// `vendor/orchard` crate depends on `ledger_zcash_crypto`, which in turn depends on
     /// `ledger_device_sdk` — a no-std crate for the Ledger hardware wallet that does not
-    /// compile on macOS.  Run with:
-    ///   `cargo test -p orchard -- gen_v3_ironwood_test_vectors --nocapture`
-    /// from inside a Speculos Docker session.
+    /// compile on macOS.  Run with (from inside the Ledger dev-tools Docker container):
+    ///   HOST=$(rustc -vV | awk '/^host:/ {print $2}') && \
+    ///   cargo test --target "$HOST" -p orchard -- gen_v3_ironwood_test_vectors --nocapture
     ///
     /// **Why this is device-compatible:**
     /// The enc_ciphertext is encrypted with `k_enc = KDF(ECDH(esk, pk_d), epk)`.
