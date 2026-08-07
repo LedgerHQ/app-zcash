@@ -815,12 +815,16 @@ mod tests {
     /// Generates deterministic V3 (ZIP 2005) Ironwood note-encryption test vectors for use
     /// in the Ragger Python functional tests (`tests/standalone/test_pczt_ironwood.py`).
     ///
-    /// **This test must be run on the embedded target (via Speculos)** because the
-    /// `vendor/orchard` crate depends on `ledger_zcash_crypto`, which in turn depends on
-    /// `ledger_device_sdk` — a no-std crate for the Ledger hardware wallet that does not
-    /// compile on macOS.  Run with (from inside the Ledger dev-tools Docker container):
-    ///   HOST=$(rustc -vV | awk '/^host:/ {print $2}') && \
-    ///   cargo test --target "$HOST" -p orchard -- gen_v3_ironwood_test_vectors --nocapture
+    /// Must be run inside the Ledger dev-tools Docker container (host build, not device build):
+    ///
+    /// ```sh
+    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    /// cargo test --target "$HOST" -- gen_v3_ironwood_test_vectors --nocapture
+    /// ```
+    ///
+    /// The `ledger` feature must be excluded from the build to avoid pulling in the device SDK:
+    /// run from within `vendor/orchard/` so the root `Cargo.toml`'s `features = ["ledger"]`
+    /// does not apply.
     ///
     /// **Why this is device-compatible:**
     /// The enc_ciphertext is encrypted with `k_enc = KDF(ECDH(esk, pk_d), epk)`.

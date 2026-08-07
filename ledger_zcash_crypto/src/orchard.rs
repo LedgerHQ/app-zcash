@@ -565,6 +565,28 @@ fn orchard_rcm_v3(
 /// trapdoor `rcm` uses the quantum-recoverable derivation from `orchard_rcm_v3`, which
 /// binds the trapdoor to all note fields and therefore ties `cmx` to the specific recipient.
 #[inline(never)]
+pub(crate) fn orchard_note_commitment_v3(
+    recipient: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    nullifier: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    let rho = pallas_base_from_repr(*nullifier)?;
+
+    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
+    diversifier.copy_from_slice(&recipient[..DIVERSIFIER_SIZE]);
+
+    let mut pk_d = [0u8; HASH_SIZE];
+    pk_d.copy_from_slice(&recipient[DIVERSIFIER_SIZE..]);
+    if !is_valid_nonidentity_pallas_point(&pk_d)? {
+        return Err(Error::MalformedPallasPoint);
+    }
+
+    let g_d = crate::diversify_hash_ledger(&diversifier)?;
+    note_commitment_v3(&g_d, &pk_d, value, &rho, rseed)
+}
+
+#[inline(never)]
 fn note_commitment_v3(
     g_d: &[u8; HASH_SIZE],
     pk_d: &[u8; HASH_SIZE],

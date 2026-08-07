@@ -70,6 +70,7 @@ mod transparent;
 
 const MAGIC_BYTES: &[u8; 4] = b"PCZT";
 const PCZT_VERSION_1: u32 = 1;
+#[cfg(feature = "zcash_unstable")]
 const PCZT_VERSION_2: u32 = 2;
 const NOTE_VERSION_ORCHARD: u8 = 0x02;
 #[cfg(feature = "zcash_unstable")]
