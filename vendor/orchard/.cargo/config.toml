@@ -1,0 +1,13 @@
+# Configuration for running cargo test in vendor/orchard on a host (non-embedded) target.
+# This overrides the root .cargo/config.toml which sets apex_p as the default build target
+# and enables build-std (which conflicts with the host aarch64-unknown-linux-gnu stdlib).
+
+[build]
+# Explicitly target the host so cargo test runs natively without the embedded toolchain.
+# The root config sets target = "apex_p"; override that here.
+target = "aarch64-unknown-linux-gnu"
+
+[unstable]
+# Disable build-std: for aarch64-unknown-linux-gnu the full stdlib is available and
+# rebuilding core/alloc from source produces duplicate lang items.
+build-std = []

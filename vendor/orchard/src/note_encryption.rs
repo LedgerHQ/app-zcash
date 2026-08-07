@@ -548,6 +548,9 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    use std::println;
     use rand::rngs::OsRng;
     use zcash_note_encryption::{
         try_compact_note_decryption, try_note_decryption, try_output_recovery_with_ovk, Domain,
@@ -866,7 +869,7 @@ mod tests {
         // V3 (ZIP 2005) note: same Sinsemilla commitment message as V2, but rcm uses BLAKE2b-512
         // over (rseed ‖ 0x0B ‖ g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi) — see note_commitment_v3.
         let value = NoteValue::from_raw(10000); // same as _DUMMY_CHANGE_VALUE
-        let note = Option::from(Note::from_parts(
+        let note: Note = Option::from(Note::from_parts(
             recipient,
             value,
             rho,
@@ -875,15 +878,10 @@ mod tests {
         ))
         .expect("note construction failed — recipient or rho may be invalid");
 
-        // Fixed encryption esk: small scalar 0x37 (well within the Pallas scalar field order).
-        // IronwoodNoteEncryption::new_with_esk uses this directly for ECDH; it is NOT derived
-        // from rseed, so enc_ciphertext is independent of the note's internal esk.
-        let esk_bytes: [u8; 32] = {
-            let mut b = [0u8; 32];
-            b[0] = 0x37;
-            b
-        };
-        let esk = EphemeralSecretKey::from_bytes(&esk_bytes).unwrap();
+        // Derive esk from the note's rseed so the device's compact-decryption path can verify
+        // that epk == PRF-esk(rseed, rho) · g_d.  Using a fixed scalar here (as the previous
+        // version did) would cause that check to fail, making the device reject the note.
+        let esk = note.esk();
 
         let encryptor = IronwoodNoteEncryption::new_with_esk(esk, None, note, [0u8; 512]);
         let cmx = ExtractedNoteCommitment::from(note.commitment());
@@ -908,7 +906,7 @@ mod tests {
         println!("# nullifier  = _DUMMY_NULLIFIER  (rho = Rho::from_nf_old(nullifier))");
         println!("# note_value = 10000  (= _DUMMY_CHANGE_VALUE)");
         println!("# rseed      = 0x35 followed by 31 zero bytes (note rseed, not metadata rseed)");
-        println!("# esk        = 0x37 followed by 31 zero bytes (fixed encryption scalar)");
+        println!("# esk        = note.esk() = PRF-esk(rseed, rho) — derived, not fixed");
         println!("# version    = NoteVersion::V3  (plaintext lead byte 0x03)\n");
         println!(
             "_V3_REAL_EPK = bytes.fromhex(\n    \"{}\"\n)",
