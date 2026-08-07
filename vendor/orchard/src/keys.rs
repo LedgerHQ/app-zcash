@@ -92,6 +92,7 @@ impl SpendingKey {
     }
 
     /// Derives the spend authorizing key corresponding to this spending key.
+    #[cfg(feature = "ledger")]
     pub fn ledger_from_bytes(sk: [u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
         let sk = SpendingKey(sk);
         let ask = SpendAuthorizingKey::ledger_derive_inner(&sk)?;
@@ -140,6 +141,7 @@ impl SpendAuthorizingKey {
     }
 
     /// Derives ask from sk, using the same logic as `derive_inner` but with additional checks to ensure that the resulting ask is valid.
+    #[cfg(feature = "ledger")]
     fn ledger_derive_inner(sk: &SpendingKey) -> Result<pallas::Scalar, ledger_zcash_crypto::Error> {
         let ask = ledger_zcash_crypto::orchard_ask(&sk.0)?;
         ledger_zcash_crypto::pallas_scalar_from_repr(ask)
@@ -156,6 +158,7 @@ impl SpendAuthorizingKey {
     /// the randomized verification key using Ledger SDK Pallas primitives.
     ///
     /// The resulting key can be used to actually sign a spend.
+    #[cfg(feature = "ledger")]
     pub fn randomize_ledger(
         &self,
         randomizer: &pallas::Scalar,
@@ -167,6 +170,7 @@ impl SpendAuthorizingKey {
     /// (`rk = [(ask + randomizer) mod q]·G`) for this key, without constructing
     /// the intermediate curve point. Used to verify a PCZT action's `rk` with a
     /// smaller BN/point footprint than `randomize_ledger` + key conversion.
+    #[cfg(feature = "ledger")]
     pub fn randomized_verification_key_bytes(
         &self,
         randomizer: &pallas::Scalar,
@@ -182,6 +186,7 @@ impl SpendAuthorizingKey {
     }
 
     /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
+    #[cfg(feature = "ledger")]
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let ask = Self::ledger_derive_inner(sk)?;
         // ask != 0 is guaranteed by SpendingKey::ledger_from_bytes; this asserts the invariant.
@@ -319,6 +324,7 @@ impl From<&SpendingKey> for NullifierDerivingKey {
 
 impl NullifierDerivingKey {
     /// Derives a nullifier deriving key from the given spending key, using the same logic as `From<&SpendingKey> for NullifierDerivingKey`.
+    #[cfg(feature = "ledger")]
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let nk = ledger_zcash_crypto::orchard_nk(&sk.0)?;
         Ok(NullifierDerivingKey(
@@ -363,6 +369,7 @@ impl From<&SpendingKey> for CommitIvkRandomness {
 
 impl CommitIvkRandomness {
     /// Derives a nullifier deriving key from the given spending key, using the same logic as `From<&SpendingKey> for CommitIvkRandomness`.
+    #[cfg(feature = "ledger")]
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let rivk = ledger_zcash_crypto::orchard_rivk(&sk.0)?;
         Ok(CommitIvkRandomness(
@@ -431,6 +438,7 @@ impl From<FullViewingKey> for SpendValidatingKey {
 
 impl FullViewingKey {
     /// Derives the internal full viewing key corresponding to this full viewing key.
+    #[cfg(feature = "ledger")]
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let ask = SpendAuthorizingKey::ledger_try_from(sk)?;
         Ok(FullViewingKey {
@@ -476,6 +484,7 @@ impl FullViewingKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::derive_dk_ovk`].
+    #[cfg(feature = "ledger")]
     fn derive_dk_ovk_ledger(
         &self,
     ) -> Result<(DiversifierKey, OutgoingViewingKey), ledger_zcash_crypto::Error> {
@@ -593,6 +602,7 @@ impl FullViewingKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::rivk`].
+    #[cfg(feature = "ledger")]
     pub(crate) fn rivk_ledger(
         &self,
         scope: Scope,
@@ -613,6 +623,7 @@ impl FullViewingKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::derive_internal`].
+    #[cfg(feature = "ledger")]
     fn derive_internal_ledger(&self) -> Result<Self, ledger_zcash_crypto::Error> {
         Ok(FullViewingKey {
             ak: self.ak.clone(),
@@ -622,6 +633,7 @@ impl FullViewingKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::to_ivk`].
+    #[cfg(feature = "ledger")]
     pub fn to_ivk_ledger(
         &self,
         scope: Scope,
@@ -635,6 +647,7 @@ impl FullViewingKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::to_ovk`].
+    #[cfg(feature = "ledger")]
     pub fn to_ovk_ledger(
         &self,
         scope: Scope,
@@ -744,6 +757,7 @@ impl KeyAgreementPrivateKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::from_fvk`].
+    #[cfg(feature = "ledger")]
     fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let ak = fvk.ak.to_bytes();
         let nk = fvk.nk.to_bytes();
@@ -796,6 +810,7 @@ impl KeyAgreementPrivateKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::address`].
+    #[cfg(feature = "ledger")]
     fn address_ledger(&self, d: Diversifier) -> Result<Address, ledger_zcash_crypto::Error> {
         let ivk = self.0.to_repr();
         let g_d = ledger_zcash_crypto::diversify_hash_ledger(d.as_array())?;
@@ -836,6 +851,7 @@ impl IncomingViewingKey {
     }
 
     /// Helper method.
+    #[cfg(feature = "ledger")]
     fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         Ok(IncomingViewingKey {
             dk: fvk.derive_dk_ovk_ledger()?.0,
@@ -883,6 +899,7 @@ impl IncomingViewingKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::address_at`].
+    #[cfg(feature = "ledger")]
     pub fn address_at_ledger(
         &self,
         j: impl Into<DiversifierIndex>,
@@ -948,6 +965,7 @@ impl OutgoingViewingKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::from_fvk`].
+    #[cfg(feature = "ledger")]
     fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         Ok(fvk.derive_dk_ovk_ledger()?.1)
     }
@@ -995,6 +1013,7 @@ impl DiversifiedTransmissionKey {
         NonIdentityPallasPoint::from_bytes(bytes).map(DiversifiedTransmissionKey)
     }
 
+    #[cfg(feature = "ledger")]
     pub(crate) fn from_bytes_ledger(bytes: &[u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
         Ok(DiversifiedTransmissionKey(
             NonIdentityPallasPoint::from_bytes_ledger(bytes)?,

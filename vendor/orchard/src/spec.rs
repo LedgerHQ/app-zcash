@@ -49,6 +49,7 @@ impl NonIdentityPallasPoint {
             .and_then(|p| CtOption::new(NonIdentityPallasPoint(p), !p.is_identity()))
     }
 
+    #[cfg(feature = "ledger")]
     pub(crate) fn from_bytes_ledger(bytes: &[u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
         let point = ledger_zcash_crypto::nonidentity_pallas_point_from_bytes(bytes)?;
         let x = pallas::Base::from_repr(point.x);

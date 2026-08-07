@@ -70,6 +70,10 @@ test-dependencies = [
     "proptest",
     "rand/std",
 ]
+ledger = [
+    "dep:ledger_zcash_crypto",
+    "reddsa/ledger",
+]
 unstable-frost = []
 unstable-voting-circuits = []
 
@@ -101,6 +105,7 @@ harness = false
 
 [dependencies.ledger_zcash_crypto]
 path = "../../ledger_zcash_crypto"
+optional = true
 
 [dependencies.aes]
 version = "0.8"
