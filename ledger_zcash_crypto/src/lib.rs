@@ -50,7 +50,13 @@ const ORCHARD_RIVK_INTERNAL_DOMAIN_SEPARATOR: u8 = 0x83;
 const ORCHARD_ESK_DOMAIN_SEPARATOR: u8 = 0x04;
 const ORCHARD_RCM_DOMAIN_SEPARATOR: u8 = 0x05;
 const ORCHARD_PSI_DOMAIN_SEPARATOR: u8 = 0x09;
-// ZIP 2005 §3.2.1: quantum-recoverable rcm derivation domain separator.
+// Note plaintext version bytes (lead byte of enc_ciphertext plaintext).
+pub(crate) const NOTE_VERSION_ORCHARD: u8 = 0x02;
+// ZIP 2005 §3.2.1 (Ironwood): V3 note plaintext version byte and quantum-recoverable rcm
+// domain separator.  Only available when V3 note support is enabled.
+#[cfg(feature = "zcash_unstable")]
+pub(crate) const NOTE_VERSION_IRONWOOD: u8 = 0x03;
+#[cfg(feature = "zcash_unstable")]
 const ORCHARD_QR_RCM_DOMAIN_SEPARATOR: u8 = 0x0B;
 const PRF_EXPAND_BYTES: usize = 64;
 const ORCHARD_VALUE_COMMITMENT_VALUE_BASEPOINT_BYTES: [u8; 32] = [
@@ -238,6 +244,7 @@ pub fn orchard_note_commitment_bytes(
 /// Identical Sinsemilla message as V2 (`g_d ‖ pk_d ‖ value ‖ rho ‖ psi`) but the
 /// trapdoor uses the quantum-recoverable rcm derivation (domain separator 0x0B,
 /// fields g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi hashed alongside rseed).
+#[cfg(feature = "zcash_unstable")]
 pub fn orchard_note_commitment_v3_bytes(
     recipient: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
     value: u64,

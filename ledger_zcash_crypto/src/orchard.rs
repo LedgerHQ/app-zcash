@@ -21,7 +21,7 @@ use pasta_curves::pallas;
 
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
-    ORCHARD_QR_RCM_DOMAIN_SEPARATOR, ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
+    ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
     bytes::reverse_copy,
     pallas_base_from_repr, pallas_basepoint_mul, pallas_point_from_bytes, pallas_point_to_bytes,
     pallas_scalar_from_repr, prf_expand_with_domain_separator_and_inputs,
@@ -29,6 +29,9 @@ use crate::{
     sinsemilla::{extract_p_pallas, sinsemilla_short_commit, sinsemilla_short_commit_point},
     to_pallas_base_bytes, to_pallas_scalar_bytes,
 };
+use crate::NOTE_VERSION_ORCHARD;
+#[cfg(feature = "zcash_unstable")]
+use crate::{NOTE_VERSION_IRONWOOD, ORCHARD_QR_RCM_DOMAIN_SEPARATOR};
 
 pub const ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE: usize = 52;
 pub const ORCHARD_MEMO_SIZE: usize = 512;
@@ -294,15 +297,14 @@ fn parse_and_validate_note_plaintext(
         return Ok(None);
     }
 
-    // Recompute and verify the note commitment for both V2 and V3.
-    //
-    // For V3 (Ironwood / ZIP 2005), the commitment formula is the same Sinsemilla short
-    // commit as V2 but with a quantum-recoverable rcm derivation that additionally binds
-    // g_d, pk_d, value, rho, and psi (see `note_commitment_v3`). Skipping this check for
-    // V3 would allow a malicious PCZT builder that knows the device's IVK to present a
-    // valid enc_ciphertext for one recipient while setting compact.cmx to commit to a
-    // different note — a clear-signing bypass on the output recipient.
-    let cmx = if plaintext[0] == 0x03 {
+    // Recompute and verify the note commitment. For V3 (Ironwood / ZIP 2005), the
+    // quantum-recoverable rcm derivation additionally binds g_d, pk_d, and value, which
+    // prevents a malicious host from swapping cmx to commit to a different recipient
+    // while presenting a valid enc_ciphertext for the device's IVK.
+    #[cfg(not(feature = "zcash_unstable"))]
+    let cmx = note_commitment(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?;
+    #[cfg(feature = "zcash_unstable")]
+    let cmx = if plaintext[0] == NOTE_VERSION_IRONWOOD {
         note_commitment_v3(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?
     } else {
         note_commitment(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?
@@ -475,9 +477,13 @@ fn parse_note_plaintext_diversifier(
 fn parse_note_plaintext_prefix(
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
 ) -> Option<OrchardNotePlaintextPrefix> {
-    // Accept both Orchard V2 (0x02) and Ironwood V3 (0x03) note plaintext versions.
-    // The version byte is the only structural difference between the two formats.
-    if plaintext[0] != 0x02 && plaintext[0] != 0x03 {
+    // The version byte is the only structural difference between V2 and V3 note formats.
+    #[cfg(not(feature = "zcash_unstable"))]
+    if plaintext[0] != NOTE_VERSION_ORCHARD {
+        return None;
+    }
+    #[cfg(feature = "zcash_unstable")]
+    if plaintext[0] != NOTE_VERSION_ORCHARD && plaintext[0] != NOTE_VERSION_IRONWOOD {
         return None;
     }
 
@@ -541,6 +547,7 @@ fn note_commitment(
 /// Unlike the V2 rcm derivation (which only takes rseed and rho), the V3 trapdoor
 /// additionally commits to the recipient's `g_d` and `pk_d` and to the note `value`,
 /// providing post-quantum binding of the note commitment to all note fields.
+#[cfg(feature = "zcash_unstable")]
 fn orchard_rcm_v3(
     rseed: &[u8; HASH_SIZE],
     g_d: &[u8; HASH_SIZE],
@@ -564,6 +571,7 @@ fn orchard_rcm_v3(
 /// The Sinsemilla message is identical to V2 — `(g_d, pk_d, value, rho, psi)` — but the
 /// trapdoor `rcm` uses the quantum-recoverable derivation from `orchard_rcm_v3`, which
 /// binds the trapdoor to all note fields and therefore ties `cmx` to the specific recipient.
+#[cfg(feature = "zcash_unstable")]
 #[inline(never)]
 pub(crate) fn orchard_note_commitment_v3(
     recipient: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
@@ -586,6 +594,7 @@ pub(crate) fn orchard_note_commitment_v3(
     note_commitment_v3(&g_d, &pk_d, value, &rho, rseed)
 }
 
+#[cfg(feature = "zcash_unstable")]
 #[inline(never)]
 fn note_commitment_v3(
     g_d: &[u8; HASH_SIZE],
@@ -708,6 +717,7 @@ mod tests {
     ///
     /// If the two formulas were accidentally identical, the clear-signing bypass
     /// (`test_pczt_ironwood_v3_note_tampered_cmx_rejected`) would not be caught.
+    #[cfg(feature = "zcash_unstable")]
     #[test]
     fn note_commitment_v3_differs_from_v2_for_same_inputs() {
         let rho = pallas_base_from_repr(DUMMY_NULLIFIER)
@@ -730,6 +740,7 @@ mod tests {
     }
 
     /// `note_commitment_v3` must be deterministic: identical inputs produce identical output.
+    #[cfg(feature = "zcash_unstable")]
     #[test]
     fn note_commitment_v3_is_deterministic() {
         let rho = pallas_base_from_repr(DUMMY_NULLIFIER)
