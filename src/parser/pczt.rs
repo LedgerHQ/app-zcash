@@ -72,6 +72,7 @@ const MAGIC_BYTES: &[u8; 4] = b"PCZT";
 const PCZT_VERSION_1: u32 = 1;
 #[cfg(feature = "zcash_unstable")]
 const PCZT_VERSION_2: u32 = 2;
+#[cfg(feature = "zcash_unstable")]
 const NOTE_VERSION_ORCHARD: u8 = 0x02;
 #[cfg(feature = "zcash_unstable")]
 const NOTE_VERSION_IRONWOOD: u8 = 0x03;
@@ -236,6 +237,7 @@ struct PcztCurrentActionState {
     alpha: Option<[u8; 32]>,
     path: Option<Bip32Path>,
     fvk: Option<OrchardFvk>,
+    #[cfg(feature = "zcash_unstable")]
     note_plaintext_version: u8,
 }
 
@@ -262,6 +264,7 @@ impl PcztCurrentActionState {
             alpha: None,
             path: None,
             fvk: None,
+            #[cfg(feature = "zcash_unstable")]
             note_plaintext_version: NOTE_VERSION_ORCHARD,
         }
     }
