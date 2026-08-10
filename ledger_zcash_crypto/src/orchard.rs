@@ -19,6 +19,7 @@ use ledger_device_sdk::hash::{
 };
 use pasta_curves::pallas;
 
+use crate::NOTE_VERSION_ORCHARD;
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
     ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
@@ -29,7 +30,6 @@ use crate::{
     sinsemilla::{extract_p_pallas, sinsemilla_short_commit, sinsemilla_short_commit_point},
     to_pallas_base_bytes, to_pallas_scalar_bytes,
 };
-use crate::NOTE_VERSION_ORCHARD;
 #[cfg(feature = "zcash_unstable")]
 use crate::{NOTE_VERSION_IRONWOOD, ORCHARD_QR_RCM_DOMAIN_SEPARATOR};
 
