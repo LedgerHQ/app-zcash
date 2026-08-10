@@ -876,4 +876,57 @@ mod tests {
             "note_commitment_v3 must be deterministic"
         );
     }
+
+    /// `spend_nullifier_bytes_v3` must produce a different nullifier than
+    /// `spend_nullifier_bytes` for the same note fields.
+    ///
+    /// V2 and V3 spend notes have the same Sinsemilla message but different rcm
+    /// derivations; the commitment point therefore differs, which propagates into
+    /// the nullifier computation `nk_prf + psi + cm`.  If this test passes, the
+    /// firmware correctly distinguishes V2 from V3 spend nullifiers.
+    #[cfg(feature = "zcash_unstable")]
+    #[test]
+    fn spend_nullifier_bytes_v3_differs_from_v2() {
+        let mut recipient = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
+        recipient[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+        recipient[DIVERSIFIER_SIZE..].copy_from_slice(&INTERNAL_PK_D);
+
+        // Any valid Pallas base field element works as nk for this differential test.
+        let nk = [0u8; HASH_SIZE];
+
+        let nf_v2 = spend_nullifier_bytes(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+            .expect("V2 spend_nullifier_bytes must succeed for valid inputs");
+        let nf_v3 =
+            spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .expect("V3 spend_nullifier_bytes_v3 must succeed for valid inputs");
+
+        assert_ne!(
+            nf_v2, nf_v3,
+            "V3 nullifier must differ from V2 nullifier for the same note fields              (the commitment trapdoor differs, which changes the commitment point              and therefore the final nullifier)"
+        );
+    }
+
+    /// `spend_nullifier_bytes_v3` must be deterministic: identical inputs produce
+    /// identical output.
+    #[cfg(feature = "zcash_unstable")]
+    #[test]
+    fn spend_nullifier_bytes_v3_is_deterministic() {
+        let mut recipient = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
+        recipient[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+        recipient[DIVERSIFIER_SIZE..].copy_from_slice(&INTERNAL_PK_D);
+
+        let nk = [0u8; HASH_SIZE];
+
+        let nf_first =
+            spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .expect("first call to spend_nullifier_bytes_v3 must succeed");
+        let nf_second =
+            spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .expect("second call to spend_nullifier_bytes_v3 must succeed");
+
+        assert_eq!(
+            nf_first, nf_second,
+            "spend_nullifier_bytes_v3 must be deterministic"
+        );
+    }
 }
