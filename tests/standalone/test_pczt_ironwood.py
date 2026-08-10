@@ -1281,6 +1281,61 @@ def test_pczt_ironwood_v3_real_output_accepted(
     assert len(auth_sig) >= 70
 
 
+def test_pczt_v2_metadata_byte_with_v3_ciphertext_accepted(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Metadata byte note_plaintext_version=0x02 with a V3-encrypted ciphertext is accepted.
+
+    _V3_REAL_ENC_CIPHERTEXT carries a V3 plaintext (lead byte 0x03 after decryption), so
+    parse_and_validate_note_plaintext selects the V3 commitment formula (note_commitment_v3),
+    because the branch is driven by plaintext[0], not by the unauthenticated metadata byte.
+    The cmx check runs and passes against _V3_REAL_CMX.
+
+    This is the symmetric counterpart to test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted:
+    together they verify that the commitment-formula branch is driven exclusively by the
+    authenticated decrypted plaintext[0], regardless of the note_plaintext_version metadata field.
+    """
+    client = ZcashCommandSender(backend)
+    action = PcztIronwoodAction(
+        cv_net=_DUMMY_CV_NET,
+        nullifier=_DUMMY_NULLIFIER,
+        spend_recipient=_SPEND_RECIPIENT,
+        spend_rho=_DUMMY_SPEND_RHO,
+        spend_rseed=_DUMMY_SPEND_RSEED,
+        rk=_RK_ALPHA_1,
+        alpha=_ALPHA,
+        signing_path=_SIGNING_PATH,
+        cmx=_V3_REAL_CMX,
+        ephemeral_key=_V3_REAL_EPK,
+        enc_ciphertext=_V3_REAL_ENC_CIPHERTEXT,
+        out_ciphertext=bytes(80),
+        rcv=_DUMMY_RCV,
+        rseed=bytes(32),  # metadata rseed unused for IVK-decryptable non-dummy output
+        spend_value=0,
+        value=_DUMMY_CHANGE_VALUE,
+        recipient=_INTERNAL_RECIPIENT,
+        note_plaintext_version=0x02,  # metadata says V2, but ciphertext decrypts to plaintext[0]=0x03
+    )
+    bundle = PcztIronwoodBundle(
+        actions=[action],
+        flags=3,
+        value_balance=-_DUMMY_CHANGE_VALUE,
+        anchor=bytes(32),
+    )
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_11K],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    ):
+        _review_approve(scenario_navigator, "test_pczt_v2_metadata_byte_with_v3_ciphertext_accepted")
+
+    auth_sig = client.pczt_sign_transparent(input_index=0).data
+    assert len(auth_sig) >= 70
+
+
 @pytest.mark.skip(
     reason="Requires a Pallas-valid (rk, alpha) pair where rk is deliberately wrong — "
            "needs Pallas group arithmetic unavailable in this test harness. "
