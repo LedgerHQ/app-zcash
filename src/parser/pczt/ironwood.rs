@@ -997,7 +997,7 @@ impl PcztParser {
         let nk: [u8; 32] = fvk_bytes[32..64]
             .try_into()
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-        let expected_nullifier = ledger_zcash_crypto::orchard_spend_nullifier_bytes(
+        let expected_nullifier = ledger_zcash_crypto::orchard_spend_nullifier_bytes_v3(
             &nk,
             &self.current_action.spend_recipient,
             self.current_action.spend_value,

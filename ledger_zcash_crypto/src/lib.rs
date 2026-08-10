@@ -230,6 +230,22 @@ pub fn orchard_spend_nullifier_bytes(
     orchard::spend_nullifier_bytes(nk, raw_address, value, rho, rseed)
 }
 
+/// V3 (ZIP 2005 / Ironwood) variant of [`orchard_spend_nullifier_bytes`].
+///
+/// Use this when recomputing the nullifier of a V3 spend note inside a PCZT;
+/// V2 and V3 notes share the same Sinsemilla message structure but derive the
+/// commitment trapdoor (rcm) differently.
+#[cfg(feature = "zcash_unstable")]
+pub fn orchard_spend_nullifier_bytes_v3(
+    nk: &[u8; 32],
+    raw_address: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    rho: &[u8; 32],
+    rseed: &[u8; 32],
+) -> Result<[u8; 32], Error> {
+    orchard::spend_nullifier_bytes_v3(nk, raw_address, value, rho, rseed)
+}
+
 pub fn orchard_note_commitment_bytes(
     raw_address: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
     value: u64,
