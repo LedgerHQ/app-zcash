@@ -525,8 +525,7 @@ fn parse_note_plaintext_prefix(
         return None;
     }
     #[cfg(feature = "zcash_unstable")]
-    if plaintext[0] != NOTE_VERSION_ORCHARD
-        && !(allow_v3 && plaintext[0] == NOTE_VERSION_IRONWOOD)
+    if plaintext[0] != NOTE_VERSION_ORCHARD && !(allow_v3 && plaintext[0] == NOTE_VERSION_IRONWOOD)
     {
         return None;
     }
