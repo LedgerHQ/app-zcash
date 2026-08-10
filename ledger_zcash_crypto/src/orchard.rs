@@ -156,6 +156,51 @@ pub fn spend_nullifier_bytes(
     Ok(extract_p_pallas(&nullifier_point).to_repr())
 }
 
+/// V3 (ZIP 2005 / Ironwood) variant of [`spend_nullifier_bytes`].
+///
+/// Uses [`note_commitment_v3_point`] instead of [`note_commitment_point`] so
+/// that the commitment matches the on-chain V3 note and the derived nullifier
+/// agrees with the value in the PCZT.
+#[cfg(feature = "zcash_unstable")]
+pub fn spend_nullifier_bytes_v3(
+    nk: &[u8; HASH_SIZE],
+    raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    let rho = pallas_base_from_repr(*rho)?;
+    let _esk = orchard_esk(rseed, &rho)?;
+
+    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
+    diversifier.copy_from_slice(&raw_address[..DIVERSIFIER_SIZE]);
+
+    let mut pk_d = [0u8; HASH_SIZE];
+    pk_d.copy_from_slice(&raw_address[DIVERSIFIER_SIZE..]);
+    if !is_valid_nonidentity_pallas_point(&pk_d)? {
+        return Err(Error::MalformedPallasPoint);
+    }
+
+    let g_d = crate::diversify_hash_ledger(&diversifier)?;
+    let cm = note_commitment_v3_point(&g_d, &pk_d, value, &rho, rseed)?;
+    let psi = pallas_base_from_repr(orchard_psi(rseed, &rho)?)?;
+    let nk = pallas_base_from_repr(*nk)?;
+    let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
+    let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
+
+    let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
+        cm
+    } else {
+        let nullifier_k_ec = pallas_basepoint_mul(
+            &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
+            &scalar_bytes_be(&nullifier_scalar),
+        )?;
+        point_from_sdk_point(&nullifier_k_ec)? + cm
+    };
+
+    Ok(extract_p_pallas(&nullifier_point).to_repr())
+}
+
 #[inline(never)]
 pub fn note_commitment_bytes(
     raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
@@ -676,6 +721,36 @@ fn note_commitment_point(
 ) -> Result<pallas::Point, Error> {
     let psi = orchard_psi(rseed, rho)?;
     let rcm = orchard_rcm(rseed, rho)?;
+    let rcm = pallas_scalar_from_repr(rcm)?;
+
+    let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
+    let mut offset = 0;
+    append_le_bits(&mut message, &mut offset, g_d, 32 * 8);
+    append_le_bits(&mut message, &mut offset, pk_d, 32 * 8);
+    append_le_bits(&mut message, &mut offset, &value.to_le_bytes(), 64);
+    append_le_bits(&mut message, &mut offset, &rho.to_repr(), L_ORCHARD_BASE);
+    append_le_bits(&mut message, &mut offset, &psi, L_ORCHARD_BASE);
+
+    sinsemilla_short_commit_point(NOTE_COMMITMENT_PERSONALIZATION, &message, &rcm)?
+        .ok_or(Error::InvalidKeyDiscarded)
+}
+
+/// V3 (ZIP 2005 / Ironwood) variant of [`note_commitment_point`].
+///
+/// Identical Sinsemilla message; uses [`orchard_rcm_v3`] so the trapdoor binds
+/// all note fields (g_d, pk_d, value, rho, psi), matching the on-chain V3
+/// commitment.  Required for nullifier recomputation of V3 spend notes.
+#[cfg(feature = "zcash_unstable")]
+#[inline(never)]
+fn note_commitment_v3_point(
+    g_d: &[u8; HASH_SIZE],
+    pk_d: &[u8; HASH_SIZE],
+    value: u64,
+    rho: &pallas::Base,
+    rseed: &[u8; HASH_SIZE],
+) -> Result<pallas::Point, Error> {
+    let psi = orchard_psi(rseed, rho)?;
+    let rcm = orchard_rcm_v3(rseed, g_d, pk_d, value, rho, &psi)?;
     let rcm = pallas_scalar_from_repr(rcm)?;
 
     let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
