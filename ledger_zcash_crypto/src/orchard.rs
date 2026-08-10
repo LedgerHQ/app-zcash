@@ -86,15 +86,27 @@ pub struct DecipheredOrchardOutput {
 pub fn decipher_value_with_ovk(
     ovk: &[u8; HASH_SIZE],
     action: &OrchardActionCiphertext<'_>,
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
-    try_output_recovery_with_ovk(ovk, action)
+    try_output_recovery_with_ovk(
+        ovk,
+        action,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    )
 }
 
 pub fn decipher_compact_value(
     ivk: &[u8; HASH_SIZE],
     compact: &OrchardCompactAction,
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
-    try_compact_note_decryption_with_ivk(ivk, compact)
+    try_compact_note_decryption_with_ivk(
+        ivk,
+        compact,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    )
 }
 
 #[inline(never)]
@@ -170,6 +182,7 @@ pub fn note_commitment_bytes(
 fn try_output_recovery_with_ovk(
     ovk: &[u8; HASH_SIZE],
     action: &OrchardActionCiphertext<'_>,
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let rho = match pallas_base_from_repr(action.compact.nullifier) {
         Ok(rho) => rho,
@@ -224,12 +237,15 @@ fn try_output_recovery_with_ovk(
         Some(&esk),
         &rho,
         Some(memo),
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
     )
 }
 
 fn try_compact_note_decryption_with_ivk(
     ivk: &[u8; HASH_SIZE],
     compact: &OrchardCompactAction,
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let rho = match pallas_base_from_repr(compact.nullifier) {
         Ok(rho) => rho,
@@ -255,7 +271,11 @@ fn try_compact_note_decryption_with_ivk(
     let mut note_plaintext_prefix = compact.enc_ciphertext_prefix;
     chacha20_decrypt_compact(&k_enc, &mut note_plaintext_prefix);
 
-    let Some(diversifier) = parse_note_plaintext_diversifier(&note_plaintext_prefix) else {
+    let Some(diversifier) = parse_note_plaintext_diversifier(
+        &note_plaintext_prefix,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    ) else {
         return Ok(None);
     };
 
@@ -265,7 +285,16 @@ fn try_compact_note_decryption_with_ivk(
     };
     let pk_d = crate::orchard_pk_d(&ivk.to_repr(), &g_d)?;
 
-    parse_and_validate_note_plaintext(compact, &note_plaintext_prefix, &pk_d, None, &rho, None)
+    parse_and_validate_note_plaintext(
+        compact,
+        &note_plaintext_prefix,
+        &pk_d,
+        None,
+        &rho,
+        None,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    )
 }
 
 fn parse_and_validate_note_plaintext(
@@ -275,8 +304,13 @@ fn parse_and_validate_note_plaintext(
     expected_esk: Option<&[u8; HASH_SIZE]>,
     rho: &pallas::Base,
     memo: Option<Box<[u8]>>,
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
-    let Some(note_plaintext) = parse_note_plaintext_prefix(plaintext) else {
+    let Some(note_plaintext) = parse_note_plaintext_prefix(
+        plaintext,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    ) else {
         return Ok(None);
     };
 
@@ -470,20 +504,30 @@ struct OrchardNotePlaintextPrefix {
 
 fn parse_note_plaintext_diversifier(
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Option<[u8; DIVERSIFIER_SIZE]> {
-    parse_note_plaintext_prefix(plaintext).map(|parsed| parsed.diversifier)
+    parse_note_plaintext_prefix(
+        plaintext,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    )
+    .map(|parsed| parsed.diversifier)
 }
 
 fn parse_note_plaintext_prefix(
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Option<OrchardNotePlaintextPrefix> {
     // The version byte is the only structural difference between V2 and V3 note formats.
+    // allow_v3 further gates V3 acceptance to callers in the Ironwood pool (V6 bundles).
     #[cfg(not(feature = "zcash_unstable"))]
     if plaintext[0] != NOTE_VERSION_ORCHARD {
         return None;
     }
     #[cfg(feature = "zcash_unstable")]
-    if plaintext[0] != NOTE_VERSION_ORCHARD && plaintext[0] != NOTE_VERSION_IRONWOOD {
+    if plaintext[0] != NOTE_VERSION_ORCHARD
+        && !(allow_v3 && plaintext[0] == NOTE_VERSION_IRONWOOD)
+    {
         return None;
     }
 
