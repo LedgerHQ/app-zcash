@@ -689,7 +689,11 @@ impl PcztParser {
         let compact = self.current_ironwood_compact_action(note_ciphertext);
         let network = keys.network;
 
-        match decipher_compact_value(&keys.internal_ivk, &compact) {
+        match decipher_compact_value(
+            &keys.internal_ivk,
+            &compact,
+            true, // V6 Ironwood pool accepts both V2 and V3 notes
+        ) {
             Ok(Some(output)) => {
                 self.validate_deciphered_ironwood_output(&output)?;
                 self.push_deciphered_ironwood_output(ctx, output, network, true)?;
@@ -710,7 +714,11 @@ impl PcztParser {
             out_ciphertext: note_ciphertext.out_ciphertext,
         };
 
-        match decipher_value_with_ovk(&keys.external_ovk, &action) {
+        match decipher_value_with_ovk(
+            &keys.external_ovk,
+            &action,
+            true, // V6 Ironwood pool accepts both V2 and V3 notes
+        ) {
             Ok(Some(output)) => {
                 self.validate_deciphered_ironwood_output(&output)?;
                 self.push_deciphered_ironwood_output(ctx, output, network, false)?;

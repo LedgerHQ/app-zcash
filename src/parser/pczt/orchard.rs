@@ -669,7 +669,12 @@ impl PcztParser {
         let compact = self.current_orchard_compact_action(note_ciphertext);
         let network = keys.network;
 
-        match decipher_compact_value(&keys.internal_ivk, &compact) {
+        match decipher_compact_value(
+            &keys.internal_ivk,
+            &compact,
+            #[cfg(feature = "zcash_unstable")]
+            false, // V5 Orchard pool does not carry V3 notes
+        ) {
             Ok(Some(output)) => {
                 self.validate_deciphered_orchard_output(&output)?;
                 self.push_deciphered_orchard_output(ctx, output, network, true)?;
@@ -690,7 +695,12 @@ impl PcztParser {
             out_ciphertext: note_ciphertext.out_ciphertext,
         };
 
-        match decipher_value_with_ovk(&keys.external_ovk, &action) {
+        match decipher_value_with_ovk(
+            &keys.external_ovk,
+            &action,
+            #[cfg(feature = "zcash_unstable")]
+            false, // V5 Orchard pool does not carry V3 notes
+        ) {
             Ok(Some(output)) => {
                 self.validate_deciphered_orchard_output(&output)?;
                 self.push_deciphered_orchard_output(ctx, output, network, false)?;
