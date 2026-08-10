@@ -217,8 +217,10 @@ When the output metadata packet is 116 bytes, the final byte is `notePlaintextVe
   plaintext** lead byte (`plaintext[0]`), not by the unauthenticated metadata byte
   `notePlaintextVersion`. A host may set `notePlaintextVersion = 0x03` while providing a
   V2-format ciphertext (which decrypts to `plaintext[0] = 0x02`); in that case the V2 formula
-  runs regardless of the metadata byte. See `test_pczt_v2_0x03_real_output_accepted` for a
-  test that exercises this case.
+  runs regardless of the metadata byte. See
+  `test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted` and
+  `test_pczt_v2_metadata_byte_with_v3_ciphertext_accepted` for tests that exercise both
+  directions of this invariant.
 - `0x03` zero-value (dummy) outputs: the device recomputes `cmx` using the V3
   quantum-recoverable commitment formula and verifies it against the wire value. Dummy outputs
   carry no displayed value or recipient; their value contribution is independently constrained

@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import List
 
 import pytest
+import ragger.conftest.base_conftest as _ragger_base
+import ragger.utils.misc as _ragger_misc
 from ragger.conftest import configuration
 
 # ---------------------------------------------------------------------------
@@ -14,8 +16,9 @@ from ragger.conftest import configuration
 # to / and raises ValueError.
 #
 # Patch the function to accept .git as either a file or a directory.
+# Applied only when running from a git worktree (.git is a file); regular
+# clones leave ragger's own implementation in place.
 # ---------------------------------------------------------------------------
-import ragger.utils.misc as _ragger_misc
 
 
 def _find_project_root_dir_worktree_aware(origin: Path) -> Path:
@@ -28,12 +31,12 @@ def _find_project_root_dir_worktree_aware(origin: Path) -> Path:
     raise ValueError("Could not find project top directory")
 
 
-_ragger_misc.find_project_root_dir = _find_project_root_dir_worktree_aware
-
-# Also patch the already-imported reference inside base_conftest so that
-# prepare_speculos_args and supported_devices pick up the new implementation.
-import ragger.conftest.base_conftest as _ragger_base
-_ragger_base.find_project_root_dir = _find_project_root_dir_worktree_aware
+_IS_WORKTREE = Path(__file__).resolve().parents[2].joinpath(".git").is_file()
+if _IS_WORKTREE:
+    _ragger_misc.find_project_root_dir = _find_project_root_dir_worktree_aware
+    # Also patch the already-imported reference inside base_conftest so that
+    # prepare_speculos_args and supported_devices pick up the new implementation.
+    _ragger_base.find_project_root_dir = _find_project_root_dir_worktree_aware
 
 ###########################
 ### CONFIGURATION START ###
