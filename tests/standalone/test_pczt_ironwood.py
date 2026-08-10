@@ -1506,21 +1506,21 @@ def test_pczt_v2_0x02_notes_path_unchanged(
     assert len(auth_sig) >= 70
 
 
-def test_pczt_v2_0x03_real_output_accepted(
+def test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """Non-zero Ironwood output with note_plaintext_version=0x03 is accepted.
+    """Metadata byte note_plaintext_version=0x03 with a V2-format ciphertext is accepted.
 
-    The device deciphers enc_ciphertext via the standard IVK trial-decryption path and
-    verifies the note commitment using the V3 rcm derivation (orchard_rcm_v3 / note_commitment_v3).
+    _DUMMY_ENC_CIPHERTEXT carries a V2 plaintext (lead byte 0x02 after decryption), so
+    parse_and_validate_note_plaintext selects the V2 commitment formula (note_commitment,
+    not note_commitment_v3), because the branch is driven by plaintext[0], not by the
+    unauthenticated metadata byte.  The cmx check still runs and passes against _DUMMY_CMX.
 
-    Note: _DUMMY_ENC_CIPHERTEXT carries a V2 plaintext (lead byte 0x02 inside the decrypted
-    data), so the device follows the V2 commitment branch here.  A genuine V3 plaintext
-    (lead byte 0x03) would exercise note_commitment_v3.  Acceptance of metadata
-    note_plaintext_version=0x03 with a V2-format ciphertext demonstrates backward compatibility
-    of the metadata field; the cmx check is always active regardless of which version byte
-    appears in the decrypted plaintext.
+    This tests backward-compatibility of the 116-byte metadata packet: a host that sends
+    note_plaintext_version=0x03 alongside a V2-format enc_ciphertext is not rejected.
+    For the genuine V3 commitment path (plaintext[0]=0x03, note_commitment_v3 exercised)
+    see test_pczt_ironwood_v3_real_output_accepted.
     """
     client = ZcashCommandSender(backend)
     action = _dummy_ironwood_action()
@@ -1538,7 +1538,7 @@ def test_pczt_v2_0x03_real_output_accepted(
         transparent_outputs=[],
         ironwood_bundle=bundle,
     ):
-        _review_approve(scenario_navigator, "test_pczt_v2_0x03_real_output_accepted")
+        _review_approve(scenario_navigator, "test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted")
 
     auth_sig = client.pczt_sign_transparent(input_index=0).data
     assert len(auth_sig) >= 70
