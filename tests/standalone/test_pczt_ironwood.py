@@ -862,7 +862,7 @@ def test_pczt_ironwood_sign_replay_in_session_rejected(
 # the Ironwood anchor because NU6.3 excludes the anchor from the sighash — only the
 # authorising-data digest includes it, not the sighash.
 # Generated with zcash_unstable; the empty Orchard component uses the V6 personalization
-# b"ZTxIdOrchardH_v6" (ZIP 230), not the V5 b"ZTxIdOrchardHash".
+# b"ZTxIdOrchardH_v6" (ZIP 229), not the V5 b"ZTxIdOrchardHash".
 _EXPECTED_V6_IRONWOOD_SIG = bytes.fromhex(
     "ead4c8c388b04b4dde3ac805883022063996d3c1093110f1b7e24fa2c26f059b"
     "f852bfc59977706a6c351c73776283c6723098f9579f57bb479b6c94b5d3d62d"

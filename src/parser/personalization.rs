@@ -40,12 +40,18 @@ pub const ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrScr
 
 // --- NU6.3 / V6 personalizations ---
 //
-// Verified against ZIP 229 §4.6 (l.342-346) and the vendored `orchard` 0.15.0
-// (`src/bundle/commitments.rs`); all seven strings are byte-identical.
-// The two auth-commitment strings below are not used by the device (signer-only,
-// no bindingSig computation), but are retained for verification completeness.
+// Verified against the "Anchor commitment (version 6)" table of ZIP 229 and the
+// vendored `orchard` 0.15.0 (`src/bundle/commitments.rs`); all strings are
+// byte-identical. The two auth-commitment strings below are not used by the device
+// (signer-only, no bindingSig computation), but are retained for verification
+// completeness.
 
-/// Ironwood bundle digest personalizations per ZIP 229 §4.6 (l.342-346).
+/// `sapling_spends_noncompact_digest_v6`, which omits the anchor. Every other Sapling
+/// node keeps its v5 personalization in a v6 transaction.
+#[cfg(feature = "zcash_unstable")]
+pub const ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION_V6: &[u8; 16] = b"ZTxIdSSpendNH_v6";
+
+/// Ironwood bundle digest personalizations per ZIP 229.
 #[cfg(feature = "zcash_unstable")]
 pub const ZCASH_IRONWOOD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIronwd_H_v6";
 #[cfg(feature = "zcash_unstable")]
