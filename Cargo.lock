@@ -2082,6 +2082,7 @@ dependencies = [
  "shardtree",
  "sinsemilla",
  "subtle",
+ "tracing",
  "visibility",
  "zcash_note_encryption",
  "zcash_spec",
@@ -3506,7 +3507,7 @@ dependencies = [
 
 [[package]]
 name = "zcash"
-version = "3.9.0"
+version = "3.9.1"
 dependencies = [
  "arrayvec",
  "bs58",
