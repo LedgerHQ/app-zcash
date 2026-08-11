@@ -1002,3 +1002,192 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod gen_v3_ext_vectors {
+    //! Generates updated V3 external-recipient action vectors for
+    //! test_pczt_ironwood.py after the firmware fix to use V3 note commitment
+    //! for spend-nullifier recomputation.
+    //!
+    //! The external action's spend note is owned by the same Speculos key
+    //! (spend_recipient = _SPEND_RECIPIENT), so its nullifier also changes
+    //! when the firmware switches from V2 → V3 note commitment.
+    //!
+    //! Run from the app-zcash worktree root (outside /app to avoid build-std):
+    //! ```sh
+    //! HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    //! cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
+    //!   --target-dir /tmp/orchard-host -- gen_v3_ext_action_vectors --nocapture
+    //! ```
+
+    use alloc::{string::String, vec::Vec};
+    use rand::rngs::OsRng;
+    use std::println;
+    use zcash_note_encryption::Domain;
+
+    use crate::{
+        keys::{Diversifier, DiversifiedTransmissionKey, FullViewingKey, Scope},
+        note::{ExtractedNoteCommitment, RandomSeed, Rho},
+        note_encryption::{IronwoodDomain, IronwoodNoteEncryption},
+        value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
+        Address, Note, NoteVersion,
+    };
+
+    const fn hex_decode_96(hex: &[u8; 192]) -> [u8; 96] {
+        let mut out = [0u8; 96];
+        let mut i = 0;
+        while i < 96 {
+            let h = if hex[i * 2] >= b'a' { hex[i * 2] - b'a' + 10 } else { hex[i * 2] - b'0' };
+            let l = if hex[i * 2 + 1] >= b'a' {
+                hex[i * 2 + 1] - b'a' + 10
+            } else {
+                hex[i * 2 + 1] - b'0'
+            };
+            out[i] = (h << 4) | l;
+            i += 1;
+        }
+        out
+    }
+
+    const fn hex_decode_43(hex: &[u8; 86]) -> [u8; 43] {
+        let mut out = [0u8; 43];
+        let mut i = 0;
+        while i < 43 {
+            let h = if hex[i * 2] >= b'a' { hex[i * 2] - b'a' + 10 } else { hex[i * 2] - b'0' };
+            let l = if hex[i * 2 + 1] >= b'a' {
+                hex[i * 2 + 1] - b'a' + 10
+            } else {
+                hex[i * 2 + 1] - b'0'
+            };
+            out[i] = (h << 4) | l;
+            i += 1;
+        }
+        out
+    }
+
+    // Speculos Orchard FVK bytes (ak ‖ nk ‖ rivk, 96 bytes) for m/32'/133'/0'
+    // on the Speculos default seed.
+    // Derived by compute_v3_spend_nullifier_from_speculos_seed in
+    // ledger-zcash-utils/crates/zcash-crypto/tests/ironwood_nullifier_version_check.rs
+    const FVK_BYTES: [u8; 96] = hex_decode_96(
+        b"e129bb7d06ed69a5ac01a664482ec9987fd19c40940bf76d98eb8b952974852949b0128d5072f9f92c7f7e8eb49a5434d2c04b67a30a55946d8322df3e484426f6151235e5897d34196943cb8f968312f1c8fba9ed82830b59f801b6de5da835",
+    );
+
+    // _SPEND_RECIPIENT from test_pczt_ironwood.py — also the spend_recipient
+    // in _external_recipient_ironwood_action (the external action spends our own note).
+    const SPEND_RECIPIENT: [u8; 43] = hex_decode_43(
+        b"4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+    );
+
+    // _EXT_RECIPIENT — output recipient for the external action.
+    const EXT_RECIPIENT: [u8; 43] = hex_decode_43(
+        b"4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
+    );
+
+    const EXT_SPEND_RHO: [u8; 32] = { let mut b = [0u8; 32]; b[0] = 0x07; b };
+    const EXT_SPEND_RSEED: [u8; 32] = { let mut b = [0u8; 32]; b[0] = 0x1b; b };
+    const EXT_RSEED: [u8; 32] = { let mut b = [0u8; 32]; b[0] = 0x2f; b };
+    const EXT_RCV: [u8; 32] = { let mut b = [0u8; 32]; b[0] = 0x43; b };
+
+    fn hex_lines(bytes: &[u8]) -> String {
+        bytes
+            .chunks(32)
+            .map(|c| c.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\"\n    \"")
+    }
+
+    fn hex_str(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    /// Generate updated V3 external-action vectors for test_pczt_ironwood.py.
+    #[test]
+    fn gen_v3_ext_action_vectors() {
+        let fvk = FullViewingKey::from_bytes(&FVK_BYTES)
+            .expect("Speculos Orchard FVK must decode");
+        let ext_ovk = fvk.to_ovk(Scope::External);
+
+        // ── V3 spend note (spend_value = 200 000) ──────────────────────
+        let spend_div = Diversifier::from_bytes(SPEND_RECIPIENT[..11].try_into().unwrap());
+        let spend_pk_d =
+            DiversifiedTransmissionKey::from_bytes(SPEND_RECIPIENT[11..].try_into().unwrap())
+                .expect("spend_recipient pk_d must be valid");
+        let spend_addr = Address::from_parts(spend_div, spend_pk_d);
+
+        let ext_spend_rho = Rho::from_bytes(&EXT_SPEND_RHO)
+            .into_option()
+            .expect("EXT_SPEND_RHO must be valid");
+        let ext_spend_rseed =
+            Option::from(RandomSeed::from_bytes(EXT_SPEND_RSEED, &ext_spend_rho))
+                .expect("EXT_SPEND_RSEED must be valid for rho");
+        let spend_note: Note = Option::from(Note::from_parts(
+            spend_addr,
+            NoteValue::from_raw(200_000),
+            ext_spend_rho,
+            ext_spend_rseed,
+            NoteVersion::V3,
+        ))
+        .expect("external spend note must be valid");
+
+        let ext_nullifier = spend_note.nullifier(&fvk);
+        let ext_nf_bytes = ext_nullifier.to_bytes();
+        println!("_EXT_NULLIFIER = bytes.fromhex(\"{}\")", hex_str(&ext_nf_bytes));
+
+        // ── V2 output note (value = 180 000, rho = ext_nullifier) ────────
+        let ext_div = Diversifier::from_bytes(EXT_RECIPIENT[..11].try_into().unwrap());
+        let ext_pk_d =
+            DiversifiedTransmissionKey::from_bytes(EXT_RECIPIENT[11..].try_into().unwrap())
+                .expect("ext_recipient pk_d must be valid");
+        let ext_addr = Address::from_parts(ext_div, ext_pk_d);
+
+        let ext_output_rho = Rho::from_bytes(&ext_nf_bytes)
+            .into_option()
+            .expect("ext_nullifier must be a valid field element");
+        let ext_rseed = Option::from(RandomSeed::from_bytes(EXT_RSEED, &ext_output_rho))
+            .expect("EXT_RSEED must be valid for rho");
+        let ext_output_note: Note = Option::from(Note::from_parts(
+            ext_addr,
+            NoteValue::from_raw(180_000),
+            ext_output_rho,
+            ext_rseed,
+            NoteVersion::V2,
+        ))
+        .expect("external output note must be valid");
+
+        let ext_cmx = ExtractedNoteCommitment::from(ext_output_note.commitment());
+        let ext_cmx_bytes = ext_cmx.to_bytes();
+        println!("_EXT_CMX = bytes.fromhex(\"{}\")", hex_str(&ext_cmx_bytes));
+
+        // ── Encrypt output note (external OVK) ───────────────────────────
+        let esk = ext_output_note.esk();
+        let encryptor = IronwoodNoteEncryption::new_with_esk(
+            esk,
+            Some(ext_ovk),
+            ext_output_note,
+            [0u8; 512],
+        );
+        let epk_bytes = IronwoodDomain::epk_bytes(encryptor.epk());
+        println!("_EXT_EPHEMERAL_KEY = bytes.fromhex(\"{}\")", hex_str(&epk_bytes.0));
+
+        let enc_ct = encryptor.encrypt_note_plaintext();
+        println!(
+            "_EXT_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(enc_ct.as_ref())
+        );
+
+        // cv_net = ValueCommitment::derive(net = 20000, rcv = EXT_RCV)
+        let ext_rcv = ValueCommitTrapdoor::from_bytes(EXT_RCV)
+            .into_option()
+            .expect("EXT_RCV must be a valid scalar");
+        let value_net = NoteValue::from_raw(200_000) - NoteValue::from_raw(180_000);
+        let ext_cv_net = ValueCommitment::derive(value_net, ext_rcv);
+
+        let out_ct = encryptor.encrypt_outgoing_plaintext(&ext_cv_net, &ext_cmx, &mut OsRng);
+        println!(
+            "_EXT_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(out_ct.as_ref())
+        );
+    }
+}
+

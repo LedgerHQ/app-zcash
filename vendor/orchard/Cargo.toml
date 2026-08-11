@@ -214,9 +214,9 @@ version = "0.1"
 version = "2.6"
 default-features = false
 
-#[dependencies.tracing]
-#version = "0.1"
-#default-features = false
+[dependencies.tracing]
+version = "0.1"
+default-features = false
 
 [dependencies.visibility]
 version = "0.1.1"
