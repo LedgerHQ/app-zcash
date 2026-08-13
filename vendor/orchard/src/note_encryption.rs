@@ -1026,7 +1026,7 @@ mod gen_v3_ext_vectors {
     use zcash_note_encryption::Domain;
 
     use crate::{
-        keys::{Diversifier, DiversifiedTransmissionKey, FullViewingKey, Scope},
+        keys::{DiversifiedTransmissionKey, Diversifier, FullViewingKey, Scope},
         note::{ExtractedNoteCommitment, RandomSeed, Rho},
         note_encryption::{IronwoodDomain, IronwoodNoteEncryption},
         value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
@@ -1037,7 +1037,11 @@ mod gen_v3_ext_vectors {
         let mut out = [0u8; 96];
         let mut i = 0;
         while i < 96 {
-            let h = if hex[i * 2] >= b'a' { hex[i * 2] - b'a' + 10 } else { hex[i * 2] - b'0' };
+            let h = if hex[i * 2] >= b'a' {
+                hex[i * 2] - b'a' + 10
+            } else {
+                hex[i * 2] - b'0'
+            };
             let l = if hex[i * 2 + 1] >= b'a' {
                 hex[i * 2 + 1] - b'a' + 10
             } else {
@@ -1053,7 +1057,11 @@ mod gen_v3_ext_vectors {
         let mut out = [0u8; 43];
         let mut i = 0;
         while i < 43 {
-            let h = if hex[i * 2] >= b'a' { hex[i * 2] - b'a' + 10 } else { hex[i * 2] - b'0' };
+            let h = if hex[i * 2] >= b'a' {
+                hex[i * 2] - b'a' + 10
+            } else {
+                hex[i * 2] - b'0'
+            };
             let l = if hex[i * 2 + 1] >= b'a' {
                 hex[i * 2 + 1] - b'a' + 10
             } else {
@@ -1084,10 +1092,26 @@ mod gen_v3_ext_vectors {
         b"4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
     );
 
-    const EXT_SPEND_RHO: [u8; 32] = { let mut b = [0u8; 32]; b[0] = 0x07; b };
-    const EXT_SPEND_RSEED: [u8; 32] = { let mut b = [0u8; 32]; b[0] = 0x1b; b };
-    const EXT_RSEED: [u8; 32] = { let mut b = [0u8; 32]; b[0] = 0x2f; b };
-    const EXT_RCV: [u8; 32] = { let mut b = [0u8; 32]; b[0] = 0x43; b };
+    const EXT_SPEND_RHO: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x07;
+        b
+    };
+    const EXT_SPEND_RSEED: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x1b;
+        b
+    };
+    const EXT_RSEED: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x2f;
+        b
+    };
+    const EXT_RCV: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x43;
+        b
+    };
 
     fn hex_lines(bytes: &[u8]) -> String {
         bytes
@@ -1104,8 +1128,7 @@ mod gen_v3_ext_vectors {
     /// Generate updated V3 external-action vectors for test_pczt_ironwood.py.
     #[test]
     fn gen_v3_ext_action_vectors() {
-        let fvk = FullViewingKey::from_bytes(&FVK_BYTES)
-            .expect("Speculos Orchard FVK must decode");
+        let fvk = FullViewingKey::from_bytes(&FVK_BYTES).expect("Speculos Orchard FVK must decode");
         let ext_ovk = fvk.to_ovk(Scope::External);
 
         // ── V3 spend note (spend_value = 200 000) ──────────────────────
@@ -1118,9 +1141,8 @@ mod gen_v3_ext_vectors {
         let ext_spend_rho = Rho::from_bytes(&EXT_SPEND_RHO)
             .into_option()
             .expect("EXT_SPEND_RHO must be valid");
-        let ext_spend_rseed =
-            Option::from(RandomSeed::from_bytes(EXT_SPEND_RSEED, &ext_spend_rho))
-                .expect("EXT_SPEND_RSEED must be valid for rho");
+        let ext_spend_rseed = Option::from(RandomSeed::from_bytes(EXT_SPEND_RSEED, &ext_spend_rho))
+            .expect("EXT_SPEND_RSEED must be valid for rho");
         let spend_note: Note = Option::from(Note::from_parts(
             spend_addr,
             NoteValue::from_raw(200_000),
@@ -1132,7 +1154,10 @@ mod gen_v3_ext_vectors {
 
         let ext_nullifier = spend_note.nullifier(&fvk);
         let ext_nf_bytes = ext_nullifier.to_bytes();
-        println!("_EXT_NULLIFIER = bytes.fromhex(\"{}\")", hex_str(&ext_nf_bytes));
+        println!(
+            "_EXT_NULLIFIER = bytes.fromhex(\"{}\")",
+            hex_str(&ext_nf_bytes)
+        );
 
         // ── V2 output note (value = 180 000, rho = ext_nullifier) ────────
         let ext_div = Diversifier::from_bytes(EXT_RECIPIENT[..11].try_into().unwrap());
@@ -1161,14 +1186,13 @@ mod gen_v3_ext_vectors {
 
         // ── Encrypt output note (external OVK) ───────────────────────────
         let esk = ext_output_note.esk();
-        let encryptor = IronwoodNoteEncryption::new_with_esk(
-            esk,
-            Some(ext_ovk),
-            ext_output_note,
-            [0u8; 512],
-        );
+        let encryptor =
+            IronwoodNoteEncryption::new_with_esk(esk, Some(ext_ovk), ext_output_note, [0u8; 512]);
         let epk_bytes = IronwoodDomain::epk_bytes(encryptor.epk());
-        println!("_EXT_EPHEMERAL_KEY = bytes.fromhex(\"{}\")", hex_str(&epk_bytes.0));
+        println!(
+            "_EXT_EPHEMERAL_KEY = bytes.fromhex(\"{}\")",
+            hex_str(&epk_bytes.0)
+        );
 
         let enc_ct = encryptor.encrypt_note_plaintext();
         println!(
@@ -1190,4 +1214,3 @@ mod gen_v3_ext_vectors {
         );
     }
 }
-
