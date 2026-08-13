@@ -50,6 +50,10 @@ _SPEND_RECIPIENT = bytes.fromhex(
 # Precomputed action fields that pass all device validation checks.
 # cv_net = Commitment(rcv, value=0); nullifier = NullifierDerive(key, spend_rho);
 # cmx = NoteCommitment(recipient, value=0, rseed) — verified against device derivation.
+# The nullifier and cmx below are the Ironwood (V3) values: the device derives the spend
+# nullifier from the V3 note commitment of the spend note, and the output cmx is
+# note_commitment_v3.  The Orchard pool keeps deriving both from the V2 commitment, so the
+# Orchard action carries its own vectors (_ORCHARD_NULLIFIER / _ORCHARD_CMX) below.
 _CV_NET = bytes.fromhex("00b3324110776396d31646041679fd6530d57c353c6be0a93a0cd55b30aa6d8b")
 _NULLIFIER = bytes.fromhex("ed37cc733c228dc3dda2cf088ba646f9d204adc9d8d6f95ec36126eb742c3a10")
 _CMX = bytes.fromhex("aa5a6343c80fff74db58be9d847515ab8456837633b6cdf52305544bc5107c31")
@@ -57,6 +61,13 @@ _RCV = bytes.fromhex("4200000000000000000000000000000000000000000000000000000000
 _RSEED = bytes.fromhex("2e00000000000000000000000000000000000000000000000000000000000000")
 _SPEND_RHO = bytes.fromhex("0600000000000000000000000000000000000000000000000000000000000000")
 _SPEND_RSEED = bytes.fromhex("1a00000000000000000000000000000000000000000000000000000000000000")
+
+# Orchard (V2) counterparts of _NULLIFIER and _CMX, for the same spend note, output note and
+# signing path.  Orchard derives the spend nullifier from the V2 note commitment and commits
+# the output note with note_commitment (V2), so an Orchard action built from the V3 vectors
+# above is rejected with SW_INVALID_TRANSACTION.
+_ORCHARD_NULLIFIER = bytes.fromhex("08f337fd695cb5ca2ad7ced8ec14afed06d2f8a0e5e3d8b58dffbc69e4f81b2f")
+_ORCHARD_CMX = bytes.fromhex("825f806345d7c2ae67fe186120cc5b8a370c2cedb55ccf76527e9efa43c94d30")
 
 # Same, for a dummy padding spend (spend_value = 0) whose output is the change note:
 # cv_net = Commitment(_DUMMY_RCV, -_DUMMY_CHANGE_VALUE), and the ciphertexts decrypt
@@ -453,14 +464,14 @@ def _ironwood_bundle_with_external_recipient() -> PcztIronwoodBundle:
 def _valid_orchard_action() -> PcztOrchardAction:
     return PcztOrchardAction(
         cv_net=_CV_NET,
-        nullifier=_NULLIFIER,
+        nullifier=_ORCHARD_NULLIFIER,
         spend_recipient=_SPEND_RECIPIENT,
         spend_rho=_SPEND_RHO,
         spend_rseed=_SPEND_RSEED,
         rk=_RK_ALPHA_1,
         alpha=_ALPHA,
         signing_path=_SIGNING_PATH,
-        cmx=_CMX,
+        cmx=_ORCHARD_CMX,
         ephemeral_key=bytes(32),
         enc_ciphertext=bytes(580),
         out_ciphertext=bytes(80),
@@ -781,9 +792,11 @@ def test_pczt_v5_finished_marker_regression(
 # session (deterministic RNG starting point, Speculos default seed).  The value is
 # constant regardless of the Orchard anchor because NU6.3 excludes the anchor from the
 # sighash — only the authorising-data digest includes it, not the sighash.
+# The bundle carries both pools, so the Ironwood action fields enter the V6 sighash too:
+# regenerating the Ironwood vectors changes this signature as well.
 _EXPECTED_V6_ORCHARD_SIG = bytes.fromhex(
-    "43b8257c89b3214f1f6e2cae79e512985531e1958d0da6ab08ef10b962c2220"
-    "30245bdb39e65246d3d8525a64931cda3b2b05a984009f7e864318d57a47f2c19"
+    "60f093acf0f787c3ebff8ad338986a4f308ee8b04008fdbdcf699365cc94c2a2"
+    "ccac6e9ac38b2509d40e3cb51b0f10ca583442523695e9a29309c57dd98f7d17"
 )
 
 # Second anchor: first byte flipped so the Orchard anchor bytes differ in every bit
@@ -895,8 +908,8 @@ def test_pczt_ironwood_sign_replay_in_session_rejected(
 # Generated with zcash_unstable; the empty Orchard component uses the V6 personalization
 # b"ZTxIdOrchardH_v6" (ZIP 229), not the V5 b"ZTxIdOrchardHash".
 _EXPECTED_V6_IRONWOOD_SIG = bytes.fromhex(
-    "ead4c8c388b04b4dde3ac805883022063996d3c1093110f1b7e24fa2c26f059b"
-    "f852bfc59977706a6c351c73776283c6723098f9579f57bb479b6c94b5d3d62d"
+    "fb7e898023ba9fbf8439e01da90022eb9d16df625f6a6c9fcd4d66f355c8aaba"
+    "b6b09d0cc64cf1bf86859f809554a48e3a2c3c3b05f822a91e7060809ebcf715"
 )
 
 
