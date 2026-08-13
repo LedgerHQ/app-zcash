@@ -48,6 +48,7 @@ rustdoc-args = [
 circuit = [
     "dep:halo2_gadgets",
     "dep:halo2_proofs",
+    "dep:tracing",
     "std",
 ]
 default = [
@@ -216,6 +217,7 @@ default-features = false
 
 [dependencies.tracing]
 version = "0.1"
+optional = true
 default-features = false
 
 [dependencies.visibility]
