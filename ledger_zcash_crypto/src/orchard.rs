@@ -162,6 +162,7 @@ pub fn spend_nullifier_bytes(
 /// that the commitment matches the on-chain V3 note and the derived nullifier
 /// agrees with the value in the PCZT.
 #[cfg(feature = "zcash_unstable")]
+#[inline(never)]
 pub fn spend_nullifier_bytes_v3(
     nk: &[u8; HASH_SIZE],
     raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
