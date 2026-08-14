@@ -1295,20 +1295,16 @@ def test_pczt_ironwood_v3_real_output_accepted(
     assert len(auth_sig) >= 70
 
 
-def test_pczt_v2_metadata_byte_with_v3_ciphertext_accepted(
-    backend,
-    scenario_navigator: NavigateWithScenario,
-):
-    """Metadata byte note_plaintext_version=0x02 with a V3-encrypted ciphertext is accepted.
+def test_pczt_ironwood_v2_metadata_byte_rejected(backend):
+    """A note_plaintext_version metadata byte of 0x02 is rejected in an Ironwood bundle.
 
-    _V3_REAL_ENC_CIPHERTEXT carries a V3 plaintext (lead byte 0x03 after decryption), so
-    parse_and_validate_note_plaintext selects the V3 commitment formula (note_commitment_v3),
-    because the branch is driven by plaintext[0], not by the unauthenticated metadata byte.
-    The cmx check runs and passes against _V3_REAL_CMX.
+    The Ironwood value pool carries V3 note plaintexts only (orchard's
+    `BundleVersion::note_version` maps ValuePool::Ironwood to NoteVersion::V3), so a host
+    announcing V2 describes a note this bundle cannot hold. The device refuses the action
+    instead of parsing on, even though the ciphertext here would decrypt as a valid V3 note.
 
-    This is the symmetric counterpart to test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted:
-    together they verify that the commitment-formula branch is driven exclusively by the
-    authenticated decrypted plaintext[0], regardless of the note_plaintext_version metadata field.
+    That the commitment formula follows the authenticated plaintext[0] rather than this
+    metadata byte stays covered by test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted.
     """
     client = ZcashCommandSender(backend)
     action = PcztIronwoodAction(
@@ -1338,16 +1334,16 @@ def test_pczt_v2_metadata_byte_with_v3_ciphertext_accepted(
         anchor=bytes(32),
     )
 
-    with client.send_pczt(
-        pczt_global=PCZT_V6_GLOBAL,
-        transparent_inputs=[_TRANSPARENT_INPUT_11K],
-        transparent_outputs=[],
-        ironwood_bundle=bundle,
-    ):
-        _review_approve(scenario_navigator, "test_pczt_v2_metadata_byte_with_v3_ciphertext_accepted")
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_11K],
+            transparent_outputs=[],
+            ironwood_bundle=bundle,
+        ):
+            pytest.fail("Device accepted a V2 note_plaintext_version in an Ironwood bundle")
 
-    auth_sig = client.pczt_sign_transparent(input_index=0).data
-    assert len(auth_sig) >= 70
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
 @pytest.mark.skip(
@@ -1547,12 +1543,12 @@ def test_pczt_v1_header_rejected_for_v6(backend):
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
-def test_pczt_v2_0x02_notes_path_unchanged(
-    backend,
-    scenario_navigator: NavigateWithScenario,
-):
-    """116-byte output metadata with note_plaintext_version=0x02 is accepted via the
-    standard IVK decryption path — behavior is identical to the 115-byte form."""
+def test_pczt_ironwood_v2_metadata_byte_rejected_on_dummy(backend):
+    """The V2 metadata byte is refused on a dummy output too, not only on a real one.
+
+    The 116-byte form carries the version explicitly; announcing 0x02 contradicts the
+    Ironwood pool regardless of whether the action is a dummy, so the refusal happens
+    before the dummy branch is reached."""
     client = ZcashCommandSender(backend)
     action = _dummy_ironwood_action()
     action.note_plaintext_version = 0x02
@@ -1563,16 +1559,16 @@ def test_pczt_v2_0x02_notes_path_unchanged(
         anchor=bytes(32),
     )
 
-    with client.send_pczt(
-        pczt_global=PCZT_V6_GLOBAL,
-        transparent_inputs=[_TRANSPARENT_INPUT_11K],
-        transparent_outputs=[],
-        ironwood_bundle=bundle,
-    ):
-        _review_approve(scenario_navigator, "test_pczt_v2_0x02_notes_path_unchanged")
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_11K],
+            transparent_outputs=[],
+            ironwood_bundle=bundle,
+        ):
+            pytest.fail("Device accepted a V2 note_plaintext_version on an Ironwood dummy")
 
-    auth_sig = client.pczt_sign_transparent(input_index=0).data
-    assert len(auth_sig) >= 70
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
 def test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted(

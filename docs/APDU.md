@@ -20,6 +20,34 @@ String responses are encoded as:
 PCZT command payload framing is documented separately in
 [PCZT_APDU.md](./PCZT_APDU.md).
 
+## Legacy transparent signing commands
+
+Four commands implement the transparent and V4-Sapling signing flow the app inherits from
+the legacy Bitcoin app: the host builds the transaction incrementally, and each input amount
+is authenticated by a device-issued *trusted input* rather than trusted from the wire.
+
+The INS values and their semantics are those of `app-bitcoin-legacy`
+(`lib-app-bitcoin/apdu/apdu_constants.h`), whose `doc/btc.asc` specifies the payload framing.
+Only the deviations below are Zcash-specific; the shielded flow uses the PCZT commands instead.
+
+| INS | Name | P1 | P2 |
+| --- | --- | --- | --- |
+| `0x42` | `GET_TRUSTED_INPUT` | `0x00` first chunk, `0x80` next chunk | `0x00` |
+| `0x44` | `HASH_INPUT_START` | `0x00` first chunk, `0x80` next chunk | `0x05` Sapling, `0x80` continue |
+| `0x4A` | `HASH_INPUT_FINALIZE_FULL` | `0x00` more, `0x80` last, `0xFF` change info | `0x00` |
+| `0x48` | `HASH_SIGN` | `0x00` | `0x00` |
+
+Zcash deviations:
+
+- V4, V5 and V6 transaction versions are all accepted; `P2 = 0x05` selects the Sapling variant
+  and `0x80` continues an in-progress hash.
+- Anchor streaming depends on the version: a V5 Orchard bundle commits to its anchor in the
+  hashed preimage, whereas in a V6 transaction both shielded bundles moved the anchor to the
+  authorizing digest (ZIP 229), which a trusted input never computes — so the host streams no
+  anchor at all.
+- `HASH_INPUT_FINALIZE_FULL` with `P1 = 0xFF` supplies change information, which the app uses
+  to decide which outputs to display for approval.
+
 ## INS_GET_WALLET_PUBLIC_KEY
 
 - INS: `0x40`
