@@ -329,6 +329,9 @@ pub fn orchard_ivk(ak: &[u8; 32], nk: &[u8; 32], rivk: &[u8; 32]) -> Result<[u8;
     Ok(ivk.to_repr())
 }
 
+// Isolated from its caller: `message` alone is 510 bytes and the builder below holds ~1020,
+// which must not coalesce into a frame that already carries note or ciphertext buffers.
+#[inline(never)]
 fn orchard_commit_ivk(
     ak: &pallas::Base,
     nk: &pallas::Base,
@@ -338,6 +341,7 @@ fn orchard_commit_ivk(
     sinsemilla_short_commit(ORCHARD_COMMIT_IVK_PERSONALIZATION, &message, rivk)
 }
 
+#[inline(never)]
 fn orchard_commit_ivk_message(
     ak: &pallas::Base,
     nk: &pallas::Base,
