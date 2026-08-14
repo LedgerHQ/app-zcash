@@ -11,7 +11,6 @@ use crate::consts::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
 #[cfg(feature = "zcash_unstable")]
 use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use ::orchard::keys::Scope as OrchardScope;
-use ::orchard::note::TransmittedNoteCiphertext;
 use corez::io::Read;
 use ledger_device_sdk::ecc::Secret;
 use ledger_device_sdk::hash::HashInit as _;
@@ -345,128 +344,8 @@ pub struct PcztParser {
 }
 
 impl PcztParser {
-    // APDU payload formats for this PCZT parser.
-    //
-    // This is a compact Ledger APDU subset, not the canonical `pczt::Pczt`
-    // postcard encoding. Its field order mirrors the pczt crate structs where
-    // useful. The APDU order is fixed: `Pczt` header and `common::Global`,
-    // transparent inputs, transparent outputs, then Orchard actions. `Pczt`
-    // header and `common::Global` are sent exactly once in `PCZT_HEADER`;
-    // following bundle commands start from their own bundle fields.
-    // `PCZT_TRANSPARENT_INPUT`, `PCZT_TRANSPARENT_OUTPUT`, and
-    // `PCZT_ORCHARD_ACTION` are still sent with count 0 when the corresponding
-    // section is empty.
-    //
-    // Primitive encoding:
-    //   u8/u32/u64        little-endian, except u8
-    //   bool              0x00 for false, 0x01 for true
-    //   Option<T>         0x00 for None, 0x01 followed by T for Some
-    //   Vec<u8>           CompactSize byte count, followed by bytes
-    //   Bip32Path         u8 component count, followed by BE u32 path segments
-    //
-    // PCZT header fields:
-    //   magic                  "PCZT"
-    //   version                u32, must be 1
-    //
-    // common::Global fields, in order:
-    //   tx_version             u32
-    //   version_group_id       u32
-    //   consensus_branch_id    u32
-    //   fallback_lock_time     Option<u32>
-    //   expiry_height          u32
-    //   coin_type              u32
-    //   tx_modifiable          u8
-    //   proprietary            SKIPPED
-    //
-    // transparent::Bundle subset:
-    //   inputs                 Vec<Input> as CompactSize count, followed by inputs
-    //   outputs                Vec<Output> as CompactSize count, followed by outputs
-    //
-    // transparent::Input fields, in order:
-    //   prevout_txid           [u8; 32]
-    //   prevout_index          u32
-    //   sequence               Option<u32>
-    //   required_time_lock_time SKIPPED
-    //   required_height_lock_time SKIPPED
-    //   script_sig             SKIPPED
-    //   value                  u64
-    //   script_pubkey          Vec<u8>
-    //   redeem_script          SKIPPED
-    //   partial_signatures     SKIPPED
-    //   sighash_type           u8, must be SIGHASH_ALL
-    //   bip32_derivation       BTreeMap<[u8; 33], Zip32Derivation> as:
-    //                            CompactSize entry count, followed by entries:
-    //                              key compressed_pubkey [u8; 33]
-    //                              seed_fingerprint [u8; 32]
-    //                              derivation_path as Bip32Path
-    //                            exactly one entry is currently used
-    //   ripemd160_preimages    SKIPPED
-    //   sha256_preimages       SKIPPED
-    //   hash160_preimages      SKIPPED
-    //   hash256_preimages      SKIPPED
-    //   proprietary            SKIPPED
-    //
-    // transparent::Output fields, in order:
-    //   value                  u64
-    //   script_pubkey          Vec<u8>
-    //   redeem_script          SKIPPED
-    //   bip32_derivation       BTreeMap<[u8; 33], Zip32Derivation> as:
-    //                            CompactSize entry count, followed by entries:
-    //                              key compressed_pubkey [u8; 33]
-    //                              seed_fingerprint [u8; 32]
-    //                              derivation_path as Bip32Path
-    //                            at most one entry is currently used for change
-    //   user_address           SKIPPED
-    //   proprietary            SKIPPED
-    //
-    // orchard::Bundle subset:
-    //   actions                Vec<Action> as CompactSize count, followed by actions
-    //   flags                  u8
-    //   value_sum              (u64, bool) as magnitude followed by negative-sign flag
-    //   anchor                 [u8; 32]
-    //   zkproof                SKIPPED
-    //   bsk                    SKIPPED
-    //
-    // orchard::Action fields, in order:
-    //   cv_net                 [u8; 32]
-    //   spend                  Spend subset
-    //   output                 Output subset
-    //   rcv                    Required [u8; 32], appended after output `rseed`.
-    //
-    // orchard::Spend fields, in order:
-    //   nullifier              [u8; 32]
-    //   rk                     [u8; 32]
-    //   spend_auth_sig         SKIPPED
-    //   recipient              [u8; 43], raw Orchard payment address
-    //   value                  u64
-    //   rho                    [u8; 32]
-    //   rseed                  [u8; 32]
-    //   fvk                    SKIPPED
-    //   witness                SKIPPED
-    //   alpha                  [u8; 32]
-    //                            REQUIRED by this parser for every action; unlike
-    //                            the pczt crate Option field, no option tag is sent.
-    //   zip32_derivation       Zip32Derivation as:
-    //                            REQUIRED by this parser for every action; unlike
-    //                            the pczt crate Option field, no option tag is sent.
-    //                            seed_fingerprint [u8; 32]
-    //                            derivation_path as Bip32Path
-    //   dummy_sk               SKIPPED
-    //   proprietary            SKIPPED
-    //
-    // orchard::Output fields, in order:
-    //   cmx                    [u8; 32]
-    //   ephemeral_key          [u8; 32]
-    //   enc_ciphertext         Vec<u8>, currently must be 580 bytes
-    //   out_ciphertext         Vec<u8>, currently must be 80 bytes
-    //   recipient              [u8; 43], raw Orchard payment address
-    //   value                  u64
-    //   rseed                  Required [u8; 32]
-    //   ock                    SKIPPED
-    //   zip32_derivation       SKIPPED
-    //   user_address           SKIPPED
-    //   proprietary            SKIPPED
-    //
+    // The APDU field layout, the per-bundle order and the version rules are specified in
+    // docs/PCZT_APDU.md, which is the contract the host is written against.
     pub fn new() -> Self {
         Self {
             state: PcztParserState::WaitHeaderAndGlobal,

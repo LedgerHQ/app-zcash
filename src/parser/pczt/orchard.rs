@@ -852,7 +852,9 @@ impl PcztParser {
         let address =
             UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(output.raw_address)])
                 .map(|address| address.encode(&network))
-                .unwrap_or_else(|_| format!("orchard:{}", HexSlice(&output.raw_address)));
+                // No fallback string: a recipient the user cannot check against their own
+                // wallet is worse than refusing to sign.
+                .map_err(|_| ParserError::from_str("Cannot encode PCZT orchard output address"))?;
         let memo = Self::orchard_output_memo_display(&output, is_change)?;
 
         debug!(
