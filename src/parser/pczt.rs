@@ -70,6 +70,12 @@ mod transparent;
 
 const MAGIC_BYTES: &[u8; 4] = b"PCZT";
 const PCZT_VERSION_1: u32 = 1;
+#[cfg(feature = "zcash_unstable")]
+const PCZT_VERSION_2: u32 = 2;
+#[cfg(feature = "zcash_unstable")]
+const NOTE_VERSION_ORCHARD: u8 = 0x02;
+#[cfg(feature = "zcash_unstable")]
+const NOTE_VERSION_IRONWOOD: u8 = 0x03;
 const DEFAULT_SEQUENCE: u32 = 0xFFFF_FFFF;
 const PREVOUT_SIZE: usize = 32 + 4;
 const COMPRESSED_PUBKEY_SIZE: usize = 33;
@@ -231,6 +237,8 @@ struct PcztCurrentActionState {
     alpha: Option<[u8; 32]>,
     path: Option<Bip32Path>,
     fvk: Option<OrchardFvk>,
+    #[cfg(feature = "zcash_unstable")]
+    note_plaintext_version: u8,
 }
 
 impl PcztCurrentActionState {
@@ -256,6 +264,8 @@ impl PcztCurrentActionState {
             alpha: None,
             path: None,
             fvk: None,
+            #[cfg(feature = "zcash_unstable")]
+            note_plaintext_version: NOTE_VERSION_ORCHARD,
         }
     }
 }
@@ -269,6 +279,7 @@ pub struct PcztParser {
     transparent_output_parsed_count: usize,
     outputs_reviewed: bool,
     pczt_finished: bool,
+    pczt_version: u32,
     current_input_prevout: [u8; PREVOUT_SIZE],
     current_input_sequence: u32,
     current_input_amount: [u8; 8],
@@ -466,6 +477,7 @@ impl PcztParser {
             transparent_output_parsed_count: 0,
             outputs_reviewed: false,
             pczt_finished: false,
+            pczt_version: 0,
             current_input_prevout: [0; PREVOUT_SIZE],
             current_input_sequence: 0,
             current_input_amount: [0; 8],

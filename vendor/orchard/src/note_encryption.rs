@@ -548,7 +548,10 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
+    use alloc::vec::Vec;
     use rand::rngs::OsRng;
+    use std::println;
     use zcash_note_encryption::{
         try_compact_note_decryption, try_note_decryption, try_output_recovery_with_ovk, Domain,
         EphemeralKeyBytes,
@@ -806,6 +809,408 @@ mod tests {
         assert_eq!(
             try_compact_note_decryption(&domain, &ivk, &compact),
             Some((note, recipient))
+        );
+    }
+
+    /// Generates deterministic V3 (ZIP 2005) Ironwood note-encryption test vectors for use
+    /// in the Ragger Python functional tests (`tests/standalone/test_pczt_ironwood.py`).
+    ///
+    /// Must be run inside the Ledger dev-tools Docker container (host build, not device build):
+    ///
+    /// ```sh
+    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    /// cargo test --target "$HOST" -- gen_v3_ironwood_test_vectors --nocapture
+    /// ```
+    ///
+    /// The `ledger` feature must be excluded from the build to avoid pulling in the device SDK:
+    /// run from within `vendor/orchard/` so the root `Cargo.toml`'s `features = ["ledger"]`
+    /// does not apply.
+    ///
+    /// **Why this is device-compatible:**
+    /// The enc_ciphertext is encrypted with `k_enc = KDF(ECDH(esk, pk_d), epk)`.
+    /// The device decrypts with `k_enc = KDF(ECDH(ivk, epk), epk) = KDF(ECDH(esk, pk_d), epk)`
+    /// because `pk_d = ivk·g_d` and `epk = esk·g_d`, so both DH computations yield `esk·ivk·g_d`.
+    /// Therefore the device's IVK will successfully decrypt this enc_ciphertext without us
+    /// needing to know the IVK value.
+    #[test]
+    fn gen_v3_ironwood_test_vectors() {
+        // _INTERNAL_RECIPIENT from test_pczt_ironwood.py: 11-byte diversifier + 32-byte pk_d.
+        // This is the device's internal address at m/32'/133'/0' (Speculos deterministic seed).
+        let recipient_bytes: [u8; 43] = [
+            // diversifier (11 bytes)
+            0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe,
+            // pk_d (32 bytes)
+            0x68, 0x14, 0xce, 0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09,
+            0x46, 0xf1, 0xab, 0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f,
+            0xd0, 0x52, 0xe2, 0x0a,
+        ];
+        let diversifier = Diversifier::from_bytes(recipient_bytes[..11].try_into().unwrap());
+        let pk_d =
+            DiversifiedTransmissionKey::from_bytes(recipient_bytes[11..].try_into().unwrap())
+                .unwrap();
+        let recipient = Address::from_parts(diversifier, pk_d);
+
+        // _DUMMY_NULLIFIER from test_pczt_ironwood.py — spend nullifier of the dummy action.
+        // rho = Rho::from_nf_old(nf_old) matches what the device reconstructs from the wire.
+        let nullifier_bytes: [u8; 32] = [
+            0x57, 0xaa, 0xd2, 0x67, 0x0e, 0x2e, 0x4d, 0xf6, 0x7c, 0xa8, 0x55, 0xc5, 0x39, 0x73,
+            0xdb, 0x38, 0xe7, 0x94, 0x2e, 0xfa, 0x8e, 0x90, 0x6e, 0xe9, 0x61, 0xad, 0xb7, 0x19,
+            0x55, 0xaa, 0x84, 0x23,
+        ];
+        let nf_old = Nullifier::from_bytes(&nullifier_bytes).unwrap();
+        let rho = Rho::from_nf_old(nf_old);
+
+        // Fixed rseed distinct from _DUMMY_RSEED (0x30) to produce a different V3 cmx.
+        let rseed_bytes: [u8; 32] = {
+            let mut b = [0u8; 32];
+            b[0] = 0x35;
+            b
+        };
+        let rseed = Option::from(RandomSeed::from_bytes(rseed_bytes, &rho)).expect(
+            "rseed 0x35... is valid for this rho; if this fails try a different leading byte",
+        );
+
+        // V3 (ZIP 2005) note: same Sinsemilla commitment message as V2, but rcm uses BLAKE2b-512
+        // over (rseed ‖ 0x0B ‖ g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi) — see note_commitment_v3.
+        let value = NoteValue::from_raw(10000); // same as _DUMMY_CHANGE_VALUE
+        let note: Note = Option::from(Note::from_parts(
+            recipient,
+            value,
+            rho,
+            rseed,
+            NoteVersion::V3,
+        ))
+        .expect("note construction failed — recipient or rho may be invalid");
+
+        // Derive esk from the note's rseed so the device's compact-decryption path can verify
+        // that epk == PRF-esk(rseed, rho) · g_d.  Using a fixed scalar here (as the previous
+        // version did) would cause that check to fail, making the device reject the note.
+        let esk = note.esk();
+
+        let encryptor = IronwoodNoteEncryption::new_with_esk(esk, None, note, [0u8; 512]);
+        let cmx = ExtractedNoteCommitment::from(note.commitment());
+        let ephemeral_key = IronwoodDomain::epk_bytes(encryptor.epk());
+        let enc_ciphertext_array = encryptor.encrypt_note_plaintext();
+        let enc_ciphertext: &[u8] = enc_ciphertext_array.as_ref();
+
+        // Helper: format bytes as a Python hex string literal, 64 hex chars per line.
+        let hex_lines = |bytes: &[u8]| -> String {
+            bytes
+                .chunks(32)
+                .map(|c| c.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\"\n    \"")
+        };
+
+        println!("\n# ---- V3 Ironwood test vectors (gen_v3_ironwood_test_vectors) ----");
+        println!(
+            "# Generated with: cargo test -p orchard -- gen_v3_ironwood_test_vectors --nocapture"
+        );
+        println!("# recipient  = _INTERNAL_RECIPIENT");
+        println!("# nullifier  = _DUMMY_NULLIFIER  (rho = Rho::from_nf_old(nullifier))");
+        println!("# note_value = 10000  (= _DUMMY_CHANGE_VALUE)");
+        println!("# rseed      = 0x35 followed by 31 zero bytes (note rseed, not metadata rseed)");
+        println!("# esk        = note.esk() = PRF-esk(rseed, rho) — derived, not fixed");
+        println!("# version    = NoteVersion::V3  (plaintext lead byte 0x03)\n");
+        println!(
+            "_V3_REAL_EPK = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(&ephemeral_key.0)
+        );
+        println!(
+            "_V3_REAL_CMX = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(&cmx.to_bytes())
+        );
+        println!(
+            "_V3_REAL_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(enc_ciphertext)
+        );
+
+        // Sanity check: the note commitment is stable (not randomised).
+        assert_eq!(
+            cmx,
+            ExtractedNoteCommitment::from(note.commitment()),
+            "note commitment must be deterministic"
+        );
+    }
+
+    /// Compute the V3 note commitment for the zero-value dummy output used in
+    /// `test_pczt_v2_0x03_dummy_accepted`.  Outputs the `_V3_DUMMY_CMX` Python constant.
+    ///
+    /// Run from within `vendor/orchard/` (host target, no `ledger` feature):
+    /// ```sh
+    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    /// cargo test --target "$HOST" -- gen_v3_dummy_cmx --nocapture
+    /// ```
+    #[test]
+    fn gen_v3_dummy_cmx() {
+        // _INTERNAL_RECIPIENT — same as gen_v3_ironwood_test_vectors.
+        let recipient_bytes: [u8; 43] = [
+            0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe, 0x68, 0x14, 0xce,
+            0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09, 0x46, 0xf1, 0xab,
+            0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f, 0xd0, 0x52, 0xe2,
+            0x0a,
+        ];
+        let diversifier = Diversifier::from_bytes(recipient_bytes[..11].try_into().unwrap());
+        let pk_d =
+            DiversifiedTransmissionKey::from_bytes(recipient_bytes[11..].try_into().unwrap())
+                .unwrap();
+        let recipient = Address::from_parts(diversifier, pk_d);
+
+        // _DUMMY_NULLIFIER — same as gen_v3_ironwood_test_vectors.
+        let nullifier_bytes: [u8; 32] = [
+            0x57, 0xaa, 0xd2, 0x67, 0x0e, 0x2e, 0x4d, 0xf6, 0x7c, 0xa8, 0x55, 0xc5, 0x39, 0x73,
+            0xdb, 0x38, 0xe7, 0x94, 0x2e, 0xfa, 0x8e, 0x90, 0x6e, 0xe9, 0x61, 0xad, 0xb7, 0x19,
+            0x55, 0xaa, 0x84, 0x23,
+        ];
+        let nf_old = Nullifier::from_bytes(&nullifier_bytes).unwrap();
+        let rho = Rho::from_nf_old(nf_old);
+
+        // _DUMMY_RSEED = 0x30 followed by 31 zero bytes (distinct from the real-output rseed 0x35).
+        let rseed_bytes: [u8; 32] = {
+            let mut b = [0u8; 32];
+            b[0] = 0x30;
+            b
+        };
+        let rseed = Option::from(RandomSeed::from_bytes(rseed_bytes, &rho))
+            .expect("rseed 0x30... is valid for this rho");
+
+        // Zero-value V3 dummy note.
+        let note: Note = Option::from(Note::from_parts(
+            recipient,
+            NoteValue::from_raw(0),
+            rho,
+            rseed,
+            NoteVersion::V3,
+        ))
+        .expect("note construction failed");
+
+        let cmx = ExtractedNoteCommitment::from(note.commitment());
+        let cmx_bytes = cmx.to_bytes();
+
+        println!("\n# ---- V3 dummy cmx (gen_v3_dummy_cmx) ----");
+        println!(
+            "# Generated with: cargo test --target $HOST -p orchard -- gen_v3_dummy_cmx --nocapture"
+        );
+        println!("# recipient = _INTERNAL_RECIPIENT, value = 0, nullifier = _DUMMY_NULLIFIER");
+        println!("# rseed     = 0x30 followed by 31 zero bytes (_DUMMY_RSEED)\n");
+        println!(
+            "_V3_DUMMY_CMX = bytes.fromhex(\n    \"{}\"\n)",
+            cmx_bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        );
+    }
+}
+
+#[cfg(test)]
+mod gen_v3_ext_vectors {
+    //! Generates updated V3 external-recipient action vectors for
+    //! test_pczt_ironwood.py after the firmware fix to use V3 note commitment
+    //! for spend-nullifier recomputation.
+    //!
+    //! The external action's spend note is owned by the same Speculos key
+    //! (spend_recipient = _SPEND_RECIPIENT), so its nullifier also changes
+    //! when the firmware switches from V2 → V3 note commitment.
+    //!
+    //! Run from the app-zcash worktree root (outside /app to avoid build-std):
+    //! ```sh
+    //! HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    //! cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
+    //!   --target-dir /tmp/orchard-host -- gen_v3_ext_action_vectors --nocapture
+    //! ```
+
+    use alloc::{string::String, vec::Vec};
+    use rand::rngs::OsRng;
+    use std::println;
+    use zcash_note_encryption::Domain;
+
+    use crate::{
+        keys::{DiversifiedTransmissionKey, Diversifier, FullViewingKey, Scope},
+        note::{ExtractedNoteCommitment, RandomSeed, Rho},
+        note_encryption::{IronwoodDomain, IronwoodNoteEncryption},
+        value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
+        Address, Note, NoteVersion,
+    };
+
+    const fn hex_decode_96(hex: &[u8; 192]) -> [u8; 96] {
+        let mut out = [0u8; 96];
+        let mut i = 0;
+        while i < 96 {
+            let h = if hex[i * 2] >= b'a' {
+                hex[i * 2] - b'a' + 10
+            } else {
+                hex[i * 2] - b'0'
+            };
+            let l = if hex[i * 2 + 1] >= b'a' {
+                hex[i * 2 + 1] - b'a' + 10
+            } else {
+                hex[i * 2 + 1] - b'0'
+            };
+            out[i] = (h << 4) | l;
+            i += 1;
+        }
+        out
+    }
+
+    const fn hex_decode_43(hex: &[u8; 86]) -> [u8; 43] {
+        let mut out = [0u8; 43];
+        let mut i = 0;
+        while i < 43 {
+            let h = if hex[i * 2] >= b'a' {
+                hex[i * 2] - b'a' + 10
+            } else {
+                hex[i * 2] - b'0'
+            };
+            let l = if hex[i * 2 + 1] >= b'a' {
+                hex[i * 2 + 1] - b'a' + 10
+            } else {
+                hex[i * 2 + 1] - b'0'
+            };
+            out[i] = (h << 4) | l;
+            i += 1;
+        }
+        out
+    }
+
+    // Speculos Orchard FVK bytes (ak ‖ nk ‖ rivk, 96 bytes) for m/32'/133'/0'
+    // on the Speculos default seed.
+    // Derived by compute_v3_spend_nullifier_from_speculos_seed in
+    // ledger-zcash-utils/crates/zcash-crypto/tests/ironwood_nullifier_version_check.rs
+    const FVK_BYTES: [u8; 96] = hex_decode_96(
+        b"e129bb7d06ed69a5ac01a664482ec9987fd19c40940bf76d98eb8b952974852949b0128d5072f9f92c7f7e8eb49a5434d2c04b67a30a55946d8322df3e484426f6151235e5897d34196943cb8f968312f1c8fba9ed82830b59f801b6de5da835",
+    );
+
+    // _SPEND_RECIPIENT from test_pczt_ironwood.py — also the spend_recipient
+    // in _external_recipient_ironwood_action (the external action spends our own note).
+    const SPEND_RECIPIENT: [u8; 43] = hex_decode_43(
+        b"4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+    );
+
+    // _EXT_RECIPIENT — output recipient for the external action.
+    const EXT_RECIPIENT: [u8; 43] = hex_decode_43(
+        b"4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
+    );
+
+    const EXT_SPEND_RHO: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x07;
+        b
+    };
+    const EXT_SPEND_RSEED: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x1b;
+        b
+    };
+    const EXT_RSEED: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x2f;
+        b
+    };
+    const EXT_RCV: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x43;
+        b
+    };
+
+    fn hex_lines(bytes: &[u8]) -> String {
+        bytes
+            .chunks(32)
+            .map(|c| c.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\"\n    \"")
+    }
+
+    fn hex_str(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    /// Generate updated V3 external-action vectors for test_pczt_ironwood.py.
+    #[test]
+    fn gen_v3_ext_action_vectors() {
+        let fvk = FullViewingKey::from_bytes(&FVK_BYTES).expect("Speculos Orchard FVK must decode");
+        let ext_ovk = fvk.to_ovk(Scope::External);
+
+        // ── V3 spend note (spend_value = 200 000) ──────────────────────
+        let spend_div = Diversifier::from_bytes(SPEND_RECIPIENT[..11].try_into().unwrap());
+        let spend_pk_d =
+            DiversifiedTransmissionKey::from_bytes(SPEND_RECIPIENT[11..].try_into().unwrap())
+                .expect("spend_recipient pk_d must be valid");
+        let spend_addr = Address::from_parts(spend_div, spend_pk_d);
+
+        let ext_spend_rho = Rho::from_bytes(&EXT_SPEND_RHO)
+            .into_option()
+            .expect("EXT_SPEND_RHO must be valid");
+        let ext_spend_rseed = Option::from(RandomSeed::from_bytes(EXT_SPEND_RSEED, &ext_spend_rho))
+            .expect("EXT_SPEND_RSEED must be valid for rho");
+        let spend_note: Note = Option::from(Note::from_parts(
+            spend_addr,
+            NoteValue::from_raw(200_000),
+            ext_spend_rho,
+            ext_spend_rseed,
+            NoteVersion::V3,
+        ))
+        .expect("external spend note must be valid");
+
+        let ext_nullifier = spend_note.nullifier(&fvk);
+        let ext_nf_bytes = ext_nullifier.to_bytes();
+        println!(
+            "_EXT_NULLIFIER = bytes.fromhex(\"{}\")",
+            hex_str(&ext_nf_bytes)
+        );
+
+        // ── V2 output note (value = 180 000, rho = ext_nullifier) ────────
+        let ext_div = Diversifier::from_bytes(EXT_RECIPIENT[..11].try_into().unwrap());
+        let ext_pk_d =
+            DiversifiedTransmissionKey::from_bytes(EXT_RECIPIENT[11..].try_into().unwrap())
+                .expect("ext_recipient pk_d must be valid");
+        let ext_addr = Address::from_parts(ext_div, ext_pk_d);
+
+        let ext_output_rho = Rho::from_bytes(&ext_nf_bytes)
+            .into_option()
+            .expect("ext_nullifier must be a valid field element");
+        let ext_rseed = Option::from(RandomSeed::from_bytes(EXT_RSEED, &ext_output_rho))
+            .expect("EXT_RSEED must be valid for rho");
+        let ext_output_note: Note = Option::from(Note::from_parts(
+            ext_addr,
+            NoteValue::from_raw(180_000),
+            ext_output_rho,
+            ext_rseed,
+            NoteVersion::V2,
+        ))
+        .expect("external output note must be valid");
+
+        let ext_cmx = ExtractedNoteCommitment::from(ext_output_note.commitment());
+        let ext_cmx_bytes = ext_cmx.to_bytes();
+        println!("_EXT_CMX = bytes.fromhex(\"{}\")", hex_str(&ext_cmx_bytes));
+
+        // ── Encrypt output note (external OVK) ───────────────────────────
+        let esk = ext_output_note.esk();
+        let encryptor =
+            IronwoodNoteEncryption::new_with_esk(esk, Some(ext_ovk), ext_output_note, [0u8; 512]);
+        let epk_bytes = IronwoodDomain::epk_bytes(encryptor.epk());
+        println!(
+            "_EXT_EPHEMERAL_KEY = bytes.fromhex(\"{}\")",
+            hex_str(&epk_bytes.0)
+        );
+
+        let enc_ct = encryptor.encrypt_note_plaintext();
+        println!(
+            "_EXT_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(enc_ct.as_ref())
+        );
+
+        // cv_net = ValueCommitment::derive(net = 20000, rcv = EXT_RCV)
+        let ext_rcv = ValueCommitTrapdoor::from_bytes(EXT_RCV)
+            .into_option()
+            .expect("EXT_RCV must be a valid scalar");
+        let value_net = NoteValue::from_raw(200_000) - NoteValue::from_raw(180_000);
+        let ext_cv_net = ValueCommitment::derive(value_net, ext_rcv);
+
+        let out_ct = encryptor.encrypt_outgoing_plaintext(&ext_cv_net, &ext_cmx, &mut OsRng);
+        println!(
+            "_EXT_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(out_ct.as_ref())
         );
     }
 }

@@ -50,6 +50,14 @@ const ORCHARD_RIVK_INTERNAL_DOMAIN_SEPARATOR: u8 = 0x83;
 const ORCHARD_ESK_DOMAIN_SEPARATOR: u8 = 0x04;
 const ORCHARD_RCM_DOMAIN_SEPARATOR: u8 = 0x05;
 const ORCHARD_PSI_DOMAIN_SEPARATOR: u8 = 0x09;
+// Note plaintext version bytes (lead byte of enc_ciphertext plaintext).
+pub(crate) const NOTE_VERSION_ORCHARD: u8 = 0x02;
+// ZIP 2005 §3.2.1 (Ironwood): V3 note plaintext version byte and quantum-recoverable rcm
+// domain separator.  Only available when V3 note support is enabled.
+#[cfg(feature = "zcash_unstable")]
+pub(crate) const NOTE_VERSION_IRONWOOD: u8 = 0x03;
+#[cfg(feature = "zcash_unstable")]
+const ORCHARD_QR_RCM_DOMAIN_SEPARATOR: u8 = 0x0B;
 const PRF_EXPAND_BYTES: usize = 64;
 const ORCHARD_VALUE_COMMITMENT_VALUE_BASEPOINT_BYTES: [u8; 32] = [
     0x67, 0x43, 0xf9, 0x3a, 0x6e, 0xbd, 0xa7, 0x2a, 0x8c, 0x7c, 0x5a, 0x2b, 0x7f, 0xa3, 0x04, 0xfe,
@@ -222,6 +230,22 @@ pub fn orchard_spend_nullifier_bytes(
     orchard::spend_nullifier_bytes(nk, raw_address, value, rho, rseed)
 }
 
+/// V3 (ZIP 2005 / Ironwood) variant of [`orchard_spend_nullifier_bytes`].
+///
+/// Use this when recomputing the nullifier of a V3 spend note inside a PCZT;
+/// V2 and V3 notes share the same Sinsemilla message structure but derive the
+/// commitment trapdoor (rcm) differently.
+#[cfg(feature = "zcash_unstable")]
+pub fn orchard_spend_nullifier_bytes_v3(
+    nk: &[u8; 32],
+    raw_address: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    rho: &[u8; 32],
+    rseed: &[u8; 32],
+) -> Result<[u8; 32], Error> {
+    orchard::spend_nullifier_bytes_v3(nk, raw_address, value, rho, rseed)
+}
+
 pub fn orchard_note_commitment_bytes(
     raw_address: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
     value: u64,
@@ -229,6 +253,21 @@ pub fn orchard_note_commitment_bytes(
     rseed: &[u8; 32],
 ) -> Result<[u8; 32], Error> {
     orchard::note_commitment_bytes(raw_address, value, rho, rseed)
+}
+
+/// Computes the V3 (ZIP 2005 / Ironwood) note commitment for a dummy output.
+///
+/// Identical Sinsemilla message as V2 (`g_d ‖ pk_d ‖ value ‖ rho ‖ psi`) but the
+/// trapdoor uses the quantum-recoverable rcm derivation (domain separator 0x0B,
+/// fields g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi hashed alongside rseed).
+#[cfg(feature = "zcash_unstable")]
+pub fn orchard_note_commitment_v3_bytes(
+    recipient: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    nullifier: &[u8; 32],
+    rseed: &[u8; 32],
+) -> Result<[u8; 32], Error> {
+    orchard::orchard_note_commitment_v3(recipient, value, nullifier, rseed)
 }
 
 /// Parses a compressed Pallas point encoding and rejects the identity.

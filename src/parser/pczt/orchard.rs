@@ -453,6 +453,10 @@ impl PcztParser {
         self.current_action.alpha = None;
         self.current_action.path = None;
         self.current_action.fvk = None;
+        #[cfg(feature = "zcash_unstable")]
+        {
+            self.current_action.note_plaintext_version = NOTE_VERSION_ORCHARD;
+        }
     }
 
     pub(super) fn reset_orchard_bundle_state(&mut self, action_count: usize) {
@@ -542,7 +546,11 @@ impl PcztParser {
             .current_action
             .out_ciphertext
             .ok_or_else(|| ParserError::from_str("Missing PCZT orchard out_ciphertext"))?;
-        let note_ciphertext = self.current_orchard_note_ciphertext(out_ciphertext)?;
+        if self.current_action.enc_ciphertext.len() != ORCHARD_ENC_CIPHERTEXT_SIZE {
+            return Err(ParserError::from_str(
+                "Missing PCZT orchard enc_ciphertext for decryption",
+            ));
+        }
 
         self.verify_current_orchard_cv_net()?;
         // Dummy spends (spend_value == 0) use a throwaway key; recipient membership
@@ -565,7 +573,15 @@ impl PcztParser {
             // Real spend: the device will be asked to sign this action.
             self.orchard_real_spend_count = self.orchard_real_spend_count.saturating_add(1);
         }
-        self.validate_current_orchard_output(ctx, &note_ciphertext)?;
+        // Move the enc_ciphertext buffer out of `self` for the duration of the
+        // validation call: the buffer already lives on the heap, so lending it
+        // out keeps the 580 bytes off this frame while still allowing the
+        // validation path to take `&mut self`. It goes back below with its
+        // capacity intact, so the per-action allocation stays stable.
+        let enc_ciphertext = core::mem::take(&mut self.current_action.enc_ciphertext);
+        let validated = self.validate_current_orchard_output(ctx, &enc_ciphertext, &out_ciphertext);
+        self.current_action.enc_ciphertext = enc_ciphertext;
+        validated?;
 
         self.orchard_spend_value_sum = self
             .orchard_spend_value_sum
@@ -611,43 +627,15 @@ impl PcztParser {
         Ok(())
     }
 
-    #[inline(never)]
-    fn current_orchard_note_ciphertext(
-        &self,
-        out_ciphertext: [u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
-    ) -> Result<TransmittedNoteCiphertext, ParserError> {
-        if self.current_action.enc_ciphertext.len() != ORCHARD_ENC_CIPHERTEXT_SIZE {
-            return Err(ParserError::from_str(
-                "Missing PCZT orchard enc_ciphertext for decryption",
-            ));
-        }
-
-        let enc_ciphertext: [u8; ORCHARD_ENC_CIPHERTEXT_SIZE] = self
-            .current_action
-            .enc_ciphertext
-            .as_slice()
-            .try_into()
-            .map_err(|_| ParserError::from_str("Bad PCZT orchard enc_ciphertext length"))?;
-
-        Ok(TransmittedNoteCiphertext {
-            epk_bytes: self.current_action.ephemeral_key,
-            enc_ciphertext,
-            out_ciphertext,
-        })
-    }
-
-    fn current_orchard_compact_action(
-        &self,
-        note_ciphertext: &TransmittedNoteCiphertext,
-    ) -> OrchardCompactAction {
+    fn current_orchard_compact_action(&self, enc_ciphertext: &[u8]) -> OrchardCompactAction {
         let mut enc_ciphertext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
         enc_ciphertext_prefix
-            .copy_from_slice(&note_ciphertext.enc_ciphertext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
+            .copy_from_slice(&enc_ciphertext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
 
         OrchardCompactAction {
             nullifier: self.current_action.nullifier,
             cmx: self.current_action.cmx,
-            ephemeral_key: note_ciphertext.epk_bytes,
+            ephemeral_key: self.current_action.ephemeral_key,
             enc_ciphertext_prefix,
         }
     }
@@ -655,17 +643,23 @@ impl PcztParser {
     fn try_decipher_current_orchard_output(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
-        note_ciphertext: &TransmittedNoteCiphertext,
+        enc_ciphertext: &[u8],
+        out_ciphertext: &[u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
     ) -> Result<bool, ParserError> {
         let Some(keys) = ctx.tx_info.orchard_decipher_keys.as_ref() else {
             debug!("No PCZT orchard decipher keys available");
             return Ok(false);
         };
 
-        let compact = self.current_orchard_compact_action(note_ciphertext);
+        let compact = self.current_orchard_compact_action(enc_ciphertext);
         let network = keys.network;
 
-        match decipher_compact_value(&keys.internal_ivk, &compact) {
+        match decipher_compact_value(
+            &keys.internal_ivk,
+            &compact,
+            #[cfg(feature = "zcash_unstable")]
+            false, // V5 Orchard pool does not carry V3 notes
+        ) {
             Ok(Some(output)) => {
                 self.validate_deciphered_orchard_output(&output)?;
                 self.push_deciphered_orchard_output(ctx, output, network, true)?;
@@ -682,11 +676,16 @@ impl PcztParser {
             compact,
             rk: self.current_action.rk,
             cv_net: self.current_action.cv_net,
-            enc_ciphertext: &note_ciphertext.enc_ciphertext,
-            out_ciphertext: note_ciphertext.out_ciphertext,
+            enc_ciphertext,
+            out_ciphertext: *out_ciphertext,
         };
 
-        match decipher_value_with_ovk(&keys.external_ovk, &action) {
+        match decipher_value_with_ovk(
+            &keys.external_ovk,
+            &action,
+            #[cfg(feature = "zcash_unstable")]
+            false, // V5 Orchard pool does not carry V3 notes
+        ) {
             Ok(Some(output)) => {
                 self.validate_deciphered_orchard_output(&output)?;
                 self.push_deciphered_orchard_output(ctx, output, network, false)?;
@@ -706,9 +705,10 @@ impl PcztParser {
     fn validate_current_orchard_output(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
-        note_ciphertext: &TransmittedNoteCiphertext,
+        enc_ciphertext: &[u8],
+        out_ciphertext: &[u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
     ) -> Result<(), ParserError> {
-        if self.try_decipher_current_orchard_output(ctx, note_ciphertext)? {
+        if self.try_decipher_current_orchard_output(ctx, enc_ciphertext, out_ciphertext)? {
             return Ok(());
         }
 
