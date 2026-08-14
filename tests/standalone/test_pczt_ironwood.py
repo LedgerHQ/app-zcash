@@ -56,7 +56,9 @@ _SPEND_RECIPIENT = bytes.fromhex(
 # Orchard action carries its own vectors (_ORCHARD_NULLIFIER / _ORCHARD_CMX) below.
 _CV_NET = bytes.fromhex("00b3324110776396d31646041679fd6530d57c353c6be0a93a0cd55b30aa6d8b")
 _NULLIFIER = bytes.fromhex("ed37cc733c228dc3dda2cf088ba646f9d204adc9d8d6f95ec36126eb742c3a10")
-_CMX = bytes.fromhex("aa5a6343c80fff74db58be9d847515ab8456837633b6cdf52305544bc5107c31")
+# V3 note commitment: recipient _INTERNAL_RECIPIENT, value 0, nullifier _NULLIFIER,
+# rseed _RSEED. Regenerate with vendor/orchard gen_v3_valid_action_cmx.
+_CMX = bytes.fromhex("704b2bfa354eb974b10efe385d7ec56a12abbb906a3a95500bf9d6bbfcb7b73e")
 _RCV = bytes.fromhex("4200000000000000000000000000000000000000000000000000000000000000")
 _RSEED = bytes.fromhex("2e00000000000000000000000000000000000000000000000000000000000000")
 _SPEND_RHO = bytes.fromhex("0600000000000000000000000000000000000000000000000000000000000000")
@@ -142,14 +144,14 @@ _EXT_RECIPIENT = bytes.fromhex(
 )
 _EXT_CV_NET = bytes.fromhex("2bbcd0793d399b207b228ca760f2b51ac8d6866e2649b3c3ff1e67b454c5a6bf")
 _EXT_NULLIFIER = bytes.fromhex("6637a5b7cacadc75ef35dccd84b66b24d15d1f26fa342f13b65dcb577b119e28")
-_EXT_CMX = bytes.fromhex("50f6dcab67d8dafab6d2b80bef9e8f600c47bcaf78bb2b777dcf948359f84232")
+_EXT_CMX = bytes.fromhex("d3498e9df3e18af5621052a94ec68e1a1a828c0145480a5bf049b5eebd696717")
 _EXT_EPHEMERAL_KEY = bytes.fromhex("5d8fb211bc79674ad8150af9983a46f3860f34849e6ad71c584f0eda37f8a399")
 _EXT_SPEND_RHO = bytes.fromhex("0700000000000000000000000000000000000000000000000000000000000000")
 _EXT_SPEND_RSEED = bytes.fromhex("1b00000000000000000000000000000000000000000000000000000000000000")
 _EXT_RCV = bytes.fromhex("4300000000000000000000000000000000000000000000000000000000000000")
 _EXT_RSEED = bytes.fromhex("2f00000000000000000000000000000000000000000000000000000000000000")
 _EXT_ENC_CIPHERTEXT = bytes.fromhex(
-    "898c16fa01eb2a60823bdaf4d094e72dc9bd68d073cc4907c292439289457016"
+    "888c16fa01eb2a60823bdaf4d094e72dc9bd68d073cc4907c292439289457016"
     "e3a630bb9767cd0d79e149f07be066b45bf08a72f983713c1d79e880801da528"
     "3bf62636ec55bc0a0899d68355bac2e45f00a4af4dc5ae1d6ecd383c022e03d3"
     "eb25d881fcead28d32a0b356cf95c590a3208c2f8d7a51b40c5b82a62bb24988"
@@ -166,13 +168,13 @@ _EXT_ENC_CIPHERTEXT = bytes.fromhex(
     "29a15a5b43cd014d61dfd537285ea480ba47bc0ac637c0b92878469d14e223ae"
     "c4d06cca3d396912344a05d97a32e99bd9b1e8e8eb44d9545decef609515880a"
     "d541dc9271247f1c09a03fc1eed8496f07ce3c83c08109ad071ba81565f416f1"
-    "cb50a680ad85a12d7401ff280ad2df7a4165afa2f9db0c7bc07e0d7668657366"
-    "aa2e90e0"
+    "cb50a680ad85a12d7401ff280ad2df7a4165afa22f6ba8a463e5330d0dd08acb"
+    "ca1abe2f"
 )
 _EXT_OUT_CIPHERTEXT = bytes.fromhex(
-    "41fcc8885980340dca7bfcfac6438eed5b11e9c47ae262c88e2c721de73fff1f"
-    "2df857808f4808ab4baa0f2870bf026fc5b8c356587df2b38bca8b620a6ecc5c"
-    "9aa757d4e81c7bd6ac3992b6c67c5f5b"
+    "7a475d74d20e5bee07e7dc6ba251750633846d775317a74fe1db731f47ed9d30"
+    "4e90a0317ce9ba3aa19aaef3cb4f8ed4df284ca4424228d3287398642c4bc24e"
+    "5b6b4e2e0e7be56dda6ccee859e93530"
 )
 
 # Memo action constants — identical to the Orchard action in
@@ -184,10 +186,10 @@ _MEMO_CV_NET = bytes.fromhex("fd87b590de6e73dbf0372fc4e80e4c9a44c6f9b196fd296165
 _MEMO_NULLIFIER = bytes.fromhex("781c4faf960206510fdc72739267fa193d9e012dbc68998d35539837e520ae2a")
 _MEMO_SPEND_RHO = bytes.fromhex("0100000000000000000000000000000000000000000000000000000000000000")
 _MEMO_SPEND_RSEED = bytes.fromhex("1500000000000000000000000000000000000000000000000000000000000000")
-_MEMO_CMX = bytes.fromhex("8fa021d7ce7e10ac828106e295d0daaec54ca3101f22054e90a4bb9b61a38000")
+_MEMO_CMX = bytes.fromhex("2c26565e51efead30e17ccde59fbba80f15e727392480ac714d5e6e9c5ce3724")
 _MEMO_EPHEMERAL_KEY = bytes.fromhex("7895cdaf491fc7b6754bbe1339eab4f4d142e59fff9cf8d3820217f1e940801b")
 _MEMO_ENC_CIPHERTEXT = bytes.fromhex(
-    "ffebe7c7d7f8e08fd0baffb71f54ca6fad3b8a1b1702be187bcc24f1874a48bc"
+    "feebe7c7d7f8e08fd0baffb71f54ca6fad3b8a1b1702be187bcc24f1874a48bc"
     "3013c44c8d0aaadfbdbebeb31c3eda96e539d9853c28766cee658408606d473c"
     "76b102d20e11eb6a69bc90a1cc543f49d32d30b47241d1632e6dcba30492b6a7"
     "bdbaafb9f9dd1e68c2ac12d17b485aed2fb8ba6162f4ec70f8b3c045c4db74fd"
@@ -204,13 +206,13 @@ _MEMO_ENC_CIPHERTEXT = bytes.fromhex(
     "353759398d25a5a2611cf243ff44f732cdc57312b7dfe386118a1e9377f36d7e"
     "e312be7ce3c0efa96228a83653a607e00d556f8e04defbb39a2179bb2ed8a038"
     "9bb157c75913236e6f9ddf21dcc7108b804c1fa194b2603058e03da7ab3f6ee5"
-    "dacb4fc3769879d72fc21f68116f0af30414236191a3d962f29d7edab27b8e9e"
-    "bd96e21f"
+    "dacb4fc3769879d72fc21f68116f0af30414236128f8b21f627ec43a1ef1f920"
+    "dece1299"
 )  # noqa: E501
 _MEMO_OUT_CIPHERTEXT = bytes.fromhex(
-    "9964518f9947818c4b75d0aad44fd05bb75a2ed34ff2a915c080e829a150cd84"
-    "91272ea43bf99db6fc677560484f7667c8ee7307c1acc44873068ef0475b940a"
-    "62834f31fad9a486f183a5e2d030a01b"
+    "f72616bdd9af44610bf009b2d0e3fd468904f86490eece0bbc1001346aef8f38"
+    "dafd8d7b9ca601541c114be9bf855a030d1426aba8369ae3101d154b99774487"
+    "114eb9078bd9589f20ec006ba1efdaba"
 )  # noqa: E501
 _MEMO_RCV = bytes.fromhex("3d00000000000000000000000000000000000000000000000000000000000000")
 _MEMO_RSEED = bytes.fromhex("2900000000000000000000000000000000000000000000000000000000000000")
@@ -329,9 +331,9 @@ def _dummy_ironwood_action() -> PcztIronwoodAction:
         rk=_RK_ALPHA_1,
         alpha=_ALPHA,
         signing_path=_SIGNING_PATH,
-        cmx=_DUMMY_CMX,
-        ephemeral_key=_DUMMY_EPHEMERAL_KEY,
-        enc_ciphertext=_DUMMY_ENC_CIPHERTEXT,
+        cmx=_V3_REAL_CMX,
+        ephemeral_key=_V3_REAL_EPK,
+        enc_ciphertext=_V3_REAL_ENC_CIPHERTEXT,
         out_ciphertext=_DUMMY_OUT_CIPHERTEXT,
         rcv=_DUMMY_RCV,
         rseed=_DUMMY_RSEED,
@@ -795,8 +797,8 @@ def test_pczt_v5_finished_marker_regression(
 # The bundle carries both pools, so the Ironwood action fields enter the V6 sighash too:
 # regenerating the Ironwood vectors changes this signature as well.
 _EXPECTED_V6_ORCHARD_SIG = bytes.fromhex(
-    "60f093acf0f787c3ebff8ad338986a4f308ee8b04008fdbdcf699365cc94c2a2"
-    "ccac6e9ac38b2509d40e3cb51b0f10ca583442523695e9a29309c57dd98f7d17"
+    "d8135f4f857948ed5b3bffe37cdf2df87d7be666dbdff5deebc806596383668d"
+    "dbc2c635a7e9f004387cd11bcaa5f71801786916fcbc50d809f12b24bf25d23b"
 )
 
 # Second anchor: first byte flipped so the Orchard anchor bytes differ in every bit
@@ -908,8 +910,8 @@ def test_pczt_ironwood_sign_replay_in_session_rejected(
 # Generated with zcash_unstable; the empty Orchard component uses the V6 personalization
 # b"ZTxIdOrchardH_v6" (ZIP 229), not the V5 b"ZTxIdOrchardHash".
 _EXPECTED_V6_IRONWOOD_SIG = bytes.fromhex(
-    "fb7e898023ba9fbf8439e01da90022eb9d16df625f6a6c9fcd4d66f355c8aaba"
-    "b6b09d0cc64cf1bf86859f809554a48e3a2c3c3b05f822a91e7060809ebcf715"
+    "824a4cf72c60ec42e5269a8b725449f53938ea2dabbe6875296857c234cffebe"
+    "526f19bc1c102aadad8970c5e11fbfeb9ed0032563d071e6b2ccada7c4c4431c"
 )
 
 

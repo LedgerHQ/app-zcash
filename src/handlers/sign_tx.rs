@@ -40,7 +40,6 @@ pub fn handler_hash_input_start(
         // only follow a legacy round. `is_v6` is set by the PCZT path alone: seeing it
         // here means the host interleaved two incompatible flows, and continuing would
         // parse legacy fields under a V6 transaction version.
-        #[cfg(feature = "zcash_unstable")]
         if ctx.tx_info.is_v6 {
             error!("Legacy continuation after a V6 PCZT header");
             return Err(AppSW::BadState);

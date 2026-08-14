@@ -12,10 +12,7 @@ fn are_pczt_transparent_signatures_done(ctx: &TxContext) -> bool {
 }
 
 fn are_pczt_signatures_done(ctx: &TxContext) -> bool {
-    #[cfg(feature = "zcash_unstable")]
     let ironwood_done = ctx.pczt_parser.are_ironwood_signatures_done();
-    #[cfg(not(feature = "zcash_unstable"))]
-    let ironwood_done = true;
     are_pczt_transparent_signatures_done(ctx)
         && ctx.pczt_parser.are_orchard_signatures_done()
         && ironwood_done
@@ -205,7 +202,6 @@ pub fn handler_pczt_orchard_action(
     Ok(())
 }
 
-#[cfg(feature = "zcash_unstable")]
 pub fn handler_pczt_ironwood_action(
     comm: &mut Comm,
     ctx: &mut TxContext,
@@ -407,7 +403,6 @@ pub fn handler_pczt_sign_orchard(
     Ok(())
 }
 
-#[cfg(feature = "zcash_unstable")]
 pub fn handler_pczt_sign_ironwood(
     comm: &mut Comm,
     ctx: &mut TxContext,

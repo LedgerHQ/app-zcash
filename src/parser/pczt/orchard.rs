@@ -64,7 +64,6 @@ impl PcztParser {
                 .init_with_perso(ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION));
 
             // V6: switch bundle-level personalization; action-level strings are unchanged.
-            #[cfg(feature = "zcash_unstable")]
             if ctx.tx_info.is_v6 {
                 ok!(ctx
                     .hashers
@@ -346,14 +345,11 @@ impl PcztParser {
     ) -> Result<(), ParserError> {
         // V5 Orchard uses orchard_insecure_v1 (current mainnet, pre-NU6.2).
         // V6 Orchard uses orchard_v3 (NU6.3, enables cross-address flag bit 2).
-        #[cfg(feature = "zcash_unstable")]
         let bundle_version = if ctx.tx_info.is_v6 {
             BundleVersion::orchard_v3()
         } else {
             BundleVersion::orchard_insecure_v1()
         };
-        #[cfg(not(feature = "zcash_unstable"))]
-        let bundle_version = BundleVersion::orchard_insecure_v1();
         let flags = ok!(orchard_component::read_flags(&mut *reader, bundle_version));
         self.current_action.flags = ok!(
             flags.to_byte(bundle_version).ok_or(()),
@@ -453,7 +449,6 @@ impl PcztParser {
         self.current_action.alpha = None;
         self.current_action.path = None;
         self.current_action.fvk = None;
-        #[cfg(feature = "zcash_unstable")]
         {
             self.current_action.note_plaintext_version = NOTE_VERSION_ORCHARD;
         }
@@ -654,12 +649,7 @@ impl PcztParser {
         let compact = self.current_orchard_compact_action(enc_ciphertext);
         let network = keys.network;
 
-        match decipher_compact_value(
-            &keys.internal_ivk,
-            &compact,
-            #[cfg(feature = "zcash_unstable")]
-            false, // V5 Orchard pool does not carry V3 notes
-        ) {
+        match decipher_compact_value(&keys.internal_ivk, &compact, NOTE_VERSION_ORCHARD) {
             Ok(Some(output)) => {
                 self.validate_deciphered_orchard_output(&output)?;
                 self.push_deciphered_orchard_output(ctx, output, network, true)?;
@@ -680,12 +670,7 @@ impl PcztParser {
             out_ciphertext: *out_ciphertext,
         };
 
-        match decipher_value_with_ovk(
-            &keys.external_ovk,
-            &action,
-            #[cfg(feature = "zcash_unstable")]
-            false, // V5 Orchard pool does not carry V3 notes
-        ) {
+        match decipher_value_with_ovk(&keys.external_ovk, &action, NOTE_VERSION_ORCHARD) {
             Ok(Some(output)) => {
                 self.validate_deciphered_orchard_output(&output)?;
                 self.push_deciphered_orchard_output(ctx, output, network, false)?;
@@ -1074,9 +1059,6 @@ impl PcztParser {
             .orchard_hasher
             .update(&self.orchard_value_balance.to_le_bytes()));
         // V6: anchor goes to the authorizing-data digest, not the sighash.
-        #[cfg(not(feature = "zcash_unstable"))]
-        ok!(ctx.hashers.orchard_hasher.update(anchor));
-        #[cfg(feature = "zcash_unstable")]
         if !ctx.tx_info.is_v6 {
             ok!(ctx.hashers.orchard_hasher.update(anchor));
         }
@@ -1312,7 +1294,6 @@ impl PcztParser {
         // is always called after this point and will invoke review_outputs. A V6 PCZT without an
         // Ironwood bundle would leave outputs_reviewed = false, permanently blocking signing — this
         // is the correct fail-closed behavior for an out-of-spec transaction.
-        #[cfg(feature = "zcash_unstable")]
         if ctx.tx_info.is_v6 {
             return Ok(());
         }

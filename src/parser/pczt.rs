@@ -6,9 +6,7 @@ use ::orchard::bundle::commitments::{
 use alloc::{format, string::ToString, vec::Vec};
 use core::{cmp, mem};
 
-#[cfg(feature = "zcash_unstable")]
 use crate::consts::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
-#[cfg(feature = "zcash_unstable")]
 use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use ::orchard::keys::Scope as OrchardScope;
 use corez::io::Read;
@@ -26,7 +24,6 @@ use zcash_transparent::bundle::OutPoint;
 
 use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
-#[cfg(feature = "zcash_unstable")]
 use crate::consts::MAX_PCZT_IRONWOOD_ACTIONS_NUMBER;
 use crate::consts::{
     MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
@@ -62,18 +59,14 @@ use super::reader::{ByteReader, ReadBytesExt};
 use super::{ParserError, finalize_and_log_hash, ok};
 
 mod common;
-#[cfg(feature = "zcash_unstable")]
 mod ironwood;
 mod orchard;
 mod transparent;
 
 const MAGIC_BYTES: &[u8; 4] = b"PCZT";
 const PCZT_VERSION_1: u32 = 1;
-#[cfg(feature = "zcash_unstable")]
 const PCZT_VERSION_2: u32 = 2;
-#[cfg(feature = "zcash_unstable")]
 const NOTE_VERSION_ORCHARD: u8 = 0x02;
-#[cfg(feature = "zcash_unstable")]
 const NOTE_VERSION_IRONWOOD: u8 = 0x03;
 const DEFAULT_SEQUENCE: u32 = 0xFFFF_FFFF;
 const PREVOUT_SIZE: usize = 32 + 4;
@@ -116,25 +109,15 @@ enum PcztParserState {
     WaitOrchardOutputMetadata,
     WaitOrchardTrailer,
     OrchardActionsDone,
-    #[cfg(feature = "zcash_unstable")]
     WaitIronwoodAction,
-    #[cfg(feature = "zcash_unstable")]
     WaitIronwoodZip32Derivation,
-    #[cfg(feature = "zcash_unstable")]
     WaitIronwoodOutput,
-    #[cfg(feature = "zcash_unstable")]
     WaitIronwoodEncCiphertextLen,
-    #[cfg(feature = "zcash_unstable")]
     ProcessIronwoodEncCiphertext,
-    #[cfg(feature = "zcash_unstable")]
     WaitIronwoodOutCiphertextLen,
-    #[cfg(feature = "zcash_unstable")]
     ProcessIronwoodOutCiphertext,
-    #[cfg(feature = "zcash_unstable")]
     WaitIronwoodOutputMetadata,
-    #[cfg(feature = "zcash_unstable")]
     WaitIronwoodTrailer,
-    #[cfg(feature = "zcash_unstable")]
     IronwoodActionsDone,
 }
 
@@ -155,7 +138,6 @@ impl PcztParserState {
         )
     }
 
-    #[cfg(feature = "zcash_unstable")]
     fn is_ironwood_state(self) -> bool {
         matches!(
             self,
@@ -203,7 +185,6 @@ pub struct PcztParserCtx<'ctx> {
 }
 
 /// Ironwood signing records share the same layout as Orchard — alias for correct naming.
-#[cfg(feature = "zcash_unstable")]
 type PcztIronwoodActionSigningRecord = PcztOrchardActionSigningRecord;
 
 /// Scratch state for the single action being parsed, shared by the Orchard and
@@ -236,7 +217,6 @@ struct PcztCurrentActionState {
     alpha: Option<[u8; 32]>,
     path: Option<Bip32Path>,
     fvk: Option<OrchardFvk>,
-    #[cfg(feature = "zcash_unstable")]
     note_plaintext_version: u8,
 }
 
@@ -263,7 +243,6 @@ impl PcztCurrentActionState {
             alpha: None,
             path: None,
             fvk: None,
-            #[cfg(feature = "zcash_unstable")]
             note_plaintext_version: NOTE_VERSION_ORCHARD,
         }
     }
@@ -315,29 +294,18 @@ pub struct PcztParser {
     // Derivation path the cached spending key belongs to, used to reject a
     // second Orchard action declaring a different path.
     orchard_spending_key_path: Option<Bip32Path>,
-    #[cfg(feature = "zcash_unstable")]
     is_v6_tx: bool,
     has_orchard_bundle: bool,
-    #[cfg(feature = "zcash_unstable")]
     has_ironwood_bundle: bool,
-    #[cfg(feature = "zcash_unstable")]
     ironwood_action_count: usize,
-    #[cfg(feature = "zcash_unstable")]
     ironwood_action_parsed_count: usize,
     // Ironwood actions carrying a real spend, i.e. the ones the device will sign.
-    #[cfg(feature = "zcash_unstable")]
     ironwood_real_spend_count: usize,
-    #[cfg(feature = "zcash_unstable")]
     ironwood_signing_records: Vec<PcztIronwoodActionSigningRecord>,
-    #[cfg(feature = "zcash_unstable")]
     ironwood_signed_action_count: usize,
-    #[cfg(feature = "zcash_unstable")]
     ironwood_signature_digest: Option<[u8; 32]>,
-    #[cfg(feature = "zcash_unstable")]
     ironwood_value_balance: i64,
-    #[cfg(feature = "zcash_unstable")]
     ironwood_spend_value_sum: u64,
-    #[cfg(feature = "zcash_unstable")]
     ironwood_output_value_sum: u64,
     script_bytes: Vec<u8>,
     pool_field_bytes: Vec<u8>,
@@ -375,28 +343,17 @@ impl PcztParser {
             current_action: PcztCurrentActionState::new(),
             orchard_spending_key: None,
             orchard_spending_key_path: None,
-            #[cfg(feature = "zcash_unstable")]
             is_v6_tx: false,
             has_orchard_bundle: false,
-            #[cfg(feature = "zcash_unstable")]
             has_ironwood_bundle: false,
-            #[cfg(feature = "zcash_unstable")]
             ironwood_action_count: 0,
-            #[cfg(feature = "zcash_unstable")]
             ironwood_action_parsed_count: 0,
-            #[cfg(feature = "zcash_unstable")]
             ironwood_real_spend_count: 0,
-            #[cfg(feature = "zcash_unstable")]
             ironwood_signing_records: Vec::new(),
-            #[cfg(feature = "zcash_unstable")]
             ironwood_signed_action_count: 0,
-            #[cfg(feature = "zcash_unstable")]
             ironwood_signature_digest: None,
-            #[cfg(feature = "zcash_unstable")]
             ironwood_value_balance: 0,
-            #[cfg(feature = "zcash_unstable")]
             ironwood_spend_value_sum: 0,
-            #[cfg(feature = "zcash_unstable")]
             ironwood_output_value_sum: 0,
             script_bytes: Vec::new(),
             pool_field_bytes: Vec::new(),
@@ -465,56 +422,33 @@ impl PcztParser {
                 | PcztParserState::WaitTransparentOutputBip32Derivation
                 | PcztParserState::TransparentOutputsDone
         ) || self.state.is_orchard_state()
-            || {
-                #[cfg(feature = "zcash_unstable")]
-                {
-                    self.state.is_ironwood_state()
-                }
-                #[cfg(not(feature = "zcash_unstable"))]
-                {
-                    false
-                }
-            }
+            || self.state.is_ironwood_state()
     }
 
     pub fn is_transparent_outputs_finished(&self) -> bool {
         matches!(self.state, PcztParserState::TransparentOutputsDone)
             || self.state.is_orchard_state()
-            || {
-                #[cfg(feature = "zcash_unstable")]
-                {
-                    self.state.is_ironwood_state()
-                }
-                #[cfg(not(feature = "zcash_unstable"))]
-                {
-                    false
-                }
-            }
+            || self.state.is_ironwood_state()
     }
 
     pub fn is_orchard_actions_finished(&self) -> bool {
         if matches!(self.state, PcztParserState::OrchardActionsDone) {
             return true;
         }
-        #[cfg(feature = "zcash_unstable")]
         if self.state.is_ironwood_state() {
             return true;
         }
         false
     }
 
-    #[cfg(feature = "zcash_unstable")]
     pub fn is_ironwood_actions_finished(&self) -> bool {
         matches!(self.state, PcztParserState::IronwoodActionsDone)
     }
 
     pub fn is_ready_to_sign(&self) -> bool {
         let orchard_done = !self.has_orchard_bundle || self.is_orchard_actions_finished();
-        #[cfg(feature = "zcash_unstable")]
         let ironwood_done =
             !self.is_v6_tx || !self.has_ironwood_bundle || self.is_ironwood_actions_finished();
-        #[cfg(not(feature = "zcash_unstable"))]
-        let ironwood_done = true;
         orchard_done && ironwood_done && self.outputs_reviewed
     }
 
@@ -727,7 +661,6 @@ impl PcztParser {
         self.reset_on_error(result)
     }
 
-    #[cfg(feature = "zcash_unstable")]
     pub fn parse_ironwood_actions(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
