@@ -3,7 +3,6 @@ use core::{iter, mem};
 use ledger_device_sdk::hash::sha2::Sha2_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 
-#[cfg(feature = "zcash_unstable")]
 use super::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use super::personalization::{
     ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION,
@@ -61,7 +60,6 @@ mod transparent;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ActionBundle {
     Orchard,
-    #[cfg(feature = "zcash_unstable")]
     Ironwood,
 }
 
@@ -163,7 +161,6 @@ pub struct LegacyParser {
     sapling_output_count: usize,
     sapling_output_parsed_count: usize,
     orchard_action_count: usize,
-    #[cfg(feature = "zcash_unstable")]
     ironwood_action_count: usize,
     /// Shared by both action bundles, which are streamed one after the other.
     action_parsed_count: usize,
@@ -192,7 +189,6 @@ impl LegacyParser {
             sapling_output_count: 0,
             sapling_output_parsed_count: 0,
             orchard_action_count: 0,
-            #[cfg(feature = "zcash_unstable")]
             ironwood_action_count: 0,
             action_parsed_count: 0,
 
@@ -316,7 +312,6 @@ impl LegacyParser {
         match (self.mode, version, ctx.tx_state.is_tx_parsed_once) {
             // V6 (ZIP-229) is only reachable in TrustedInput mode: the app never signs
             // a v6 transaction on the legacy path; signing goes through the PCZT path.
-            #[cfg(feature = "zcash_unstable")]
             (LegacyParserMode::TrustedInput, TxVersion::V6, _) => {
                 debug!("Init V6 tx hashers");
                 // Re-use the V5 transparent/sapling hasher initialisation, then override

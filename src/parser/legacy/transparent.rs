@@ -14,7 +14,6 @@ impl LegacyParser {
             SupportedTxVersion::V5 => {
                 ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
             }
-            #[cfg(feature = "zcash_unstable")]
             SupportedTxVersion::V6 => {
                 ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
             }
@@ -185,7 +184,6 @@ impl LegacyParser {
             SupportedTxVersion::V5 => {
                 ok!(script_sig.write(ctx.hashers.scripts_hasher.as_writer()));
             }
-            #[cfg(feature = "zcash_unstable")]
             SupportedTxVersion::V6 => {
                 ok!(script_sig.write(ctx.hashers.scripts_hasher.as_writer()));
             }
@@ -207,7 +205,6 @@ impl LegacyParser {
             SupportedTxVersion::V5 => {
                 ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
             }
-            #[cfg(feature = "zcash_unstable")]
             SupportedTxVersion::V6 => {
                 ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
             }
@@ -310,7 +307,6 @@ impl LegacyParser {
             SupportedTxVersion::V5 => {
                 ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
             }
-            #[cfg(feature = "zcash_unstable")]
             SupportedTxVersion::V6 => {
                 ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
             }
@@ -376,7 +372,6 @@ impl LegacyParser {
             SupportedTxVersion::V5 => {
                 ok!(script_pubkey.write(&mut ctx.hashers.outputs_hasher.as_writer()));
             }
-            #[cfg(feature = "zcash_unstable")]
             SupportedTxVersion::V6 => {
                 ok!(script_pubkey.write(&mut ctx.hashers.outputs_hasher.as_writer()));
             }
@@ -411,7 +406,6 @@ impl LegacyParser {
         self.orchard_action_count = ok!(CompactSize::read_t(&mut *reader));
         // ZIP-229 adds a fourth pool: a v6 transaction announces its Ironwood action count
         // even when the Orchard one is zero.
-        #[cfg(feature = "zcash_unstable")]
         if let SupportedTxVersion::V6 = ctx.tx_info.tx_version() {
             self.ironwood_action_count = ok!(CompactSize::read_t(&mut *reader));
         }
@@ -419,7 +413,6 @@ impl LegacyParser {
         info!("Sapling spend remaining: {}", self.sapling_spend_count);
         info!("Sapling output count: {}", self.sapling_output_count);
         info!("Orchard action count: {}", self.orchard_action_count);
-        #[cfg(feature = "zcash_unstable")]
         info!("Ironwood action count: {}", self.ironwood_action_count);
 
         if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {

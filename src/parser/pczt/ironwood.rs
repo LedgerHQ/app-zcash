@@ -1,7 +1,7 @@
 //! Ironwood (NU6.3 / V6) PCZT action parser.
 //!
 //! Structural mirror of `orchard.rs` for the second Orchard-shaped pool introduced
-//! by Ironwood/NU6.3. Gated on `zcash_unstable` — see Cargo.toml.
+//! by Ironwood/NU6.3.
 
 use super::*;
 use crate::parser::personalization::{
@@ -17,7 +17,6 @@ use ledger_device_sdk::hash::blake2::Blake2b_256;
 const ZCASH_MEMO_TEXT_MAX_TAG: u8 = 0xF4;
 const ZCASH_MEMO_EMPTY_TAG: u8 = 0xF6;
 
-#[cfg(feature = "zcash_unstable")]
 impl PcztParser {
     #[inline(never)]
     pub(super) fn parse_ironwood_actions_start(
@@ -467,7 +466,7 @@ impl PcztParser {
         self.current_action.alpha = None;
         self.current_action.path = None;
         self.current_action.fvk = None;
-        self.current_action.note_plaintext_version = NOTE_VERSION_ORCHARD;
+        self.current_action.note_plaintext_version = NOTE_VERSION_IRONWOOD;
     }
 
     pub(super) fn reset_ironwood_bundle_state(&mut self, action_count: usize) {
@@ -662,11 +661,7 @@ impl PcztParser {
         let compact = self.current_ironwood_compact_action(enc_ciphertext);
         let network = keys.network;
 
-        match decipher_compact_value(
-            &keys.internal_ivk,
-            &compact,
-            true, // V6 Ironwood pool accepts both V2 and V3 note plaintexts
-        ) {
+        match decipher_compact_value(&keys.internal_ivk, &compact, NOTE_VERSION_IRONWOOD) {
             Ok(Some(output)) => {
                 self.validate_deciphered_ironwood_output(&output)?;
                 self.push_deciphered_ironwood_output(ctx, output, network, true)?;
@@ -687,11 +682,7 @@ impl PcztParser {
             out_ciphertext: *out_ciphertext,
         };
 
-        match decipher_value_with_ovk(
-            &keys.external_ovk,
-            &action,
-            true, // V6 Ironwood pool accepts both V2 and V3 note plaintexts
-        ) {
+        match decipher_value_with_ovk(&keys.external_ovk, &action, NOTE_VERSION_IRONWOOD) {
             Ok(Some(output)) => {
                 self.validate_deciphered_ironwood_output(&output)?;
                 self.push_deciphered_ironwood_output(ctx, output, network, false)?;
@@ -737,23 +728,15 @@ impl PcztParser {
             return Err(ParserError::from_str("Missing PCZT ironwood output rseed"));
         };
 
-        let use_v3 = self.current_action.note_plaintext_version == NOTE_VERSION_IRONWOOD;
-        let commitment_result = if use_v3 {
-            ledger_zcash_crypto::orchard_note_commitment_v3_bytes(
-                &self.current_action.output_recipient,
-                self.current_action.output_value,
-                &self.current_action.nullifier,
-                &rseed,
-            )
-        } else {
-            ledger_zcash_crypto::orchard_note_commitment_bytes(
-                &self.current_action.output_recipient,
-                self.current_action.output_value,
-                &self.current_action.nullifier,
-                &rseed,
-            )
-        };
-        let expected_cmx = commitment_result.map_err(Self::map_ironwood_commitment_error)?;
+        // Ironwood dummies are V3 notes like every other note in this pool, so the commitment
+        // uses the V3 trapdoor unconditionally.
+        let expected_cmx = ledger_zcash_crypto::orchard_note_commitment_v3_bytes(
+            &self.current_action.output_recipient,
+            self.current_action.output_value,
+            &self.current_action.nullifier,
+            &rseed,
+        )
+        .map_err(Self::map_ironwood_commitment_error)?;
 
         if expected_cmx != self.current_action.cmx {
             debug!(

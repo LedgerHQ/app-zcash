@@ -13,11 +13,6 @@ impl PcztParser {
         }
 
         let version = ok!(reader.read_u32_le());
-        #[cfg(not(feature = "zcash_unstable"))]
-        if version != PCZT_VERSION_1 {
-            return Err(ParserError::from_str("Unsupported PCZT version"));
-        }
-        #[cfg(feature = "zcash_unstable")]
         if version != PCZT_VERSION_1 && version != PCZT_VERSION_2 {
             return Err(ParserError::from_str("Unsupported PCZT version"));
         }
@@ -38,15 +33,9 @@ impl PcztParser {
         let branch_id_raw = ok!(reader.read_u32_le());
 
         let is_v5 = tx_version_raw == V5_TX_VERSION && version_group_id == V5_VERSION_GROUP_ID;
-        #[cfg(feature = "zcash_unstable")]
         let is_v6 = tx_version_raw == V6_TX_VERSION && version_group_id == V6_VERSION_GROUP_ID;
 
         if !is_v5 {
-            #[cfg(not(feature = "zcash_unstable"))]
-            return Err(ParserError::from_str(
-                "Unsupported PCZT transaction version",
-            ));
-            #[cfg(feature = "zcash_unstable")]
             if !is_v6 {
                 return Err(ParserError::from_str(
                     "Unsupported PCZT transaction version",
@@ -82,7 +71,6 @@ impl PcztParser {
         ctx.tx_info.branch_id_raw = branch_id_raw;
         ctx.tx_info.locktime = fallback_lock_time.unwrap_or_default();
         ctx.tx_info.expiry_height = expiry_height;
-        #[cfg(feature = "zcash_unstable")]
         {
             ctx.tx_info.is_v6 = is_v6;
         }
@@ -92,7 +80,6 @@ impl PcztParser {
                 "PCZT version 1 required for V5 transaction",
             ));
         }
-        #[cfg(feature = "zcash_unstable")]
         if is_v6 && self.pczt_version != PCZT_VERSION_2 {
             return Err(ParserError::from_str(
                 "PCZT version 2 required for V6 transaction",
@@ -123,9 +110,6 @@ impl PcztParser {
             ));
         }
 
-        #[cfg(not(feature = "zcash_unstable"))]
-        let ironwood_vb: i64 = 0;
-        #[cfg(feature = "zcash_unstable")]
         let ironwood_vb: i64 = self.ironwood_value_balance;
         let fees_i128 = i128::from(ctx.tx_info.total_amount)
             + i128::from(self.orchard_value_balance)
@@ -163,7 +147,6 @@ impl PcztParser {
         let spent_from_public = self.transparent_input_count > 0;
         let spent_from_private = self.orchard_spend_value_sum > 0;
         // Ironwood is a shielded pool; any Ironwood spend must set the from_private flag.
-        #[cfg(feature = "zcash_unstable")]
         let spent_from_private = spent_from_private || self.ironwood_spend_value_sum > 0;
         let transfer_type =
             TransferType::classify(spent_from_public, spent_from_private, &ctx.tx_info.outputs);

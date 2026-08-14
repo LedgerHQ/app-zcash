@@ -11,7 +11,6 @@ use ::orchard::bundle::commitments::{
     ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION,
 };
 
-#[cfg(feature = "zcash_unstable")]
 use super::super::personalization::{
     ZCASH_IRONWOOD_ACTIONS_COMPACT_HASH_PERSONALIZATION,
     ZCASH_IRONWOOD_ACTIONS_MEMOS_HASH_PERSONALIZATION,
@@ -55,7 +54,6 @@ impl ActionBundle {
     fn compact_personalization(self) -> &'static [u8; 16] {
         match self {
             ActionBundle::Orchard => ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION,
-            #[cfg(feature = "zcash_unstable")]
             ActionBundle::Ironwood => ZCASH_IRONWOOD_ACTIONS_COMPACT_HASH_PERSONALIZATION,
         }
     }
@@ -63,7 +61,6 @@ impl ActionBundle {
     fn memos_personalization(self) -> &'static [u8; 16] {
         match self {
             ActionBundle::Orchard => ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION,
-            #[cfg(feature = "zcash_unstable")]
             ActionBundle::Ironwood => ZCASH_IRONWOOD_ACTIONS_MEMOS_HASH_PERSONALIZATION,
         }
     }
@@ -71,7 +68,6 @@ impl ActionBundle {
     fn noncompact_personalization(self) -> &'static [u8; 16] {
         match self {
             ActionBundle::Orchard => ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION,
-            #[cfg(feature = "zcash_unstable")]
             ActionBundle::Ironwood => ZCASH_IRONWOOD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION,
         }
     }
@@ -79,7 +75,6 @@ impl ActionBundle {
     fn hasher(self, hashers: &mut Hashers) -> &mut Blake2b_256 {
         match self {
             ActionBundle::Orchard => &mut hashers.orchard_hasher,
-            #[cfg(feature = "zcash_unstable")]
             ActionBundle::Ironwood => &mut hashers.ironwood_hasher,
         }
     }
@@ -89,7 +84,6 @@ impl LegacyParser {
     fn action_count(&self, bundle: ActionBundle) -> usize {
         match bundle {
             ActionBundle::Orchard => self.orchard_action_count,
-            #[cfg(feature = "zcash_unstable")]
             ActionBundle::Ironwood => self.ironwood_action_count,
         }
     }
@@ -106,7 +100,6 @@ impl LegacyParser {
     ) -> Result<(), ParserError> {
         let next = match current {
             None if self.orchard_action_count > 0 => Some(ActionBundle::Orchard),
-            #[cfg(feature = "zcash_unstable")]
             None | Some(ActionBundle::Orchard) if self.ironwood_action_count > 0 => {
                 Some(ActionBundle::Ironwood)
             }
@@ -263,7 +256,6 @@ impl LegacyParser {
         // bundles moved it to the authorizing digest, which a trusted input never computes,
         // so the host streams no anchor at all.
         let digest_data_size = match ctx.tx_info.tx_version() {
-            #[cfg(feature = "zcash_unstable")]
             SupportedTxVersion::V6 => ACTIONS_DIGEST_DATA_SIZE,
             SupportedTxVersion::V4 | SupportedTxVersion::V5 => ACTIONS_DIGEST_DATA_SIZE_V5,
         };

@@ -48,25 +48,17 @@ pub const ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrScr
 
 /// `sapling_spends_noncompact_digest_v6`, which omits the anchor. Every other Sapling
 /// node keeps its v5 personalization in a v6 transaction.
-#[cfg(feature = "zcash_unstable")]
 pub const ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION_V6: &[u8; 16] = b"ZTxIdSSpendNH_v6";
 
 /// Ironwood bundle digest personalizations per ZIP 229.
-#[cfg(feature = "zcash_unstable")]
 pub const ZCASH_IRONWOOD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIronwd_H_v6";
-#[cfg(feature = "zcash_unstable")]
 pub const ZCASH_IRONWOOD_ACTIONS_COMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActCH_v6";
-#[cfg(feature = "zcash_unstable")]
 pub const ZCASH_IRONWOOD_ACTIONS_MEMOS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActMH_v6";
-#[cfg(feature = "zcash_unstable")]
 pub const ZCASH_IRONWOOD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActNH_v6";
-#[cfg(feature = "zcash_unstable")]
 #[allow(dead_code)]
 pub const ZCASH_IRONWOOD_AUTH_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthIrnwdH_v6";
 
 /// Orchard V6 bundle-level personalizations per ZIP 229; action-level strings unchanged from V5.
-#[cfg(feature = "zcash_unstable")]
 pub const ZCASH_ORCHARD_HASH_PERSONALIZATION_V6: &[u8; 16] = b"ZTxIdOrchardH_v6";
-#[cfg(feature = "zcash_unstable")]
 #[allow(dead_code)]
 pub const ZCASH_ORCHARD_AUTH_HASH_PERSONALIZATION_V6: &[u8; 16] = b"ZTxAuthOrchaH_v6";

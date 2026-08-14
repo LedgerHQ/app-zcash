@@ -1214,6 +1214,71 @@ mod tests {
                 .collect::<String>()
         );
     }
+
+    /// Emits the V3 note commitment for a zero-valued output that the device cannot decrypt,
+    /// as used by `_valid_ironwood_action()` in test_pczt_ironwood.py. Such an action carries an
+    /// all-zero enc_ciphertext, so only the commitment has to agree with the firmware.
+    ///
+    /// ```sh
+    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    /// cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
+    ///   --target-dir /tmp/orchard-host -- gen_v3_valid_action_cmx --nocapture
+    /// ```
+    #[test]
+    fn gen_v3_valid_action_cmx() {
+        // _INTERNAL_RECIPIENT
+        let recipient_bytes: [u8; 43] = [
+            0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe, 0x68, 0x14, 0xce,
+            0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09, 0x46, 0xf1, 0xab,
+            0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f, 0xd0, 0x52, 0xe2,
+            0x0a,
+        ];
+        let diversifier = Diversifier::from_bytes(recipient_bytes[..11].try_into().unwrap());
+        let pk_d =
+            DiversifiedTransmissionKey::from_bytes(recipient_bytes[11..].try_into().unwrap())
+                .unwrap();
+        let recipient = Address::from_parts(diversifier, pk_d);
+
+        // _NULLIFIER
+        let nullifier_bytes: [u8; 32] = [
+            0xed, 0x37, 0xcc, 0x73, 0x3c, 0x22, 0x8d, 0xc3, 0xdd, 0xa2, 0xcf, 0x08, 0x8b, 0xa6,
+            0x46, 0xf9, 0xd2, 0x04, 0xad, 0xc9, 0xd8, 0xd6, 0xf9, 0x5e, 0xc3, 0x61, 0x26, 0xeb,
+            0x74, 0x2c, 0x3a, 0x10,
+        ];
+        let nf_old = Nullifier::from_bytes(&nullifier_bytes).unwrap();
+        let rho = Rho::from_nf_old(nf_old);
+
+        // _RSEED = 0x2e followed by 31 zero bytes
+        let rseed_bytes: [u8; 32] = {
+            let mut b = [0u8; 32];
+            b[0] = 0x2e;
+            b
+        };
+        let rseed = Option::from(RandomSeed::from_bytes(rseed_bytes, &rho))
+            .expect("rseed 0x2e... is valid for this rho");
+
+        let note: Note = Option::from(Note::from_parts(
+            recipient,
+            NoteValue::from_raw(0),
+            rho,
+            rseed,
+            NoteVersion::V3,
+        ))
+        .expect("note construction failed");
+
+        let cmx_bytes = ExtractedNoteCommitment::from(note.commitment()).to_bytes();
+
+        println!("\n# ---- V3 cmx for _valid_ironwood_action (gen_v3_valid_action_cmx) ----");
+        println!("# recipient = _INTERNAL_RECIPIENT, value = 0, nullifier = _NULLIFIER");
+        println!("# rseed     = 0x2e followed by 31 zero bytes (_RSEED)\n");
+        println!(
+            "_CMX = bytes.fromhex(\n    \"{}\"\n)",
+            cmx_bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1240,7 +1305,7 @@ mod gen_v3_ext_vectors {
 
     use crate::{
         keys::{DiversifiedTransmissionKey, Diversifier, FullViewingKey, Scope},
-        note::{ExtractedNoteCommitment, RandomSeed, Rho},
+        note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
         note_encryption::{IronwoodDomain, IronwoodNoteEncryption},
         value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
         Address, Note, NoteVersion,
@@ -1372,7 +1437,8 @@ mod gen_v3_ext_vectors {
             hex_str(&ext_nf_bytes)
         );
 
-        // ── V2 output note (value = 180 000, rho = ext_nullifier) ────────
+        // ── V3 output note (value = 180 000, rho = ext_nullifier) ────────
+        // The Ironwood value pool carries V3 note plaintexts only.
         let ext_div = Diversifier::from_bytes(EXT_RECIPIENT[..11].try_into().unwrap());
         let ext_pk_d =
             DiversifiedTransmissionKey::from_bytes(EXT_RECIPIENT[11..].try_into().unwrap())
@@ -1389,7 +1455,7 @@ mod gen_v3_ext_vectors {
             NoteValue::from_raw(180_000),
             ext_output_rho,
             ext_rseed,
-            NoteVersion::V2,
+            NoteVersion::V3,
         ))
         .expect("external output note must be valid");
 
@@ -1423,6 +1489,101 @@ mod gen_v3_ext_vectors {
         let out_ct = encryptor.encrypt_outgoing_plaintext(&ext_cv_net, &ext_cmx, &mut OsRng);
         println!(
             "_EXT_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(out_ct.as_ref())
+        );
+    }
+
+    /// Generate updated V3 memo-action vectors for test_pczt_ironwood.py.
+    ///
+    /// The memo action is a dummy padding spend whose 90 000-zat output goes to
+    /// `_EXT_RECIPIENT` and carries an ASCII memo recovered through the external OVK.
+    ///
+    /// ```sh
+    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    /// cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
+    ///   --target-dir /tmp/orchard-host -- gen_v3_memo_action_vectors --nocapture
+    /// ```
+    #[test]
+    fn gen_v3_memo_action_vectors() {
+        let fvk = FullViewingKey::from_bytes(&FVK_BYTES).expect("Speculos Orchard FVK must decode");
+        let ovk = fvk.to_ovk(Scope::External);
+
+        let ext_div = Diversifier::from_bytes(EXT_RECIPIENT[..11].try_into().unwrap());
+        let ext_pk_d =
+            DiversifiedTransmissionKey::from_bytes(EXT_RECIPIENT[11..].try_into().unwrap())
+                .expect("ext_recipient pk_d must be valid");
+        let ext_addr = Address::from_parts(ext_div, ext_pk_d);
+
+        // _MEMO_NULLIFIER — the action's nullifier; the output rho derives from it.
+        let memo_nf_bytes: [u8; 32] = [
+            0x78, 0x1c, 0x4f, 0xaf, 0x96, 0x02, 0x06, 0x51, 0x0f, 0xdc, 0x72, 0x73, 0x92, 0x67,
+            0xfa, 0x19, 0x3d, 0x9e, 0x01, 0x2d, 0xbc, 0x68, 0x99, 0x8d, 0x35, 0x53, 0x98, 0x37,
+            0xe5, 0x20, 0xae, 0x2a,
+        ];
+        let nf_old = Nullifier::from_bytes(&memo_nf_bytes).expect("_MEMO_NULLIFIER must be valid");
+        let rho = Rho::from_nf_old(nf_old);
+
+        // _MEMO_RSEED = 0x29 followed by 31 zero bytes.
+        let memo_rseed_bytes: [u8; 32] = {
+            let mut b = [0u8; 32];
+            b[0] = 0x29;
+            b
+        };
+        let rseed = Option::from(RandomSeed::from_bytes(memo_rseed_bytes, &rho))
+            .expect("_MEMO_RSEED must be valid for rho");
+
+        let note: Note = Option::from(Note::from_parts(
+            ext_addr,
+            NoteValue::from_raw(90_000),
+            rho,
+            rseed,
+            NoteVersion::V3,
+        ))
+        .expect("memo output note must be valid");
+
+        let cmx = ExtractedNoteCommitment::from(note.commitment());
+        println!("\n# ---- V3 memo action (gen_v3_memo_action_vectors) ----");
+        println!(
+            "_MEMO_CMX = bytes.fromhex(\"{}\")",
+            hex_str(&cmx.to_bytes())
+        );
+
+        let mut memo = [0u8; 512];
+        let text = b"PCZT Orchard memo test";
+        memo[..text.len()].copy_from_slice(text);
+
+        let esk = note.esk();
+        let encryptor = IronwoodNoteEncryption::new_with_esk(esk, Some(ovk), note, memo);
+        let epk_bytes = IronwoodDomain::epk_bytes(encryptor.epk());
+        println!(
+            "_MEMO_EPHEMERAL_KEY = bytes.fromhex(\"{}\")",
+            hex_str(&epk_bytes.0)
+        );
+        let enc_ct = encryptor.encrypt_note_plaintext();
+        println!(
+            "_MEMO_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
+            hex_lines(enc_ct.as_ref())
+        );
+
+        // _MEMO_RCV = 0x3d …; the action spends nothing and outputs 90 000.
+        let memo_rcv_bytes: [u8; 32] = {
+            let mut b = [0u8; 32];
+            b[0] = 0x3d;
+            b
+        };
+        let rcv = ValueCommitTrapdoor::from_bytes(memo_rcv_bytes)
+            .into_option()
+            .expect("_MEMO_RCV must be a valid scalar");
+        let value_net = NoteValue::from_raw(0) - NoteValue::from_raw(90_000);
+        let cv_net = ValueCommitment::derive(value_net, rcv);
+        println!(
+            "_MEMO_CV_NET = bytes.fromhex(\"{}\")",
+            hex_str(&cv_net.to_bytes())
+        );
+
+        let out_ct = encryptor.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut OsRng);
+        println!(
+            "_MEMO_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
             hex_lines(out_ct.as_ref())
         );
     }
