@@ -31,6 +31,7 @@ pub struct SigningKey<T: SigType> {
     pk: VerificationKey<T>,
 }
 
+#[cfg(feature = "ledger")]
 impl SigningKey<crate::orchard::SpendAuth> {
     /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
     pub fn try_from_ledger_signing_key(

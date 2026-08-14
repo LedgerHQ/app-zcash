@@ -60,6 +60,13 @@ Single packet:
   - `coin_type u32`
   - `tx_modifiable u8`
 
+The PCZT version field encodes the PCZT wire-format revision:
+
+- Version `1` is required for V5 (Orchard) transactions.
+- Version `2` is required for V6 (Ironwood) transactions.
+
+The app rejects a mismatch between the PCZT version and the transaction version.
+
 ## PCZT_TRANSPARENT_INPUT
 
 Packet sequence:
@@ -196,3 +203,27 @@ triggering the device review screen and enabling signing commands.
 Ironwood action validation applies the same cryptographic checks as Orchard
 (see above): `rk` recomputation, `cv_net` verification, recipient derivation,
 `nullifier` recomputation, and output note-commitment check for dummy outputs.
+
+When the output metadata packet is 116 bytes, the final byte is `notePlaintextVersion`
+(`0x02` for Orchard-compatible notes, `0x03` for ZIP 2005 Ironwood notes):
+
+- `0x02` notes follow the standard Orchard decryption and dummy-commitment paths.
+- `0x03` non-zero-value outputs: the device deciphers `enc_ciphertext` via the standard
+  IVK/OVK trial-decryption path. After successful decryption the device verifies `cmx` using
+  the ZIP 2005 quantum-recoverable commitment formula (`note_commitment_v3`), which uses a
+  BLAKE2b-512 rcm derivation that additionally binds `g_d`, `pk_d`, `value`, `rho`, and `psi`.
+  This ensures the displayed recipient and value are tied to the exact `cmx` that enters the
+  signature digest. Note: the commitment formula is selected by the authenticated **decrypted
+  plaintext** lead byte (`plaintext[0]`), not by the unauthenticated metadata byte
+  `notePlaintextVersion`. A host may set `notePlaintextVersion = 0x03` while providing a
+  V2-format ciphertext (which decrypts to `plaintext[0] = 0x02`); in that case the V2 formula
+  runs regardless of the metadata byte. See
+  `test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted` and
+  `test_pczt_v2_metadata_byte_with_v3_ciphertext_accepted` for tests that exercise both
+  directions of this invariant.
+- `0x03` zero-value (dummy) outputs: the device recomputes `cmx` using the V3
+  quantum-recoverable commitment formula and verifies it against the wire value. Dummy outputs
+  carry no displayed value or recipient; their value contribution is independently constrained
+  via `cv_net`.
+
+The 115-byte form (no `notePlaintextVersion` byte) remains valid and is treated as `0x02`.

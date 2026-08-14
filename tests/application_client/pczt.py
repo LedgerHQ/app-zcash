@@ -97,6 +97,7 @@ class PcztIronwoodAction:  # pylint: disable=too-many-instance-attributes
     spend_value: int = 0
     value: int = 0
     recipient: bytes = bytes(ORCHARD_RAW_ADDRESS_SIZE)
+    note_plaintext_version: int | None = None
 
 
 @dataclass

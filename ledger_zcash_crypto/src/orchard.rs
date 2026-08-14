@@ -19,6 +19,7 @@ use ledger_device_sdk::hash::{
 };
 use pasta_curves::pallas;
 
+use crate::NOTE_VERSION_ORCHARD;
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
     ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
@@ -29,6 +30,8 @@ use crate::{
     sinsemilla::{extract_p_pallas, sinsemilla_short_commit, sinsemilla_short_commit_point},
     to_pallas_base_bytes, to_pallas_scalar_bytes,
 };
+#[cfg(feature = "zcash_unstable")]
+use crate::{NOTE_VERSION_IRONWOOD, ORCHARD_QR_RCM_DOMAIN_SEPARATOR};
 
 pub const ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE: usize = 52;
 pub const ORCHARD_MEMO_SIZE: usize = 512;
@@ -83,15 +86,27 @@ pub struct DecipheredOrchardOutput {
 pub fn decipher_value_with_ovk(
     ovk: &[u8; HASH_SIZE],
     action: &OrchardActionCiphertext<'_>,
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
-    try_output_recovery_with_ovk(ovk, action)
+    try_output_recovery_with_ovk(
+        ovk,
+        action,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    )
 }
 
 pub fn decipher_compact_value(
     ivk: &[u8; HASH_SIZE],
     compact: &OrchardCompactAction,
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
-    try_compact_note_decryption_with_ivk(ivk, compact)
+    try_compact_note_decryption_with_ivk(
+        ivk,
+        compact,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    )
 }
 
 #[inline(never)]
@@ -141,6 +156,52 @@ pub fn spend_nullifier_bytes(
     Ok(extract_p_pallas(&nullifier_point).to_repr())
 }
 
+/// V3 (ZIP 2005 / Ironwood) variant of [`spend_nullifier_bytes`].
+///
+/// Uses [`note_commitment_v3_point`] instead of [`note_commitment_point`] so
+/// that the commitment matches the on-chain V3 note and the derived nullifier
+/// agrees with the value in the PCZT.
+#[cfg(feature = "zcash_unstable")]
+#[inline(never)]
+pub fn spend_nullifier_bytes_v3(
+    nk: &[u8; HASH_SIZE],
+    raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    let rho = pallas_base_from_repr(*rho)?;
+    let _esk = orchard_esk(rseed, &rho)?;
+
+    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
+    diversifier.copy_from_slice(&raw_address[..DIVERSIFIER_SIZE]);
+
+    let mut pk_d = [0u8; HASH_SIZE];
+    pk_d.copy_from_slice(&raw_address[DIVERSIFIER_SIZE..]);
+    if !is_valid_nonidentity_pallas_point(&pk_d)? {
+        return Err(Error::MalformedPallasPoint);
+    }
+
+    let g_d = crate::diversify_hash_ledger(&diversifier)?;
+    let cm = note_commitment_v3_point(&g_d, &pk_d, value, &rho, rseed)?;
+    let psi = pallas_base_from_repr(orchard_psi(rseed, &rho)?)?;
+    let nk = pallas_base_from_repr(*nk)?;
+    let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
+    let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
+
+    let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
+        cm
+    } else {
+        let nullifier_k_ec = pallas_basepoint_mul(
+            &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
+            &scalar_bytes_be(&nullifier_scalar),
+        )?;
+        point_from_sdk_point(&nullifier_k_ec)? + cm
+    };
+
+    Ok(extract_p_pallas(&nullifier_point).to_repr())
+}
+
 #[inline(never)]
 pub fn note_commitment_bytes(
     raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
@@ -167,6 +228,7 @@ pub fn note_commitment_bytes(
 fn try_output_recovery_with_ovk(
     ovk: &[u8; HASH_SIZE],
     action: &OrchardActionCiphertext<'_>,
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let rho = match pallas_base_from_repr(action.compact.nullifier) {
         Ok(rho) => rho,
@@ -221,12 +283,15 @@ fn try_output_recovery_with_ovk(
         Some(&esk),
         &rho,
         Some(memo),
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
     )
 }
 
 fn try_compact_note_decryption_with_ivk(
     ivk: &[u8; HASH_SIZE],
     compact: &OrchardCompactAction,
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let rho = match pallas_base_from_repr(compact.nullifier) {
         Ok(rho) => rho,
@@ -252,7 +317,11 @@ fn try_compact_note_decryption_with_ivk(
     let mut note_plaintext_prefix = compact.enc_ciphertext_prefix;
     chacha20_decrypt_compact(&k_enc, &mut note_plaintext_prefix);
 
-    let Some(diversifier) = parse_note_plaintext_diversifier(&note_plaintext_prefix) else {
+    let Some(diversifier) = parse_note_plaintext_diversifier(
+        &note_plaintext_prefix,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    ) else {
         return Ok(None);
     };
 
@@ -262,7 +331,16 @@ fn try_compact_note_decryption_with_ivk(
     };
     let pk_d = crate::orchard_pk_d(&ivk.to_repr(), &g_d)?;
 
-    parse_and_validate_note_plaintext(compact, &note_plaintext_prefix, &pk_d, None, &rho, None)
+    parse_and_validate_note_plaintext(
+        compact,
+        &note_plaintext_prefix,
+        &pk_d,
+        None,
+        &rho,
+        None,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    )
 }
 
 fn parse_and_validate_note_plaintext(
@@ -272,8 +350,13 @@ fn parse_and_validate_note_plaintext(
     expected_esk: Option<&[u8; HASH_SIZE]>,
     rho: &pallas::Base,
     memo: Option<Box<[u8]>>,
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
-    let Some(note_plaintext) = parse_note_plaintext_prefix(plaintext) else {
+    let Some(note_plaintext) = parse_note_plaintext_prefix(
+        plaintext,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    ) else {
         return Ok(None);
     };
 
@@ -294,7 +377,18 @@ fn parse_and_validate_note_plaintext(
         return Ok(None);
     }
 
+    // Recompute and verify the note commitment. For V3 (Ironwood / ZIP 2005), the
+    // quantum-recoverable rcm derivation additionally binds g_d, pk_d, and value, which
+    // prevents a malicious host from swapping cmx to commit to a different recipient
+    // while presenting a valid enc_ciphertext for the device's IVK.
+    #[cfg(not(feature = "zcash_unstable"))]
     let cmx = note_commitment(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?;
+    #[cfg(feature = "zcash_unstable")]
+    let cmx = if plaintext[0] == NOTE_VERSION_IRONWOOD {
+        note_commitment_v3(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?
+    } else {
+        note_commitment(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?
+    };
     if !bytes_eq(&cmx, &compact.cmx) {
         return Ok(None);
     }
@@ -456,14 +550,29 @@ struct OrchardNotePlaintextPrefix {
 
 fn parse_note_plaintext_diversifier(
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Option<[u8; DIVERSIFIER_SIZE]> {
-    parse_note_plaintext_prefix(plaintext).map(|parsed| parsed.diversifier)
+    parse_note_plaintext_prefix(
+        plaintext,
+        #[cfg(feature = "zcash_unstable")]
+        allow_v3,
+    )
+    .map(|parsed| parsed.diversifier)
 }
 
 fn parse_note_plaintext_prefix(
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
+    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
 ) -> Option<OrchardNotePlaintextPrefix> {
-    if plaintext[0] != 0x02 {
+    // The version byte is the only structural difference between V2 and V3 note formats.
+    // allow_v3 further gates V3 acceptance to callers in the Ironwood pool (V6 bundles).
+    #[cfg(not(feature = "zcash_unstable"))]
+    if plaintext[0] != NOTE_VERSION_ORCHARD {
+        return None;
+    }
+    #[cfg(feature = "zcash_unstable")]
+    if plaintext[0] != NOTE_VERSION_ORCHARD && !(allow_v3 && plaintext[0] == NOTE_VERSION_IRONWOOD)
+    {
         return None;
     }
 
@@ -514,6 +623,95 @@ fn note_commitment(
     Ok(cmx.to_repr())
 }
 
+/// Derives the quantum-recoverable rcm for a V3 (Ironwood / ZIP 2005) note.
+///
+/// Per ZIP 2005 §3.2.1:
+///
+/// ```text
+/// rcm_v3 = ToScalar^Orchard(
+///   PRF^expand_rseed([0x0B] ‖ g_d ‖ pk_d ‖ I2LEOSP_64(v) ‖ rho ‖ psi)
+/// )
+/// ```
+///
+/// Unlike the V2 rcm derivation (which only takes rseed and rho), the V3 trapdoor
+/// additionally commits to the recipient's `g_d` and `pk_d` and to the note `value`,
+/// providing post-quantum binding of the note commitment to all note fields.
+#[cfg(feature = "zcash_unstable")]
+fn orchard_rcm_v3(
+    rseed: &[u8; HASH_SIZE],
+    g_d: &[u8; HASH_SIZE],
+    pk_d: &[u8; HASH_SIZE],
+    value: u64,
+    rho: &pallas::Base,
+    psi: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    let value_bytes = value.to_le_bytes();
+    let rho_repr = rho.to_repr();
+    let uniform = prf_expand_with_domain_separator_and_inputs(
+        rseed,
+        ORCHARD_QR_RCM_DOMAIN_SEPARATOR,
+        &[g_d, pk_d, &value_bytes, &rho_repr, psi],
+    )?;
+    to_pallas_scalar_bytes(&uniform)
+}
+
+/// Derives the note commitment for a V3 (Ironwood / ZIP 2005) note.
+///
+/// The Sinsemilla message is identical to V2 — `(g_d, pk_d, value, rho, psi)` — but the
+/// trapdoor `rcm` uses the quantum-recoverable derivation from `orchard_rcm_v3`, which
+/// binds the trapdoor to all note fields and therefore ties `cmx` to the specific recipient.
+#[cfg(feature = "zcash_unstable")]
+#[inline(never)]
+pub(crate) fn orchard_note_commitment_v3(
+    recipient: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    nullifier: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    let rho = pallas_base_from_repr(*nullifier)?;
+
+    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
+    diversifier.copy_from_slice(&recipient[..DIVERSIFIER_SIZE]);
+
+    let mut pk_d = [0u8; HASH_SIZE];
+    pk_d.copy_from_slice(&recipient[DIVERSIFIER_SIZE..]);
+    if !is_valid_nonidentity_pallas_point(&pk_d)? {
+        return Err(Error::MalformedPallasPoint);
+    }
+
+    let g_d = crate::diversify_hash_ledger(&diversifier)?;
+    note_commitment_v3(&g_d, &pk_d, value, &rho, rseed)
+}
+
+#[cfg(feature = "zcash_unstable")]
+#[inline(never)]
+fn note_commitment_v3(
+    g_d: &[u8; HASH_SIZE],
+    pk_d: &[u8; HASH_SIZE],
+    value: u64,
+    rho: &pallas::Base,
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    let psi = orchard_psi(rseed, rho)?;
+    let rcm = orchard_rcm_v3(rseed, g_d, pk_d, value, rho, &psi)?;
+    let rcm = pallas_scalar_from_repr(rcm)?;
+
+    let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
+    let mut offset = 0;
+    append_le_bits(&mut message, &mut offset, g_d, 32 * 8);
+    append_le_bits(&mut message, &mut offset, pk_d, 32 * 8);
+    append_le_bits(&mut message, &mut offset, &value.to_le_bytes(), 64);
+    append_le_bits(&mut message, &mut offset, &rho.to_repr(), L_ORCHARD_BASE);
+    append_le_bits(&mut message, &mut offset, &psi, L_ORCHARD_BASE);
+
+    let Some(cmx) = sinsemilla_short_commit(NOTE_COMMITMENT_PERSONALIZATION, &message, &rcm)?
+    else {
+        return Err(Error::InvalidKeyDiscarded);
+    };
+
+    Ok(cmx.to_repr())
+}
+
 #[inline(never)]
 fn note_commitment_point(
     g_d: &[u8; HASH_SIZE],
@@ -524,6 +722,36 @@ fn note_commitment_point(
 ) -> Result<pallas::Point, Error> {
     let psi = orchard_psi(rseed, rho)?;
     let rcm = orchard_rcm(rseed, rho)?;
+    let rcm = pallas_scalar_from_repr(rcm)?;
+
+    let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
+    let mut offset = 0;
+    append_le_bits(&mut message, &mut offset, g_d, 32 * 8);
+    append_le_bits(&mut message, &mut offset, pk_d, 32 * 8);
+    append_le_bits(&mut message, &mut offset, &value.to_le_bytes(), 64);
+    append_le_bits(&mut message, &mut offset, &rho.to_repr(), L_ORCHARD_BASE);
+    append_le_bits(&mut message, &mut offset, &psi, L_ORCHARD_BASE);
+
+    sinsemilla_short_commit_point(NOTE_COMMITMENT_PERSONALIZATION, &message, &rcm)?
+        .ok_or(Error::InvalidKeyDiscarded)
+}
+
+/// V3 (ZIP 2005 / Ironwood) variant of [`note_commitment_point`].
+///
+/// Identical Sinsemilla message; uses [`orchard_rcm_v3`] so the trapdoor binds
+/// all note fields (g_d, pk_d, value, rho, psi), matching the on-chain V3
+/// commitment.  Required for nullifier recomputation of V3 spend notes.
+#[cfg(feature = "zcash_unstable")]
+#[inline(never)]
+fn note_commitment_v3_point(
+    g_d: &[u8; HASH_SIZE],
+    pk_d: &[u8; HASH_SIZE],
+    value: u64,
+    rho: &pallas::Base,
+    rseed: &[u8; HASH_SIZE],
+) -> Result<pallas::Point, Error> {
+    let psi = orchard_psi(rseed, rho)?;
+    let rcm = orchard_rcm_v3(rseed, g_d, pk_d, value, rho, &psi)?;
     let rcm = pallas_scalar_from_repr(rcm)?;
 
     let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
@@ -557,4 +785,149 @@ fn bytes_eq(lhs: &[u8; HASH_SIZE], rhs: &[u8; HASH_SIZE]) -> bool {
         diff |= l ^ r;
     }
     diff == 0
+}
+
+/// Unit tests for the V3 (ZIP 2005) note commitment path.
+///
+/// These tests run under Speculos — the `ledger_zcash_crypto` crate links against
+/// `ledger_device_sdk` which does not compile on a native macOS / Linux host.
+/// Run with:
+///   `cargo test -p ledger_zcash_crypto -- orchard::tests --nocapture`
+/// from a Speculos session configured with `runner = "speculos -m apex_p"`.
+///
+/// The note parameters here match the constants used in the Python Ragger tests in
+/// `tests/standalone/test_pczt_ironwood.py` (`_DUMMY_NULLIFIER`, `_DUMMY_RSEED`,
+/// `_INTERNAL_RECIPIENT`, `_DUMMY_CHANGE_VALUE`) so that both test layers exercise
+/// the same commitment computation.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `_DUMMY_NULLIFIER` from test_pczt_ironwood.py
+    const DUMMY_NULLIFIER: [u8; 32] = [
+        0x57, 0xaa, 0xd2, 0x67, 0x0e, 0x2e, 0x4d, 0xf6, 0x7c, 0xa8, 0x55, 0xc5, 0x39, 0x73, 0xdb,
+        0x38, 0xe7, 0x94, 0x2e, 0xfa, 0x8e, 0x90, 0x6e, 0xe9, 0x61, 0xad, 0xb7, 0x19, 0x55, 0xaa,
+        0x84, 0x23,
+    ];
+    // `_DUMMY_RSEED` from test_pczt_ironwood.py
+    const DUMMY_RSEED: [u8; 32] = [
+        0x30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0,
+    ];
+    // First 11 bytes of `_INTERNAL_RECIPIENT` from test_pczt_ironwood.py
+    const INTERNAL_DIVERSIFIER: [u8; 11] = [
+        0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe,
+    ];
+    // Bytes 11..43 of `_INTERNAL_RECIPIENT` from test_pczt_ironwood.py
+    const INTERNAL_PK_D: [u8; 32] = [
+        0x68, 0x14, 0xce, 0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09, 0x46,
+        0xf1, 0xab, 0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f, 0xd0, 0x52,
+        0xe2, 0x0a,
+    ];
+    // `_DUMMY_CHANGE_VALUE` from test_pczt_ironwood.py
+    const VALUE: u64 = 10000;
+
+    /// `note_commitment_v3` must produce a result that differs from `note_commitment`
+    /// for the same `(g_d, pk_d, value, rho, rseed)` inputs.
+    ///
+    /// The two functions share the same Sinsemilla message but use different trapdoors:
+    /// - V2: `rcm = ToScalar(PRF_expand(rseed, [0x05] ‖ rho))`
+    /// - V3: `rcm_v3 = ToScalar(PRF_expand(rseed, [0x0B] ‖ g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi))`
+    ///
+    /// If the two formulas were accidentally identical, the clear-signing bypass
+    /// (`test_pczt_ironwood_v3_note_tampered_cmx_rejected`) would not be caught.
+    #[cfg(feature = "zcash_unstable")]
+    #[test]
+    fn note_commitment_v3_differs_from_v2_for_same_inputs() {
+        let rho = pallas_base_from_repr(DUMMY_NULLIFIER)
+            .expect("DUMMY_NULLIFIER encodes a valid Pallas base field element");
+        let g_d = crate::diversify_hash_ledger(&INTERNAL_DIVERSIFIER)
+            .expect("INTERNAL_DIVERSIFIER is a valid Orchard diversifier");
+
+        let cmx_v2 = note_commitment(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+            .expect("V2 note_commitment must succeed for valid inputs");
+        let cmx_v3 = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+            .expect("note_commitment_v3 must succeed for valid inputs");
+
+        // The V3 rcm derivation additionally commits to g_d, pk_d, and value, so the
+        // two formulas must yield distinct commitments for the same note fields.
+        assert_ne!(
+            cmx_v2, cmx_v3,
+            "note_commitment_v3 must produce a distinct cmx from note_commitment \
+             (rcm derivations differ: V2 binds only rseed+rho, V3 also binds g_d+pk_d+value)"
+        );
+    }
+
+    /// `note_commitment_v3` must be deterministic: identical inputs produce identical output.
+    #[cfg(feature = "zcash_unstable")]
+    #[test]
+    fn note_commitment_v3_is_deterministic() {
+        let rho = pallas_base_from_repr(DUMMY_NULLIFIER)
+            .expect("DUMMY_NULLIFIER encodes a valid Pallas base field element");
+        let g_d = crate::diversify_hash_ledger(&INTERNAL_DIVERSIFIER)
+            .expect("INTERNAL_DIVERSIFIER is a valid Orchard diversifier");
+
+        let cmx_first = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+            .expect("first call to note_commitment_v3 must succeed");
+        let cmx_second = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+            .expect("second call to note_commitment_v3 must succeed");
+
+        assert_eq!(
+            cmx_first, cmx_second,
+            "note_commitment_v3 must be deterministic"
+        );
+    }
+
+    /// `spend_nullifier_bytes_v3` must produce a different nullifier than
+    /// `spend_nullifier_bytes` for the same note fields.
+    ///
+    /// V2 and V3 spend notes have the same Sinsemilla message but different rcm
+    /// derivations; the commitment point therefore differs, which propagates into
+    /// the nullifier computation `nk_prf + psi + cm`.  If this test passes, the
+    /// firmware correctly distinguishes V2 from V3 spend nullifiers.
+    #[cfg(feature = "zcash_unstable")]
+    #[test]
+    fn spend_nullifier_bytes_v3_differs_from_v2() {
+        let mut recipient = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
+        recipient[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+        recipient[DIVERSIFIER_SIZE..].copy_from_slice(&INTERNAL_PK_D);
+
+        // Any valid Pallas base field element works as nk for this differential test.
+        let nk = [0u8; HASH_SIZE];
+
+        let nf_v2 = spend_nullifier_bytes(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+            .expect("V2 spend_nullifier_bytes must succeed for valid inputs");
+        let nf_v3 =
+            spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .expect("V3 spend_nullifier_bytes_v3 must succeed for valid inputs");
+
+        assert_ne!(
+            nf_v2, nf_v3,
+            "V3 nullifier must differ from V2 nullifier for the same note fields              (the commitment trapdoor differs, which changes the commitment point              and therefore the final nullifier)"
+        );
+    }
+
+    /// `spend_nullifier_bytes_v3` must be deterministic: identical inputs produce
+    /// identical output.
+    #[cfg(feature = "zcash_unstable")]
+    #[test]
+    fn spend_nullifier_bytes_v3_is_deterministic() {
+        let mut recipient = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
+        recipient[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+        recipient[DIVERSIFIER_SIZE..].copy_from_slice(&INTERNAL_PK_D);
+
+        let nk = [0u8; HASH_SIZE];
+
+        let nf_first =
+            spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .expect("first call to spend_nullifier_bytes_v3 must succeed");
+        let nf_second =
+            spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .expect("second call to spend_nullifier_bytes_v3 must succeed");
+
+        assert_eq!(
+            nf_first, nf_second,
+            "spend_nullifier_bytes_v3 must be deterministic"
+        );
+    }
 }

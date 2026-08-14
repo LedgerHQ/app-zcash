@@ -438,9 +438,12 @@ class ZcashCommandSender:
     def _build_pczt_header_and_global_payload(
         self,
         pczt_global: PcztGlobal,
+        pczt_version: int | None = None,
     ) -> bytes:
+        if pczt_version is None:
+            pczt_version = 2 if pczt_global.tx_version == 6 else 1
         payload = bytearray(b"PCZT")
-        payload.extend((1).to_bytes(4, byteorder="little"))
+        payload.extend(pczt_version.to_bytes(4, byteorder="little"))
         payload.extend(pczt_global.tx_version.to_bytes(4, byteorder="little"))
         payload.extend(pczt_global.version_group_id.to_bytes(4, byteorder="little"))
         payload.extend(pczt_global.consensus_branch_id.to_bytes(4, byteorder="little"))
@@ -689,6 +692,8 @@ class ZcashCommandSender:
             output_metadata = action.recipient + action.value.to_bytes(8, byteorder="little") + action.rseed
             if include_rcv:
                 output_metadata += action.rcv
+            if action.note_plaintext_version is not None:
+                output_metadata += bytes([action.note_plaintext_version])
             packets.append(
                 self._checked_pczt_packet(
                     output_metadata,
@@ -721,13 +726,14 @@ class ZcashCommandSender:
     def _send_pczt_header(
         self,
         pczt_global: PcztGlobal,
+        pczt_version: int | None = None,
     ) -> None:
         self.backend.exchange(
             cla=CLA,
             ins=InsType.PCZT_HEADER,
             p1=P1.P1_FIRST,
             p2=P2.P2_NONE,
-            data=self._build_pczt_header_and_global_payload(pczt_global),
+            data=self._build_pczt_header_and_global_payload(pczt_global, pczt_version),
         )
 
     def _send_pczt_transparent_inputs(
@@ -931,12 +937,13 @@ class ZcashCommandSender:
         transparent_outputs: list[PcztTransparentOutput],
         orchard_bundle: PcztOrchardBundle | None = None,
         ironwood_bundle: PcztIronwoodBundle | None = None,
+        pczt_version: int | None = None,
     ) -> Generator[None, None, None]:
         self.trusted_inputs = []
         self.pczt_transparent_inputs = transparent_inputs
         self.pczt_transparent_outputs = transparent_outputs
 
-        self._send_pczt_header(pczt_global)
+        self._send_pczt_header(pczt_global, pczt_version)
         self._send_pczt_transparent_inputs(transparent_inputs)
         self._send_pczt_transparent_outputs_sync(
             self.pczt_transparent_outputs,

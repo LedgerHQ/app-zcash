@@ -197,19 +197,44 @@ impl PcztParser {
     ) -> Result<(), ParserError> {
         const OUTPUT_METADATA_WITHOUT_RCV_LEN: usize = ORCHARD_RAW_ADDRESS_SIZE + 8 + 32;
         const OUTPUT_METADATA_WITH_RCV_LEN: usize = OUTPUT_METADATA_WITHOUT_RCV_LEN + 32;
+        const OUTPUT_METADATA_WITH_NOTE_VERSION_LEN: usize = OUTPUT_METADATA_WITH_RCV_LEN + 1;
 
-        match reader.remaining_len() {
+        let has_note_version = match reader.remaining_len() {
             OUTPUT_METADATA_WITHOUT_RCV_LEN => {
                 return Err(ParserError::from_str("Missing PCZT ironwood rcv"));
             }
-            OUTPUT_METADATA_WITH_RCV_LEN => {}
+            OUTPUT_METADATA_WITH_RCV_LEN => false,
+            OUTPUT_METADATA_WITH_NOTE_VERSION_LEN => true,
             _ => {
                 return Err(ParserError::from_str(
                     "Bad PCZT ironwood output metadata length",
                 ));
             }
+        };
+
+        self.read_ironwood_output_fields(reader)?;
+
+        if has_note_version {
+            self.current_action.note_plaintext_version = ok!(reader.read_u8());
+            if self.current_action.note_plaintext_version != NOTE_VERSION_ORCHARD
+                && self.current_action.note_plaintext_version != NOTE_VERSION_IRONWOOD
+            {
+                return Err(ParserError::from_str(
+                    "Unknown PCZT ironwood notePlaintextVersion",
+                ));
+            }
         }
 
+        Self::ensure_ironwood_apdu_group_end(reader)?;
+        self.finish_current_ironwood_action(ctx)
+    }
+
+    /// Reads the fields common to both the 115-byte and 116-byte output-metadata packets:
+    /// `output_recipient`, `output_value`, `output_rseed`, and `rcv`.
+    fn read_ironwood_output_fields(
+        &mut self,
+        reader: &mut ByteReader<'_>,
+    ) -> Result<(), ParserError> {
         ok!(reader.read_exact(&mut self.current_action.output_recipient));
         debug!(
             "PCZT ironwood action #{} recipient: {}",
@@ -245,8 +270,7 @@ impl PcztParser {
         );
         self.current_action.rcv = Some(rcv);
 
-        Self::ensure_ironwood_apdu_group_end(reader)?;
-        self.finish_current_ironwood_action(ctx)
+        Ok(())
     }
 
     pub(super) fn parse_ironwood_enc_ciphertext_len(
@@ -439,6 +463,7 @@ impl PcztParser {
         self.current_action.alpha = None;
         self.current_action.path = None;
         self.current_action.fvk = None;
+        self.current_action.note_plaintext_version = NOTE_VERSION_ORCHARD;
     }
 
     pub(super) fn reset_ironwood_bundle_state(&mut self, action_count: usize) {
@@ -534,6 +559,7 @@ impl PcztParser {
         // nullifier can only be checked on real spends. `spend_value` is not merely
         // declared: `cv_net` above binds it and `validate_current_ironwood_output`
         // below pins `output_value`, so a real spend cannot pose as a dummy.
+        // V2 and V3 dummies both have their cmx recomputed and verified.
         let is_real_spend = self.current_action.spend_value != 0;
         if is_real_spend {
             let ironwood_fvk = self
@@ -643,7 +669,11 @@ impl PcztParser {
         let compact = self.current_ironwood_compact_action(note_ciphertext);
         let network = keys.network;
 
-        match decipher_compact_value(&keys.internal_ivk, &compact) {
+        match decipher_compact_value(
+            &keys.internal_ivk,
+            &compact,
+            true, // V6 Ironwood pool accepts both V2 and V3 notes
+        ) {
             Ok(Some(output)) => {
                 self.validate_deciphered_ironwood_output(&output)?;
                 self.push_deciphered_ironwood_output(ctx, output, network, true)?;
@@ -664,7 +694,11 @@ impl PcztParser {
             out_ciphertext: note_ciphertext.out_ciphertext,
         };
 
-        match decipher_value_with_ovk(&keys.external_ovk, &action) {
+        match decipher_value_with_ovk(
+            &keys.external_ovk,
+            &action,
+            true, // V6 Ironwood pool accepts both V2 and V3 notes
+        ) {
             Ok(Some(output)) => {
                 self.validate_deciphered_ironwood_output(&output)?;
                 self.push_deciphered_ironwood_output(ctx, output, network, false)?;
@@ -707,26 +741,23 @@ impl PcztParser {
             return Err(ParserError::from_str("Missing PCZT ironwood output rseed"));
         };
 
-        let expected_cmx = ledger_zcash_crypto::orchard_note_commitment_bytes(
-            &self.current_action.output_recipient,
-            self.current_action.output_value,
-            &self.current_action.nullifier,
-            &rseed,
-        )
-        .map_err(|err| match err {
-            ledger_zcash_crypto::Error::MalformedPallasBase => {
-                ParserError::from_str("Bad PCZT ironwood dummy nullifier")
-            }
-            ledger_zcash_crypto::Error::MalformedPallasPoint
-            | ledger_zcash_crypto::Error::InvalidDiversifyHashPoint => {
-                ParserError::from_str("Bad PCZT ironwood output recipient")
-            }
-            ledger_zcash_crypto::Error::MalformedPallasScalar
-            | ledger_zcash_crypto::Error::InvalidKeyDiscarded => {
-                ParserError::from_str("Bad PCZT ironwood output rseed")
-            }
-            _ => ParserError::from_sw(AppSW::TechnicalProblem),
-        })?;
+        let use_v3 = self.current_action.note_plaintext_version == NOTE_VERSION_IRONWOOD;
+        let commitment_result = if use_v3 {
+            ledger_zcash_crypto::orchard_note_commitment_v3_bytes(
+                &self.current_action.output_recipient,
+                self.current_action.output_value,
+                &self.current_action.nullifier,
+                &rseed,
+            )
+        } else {
+            ledger_zcash_crypto::orchard_note_commitment_bytes(
+                &self.current_action.output_recipient,
+                self.current_action.output_value,
+                &self.current_action.nullifier,
+                &rseed,
+            )
+        };
+        let expected_cmx = commitment_result.map_err(Self::map_ironwood_commitment_error)?;
 
         if expected_cmx != self.current_action.cmx {
             debug!(
@@ -741,6 +772,23 @@ impl PcztParser {
 
         debug!("PCZT ironwood dummy output accepted");
         Ok(true)
+    }
+
+    fn map_ironwood_commitment_error(err: ledger_zcash_crypto::Error) -> ParserError {
+        match err {
+            ledger_zcash_crypto::Error::MalformedPallasBase => {
+                ParserError::from_str("Bad PCZT ironwood dummy nullifier")
+            }
+            ledger_zcash_crypto::Error::MalformedPallasPoint
+            | ledger_zcash_crypto::Error::InvalidDiversifyHashPoint => {
+                ParserError::from_str("Bad PCZT ironwood output recipient")
+            }
+            ledger_zcash_crypto::Error::MalformedPallasScalar
+            | ledger_zcash_crypto::Error::InvalidKeyDiscarded => {
+                ParserError::from_str("Bad PCZT ironwood output rseed")
+            }
+            _ => ParserError::from_sw(AppSW::TechnicalProblem),
+        }
     }
 
     fn validate_deciphered_ironwood_output(
@@ -902,7 +950,7 @@ impl PcztParser {
         let nk: [u8; 32] = fvk_bytes[32..64]
             .try_into()
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-        let expected_nullifier = ledger_zcash_crypto::orchard_spend_nullifier_bytes(
+        let expected_nullifier = ledger_zcash_crypto::orchard_spend_nullifier_bytes_v3(
             &nk,
             &self.current_action.spend_recipient,
             self.current_action.spend_value,
