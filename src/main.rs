@@ -27,7 +27,6 @@ mod handlers {
     pub mod get_version;
     pub mod get_vk;
     pub mod pczt;
-    pub mod sign_msg;
     pub mod sign_tx;
 }
 
@@ -78,7 +77,7 @@ use crate::{
         INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_VK, INS_GET_WALLET_PUBLIC_KEY,
         INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN, INS_PCZT_HEADER,
         INS_PCZT_ORCHARD_ACTION, INS_PCZT_SIGN_ORCHARD, INS_PCZT_SIGN_TRANSPARENT,
-        INS_PCZT_TRANSPARENT_INPUT, INS_PCZT_TRANSPARENT_OUTPUT, INS_SIGN_MESSAGE, ZCASH_CLA,
+        INS_PCZT_TRANSPARENT_INPUT, INS_PCZT_TRANSPARENT_OUTPUT, ZCASH_CLA,
     },
     handlers::{
         get_trusted_input::handler_get_trusted_input,
@@ -87,7 +86,6 @@ use crate::{
             handler_pczt_sign_transparent, handler_pczt_transparent_input,
             handler_pczt_transparent_output,
         },
-        sign_msg::handler_sign_msg,
         sign_tx::{handler_hash_input_finalize_full, handler_hash_input_start, handler_hash_sign},
     },
     settings::Settings,
@@ -205,10 +203,6 @@ pub enum Instruction {
     },
     PcztInvalid {
         sw: AppSW,
-    },
-    SignMessage {
-        first: bool,
-        next: bool,
     },
 }
 
@@ -339,10 +333,6 @@ impl TryFrom<ApduHeader> for Instruction {
                     sw: AppSW::WrongP1P2,
                 })
             }
-            (INS_SIGN_MESSAGE, p1, 0) => Ok(Instruction::SignMessage {
-                first: p1 == P1_FIRST,
-                next: p1 == P1_NEXT,
-            }),
             (_, _, _) => {
                 if value.p1 != 0 || value.p2 != 0 {
                     return Err(AppSW::WrongP1P2);
@@ -583,7 +573,6 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
             ctx.pczt_parser.reset();
             Err(*sw)
         }
-        Instruction::SignMessage { first, next } => handler_sign_msg(comm, ctx, *first, *next),
     }
 }
 

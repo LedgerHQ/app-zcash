@@ -1,5 +1,6 @@
 use ::orchard::keys::{FullViewingKey, Scope};
 use zcash_protocol::consensus::NetworkType;
+use zeroize::Zeroize;
 
 use crate::{AppSW, zip32::map_ledger_crypto_error};
 
@@ -13,6 +14,16 @@ pub(crate) struct OrchardDecipherKeys {
     pub network: NetworkType,
     pub internal_ivk: [u8; 32],
     pub external_ovk: [u8; 32],
+}
+
+/// These are seed-derived viewing keys: they cannot move funds, but they identify and decrypt the
+/// account's own notes, so they are wiped rather than left in the static transaction context for
+/// whatever runs next. Replacing or dropping the enclosing `TxInfo` triggers this.
+impl Drop for OrchardDecipherKeys {
+    fn drop(&mut self) {
+        self.internal_ivk.zeroize();
+        self.external_ovk.zeroize();
+    }
 }
 
 impl OrchardDecipherKeys {

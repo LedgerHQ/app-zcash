@@ -19,6 +19,7 @@ const ZCASH_MEMO_EMPTY_TAG: u8 = 0xF6;
 
 #[cfg(feature = "zcash_unstable")]
 impl PcztParser {
+    #[inline(never)]
     pub(super) fn parse_ironwood_actions_start(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -78,6 +79,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     pub(super) fn parse_ironwood_action(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -157,6 +159,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     pub(super) fn parse_ironwood_output(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -190,6 +193,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     pub(super) fn parse_ironwood_output_metadata(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -216,11 +220,11 @@ impl PcztParser {
 
         if has_note_version {
             self.current_action.note_plaintext_version = ok!(reader.read_u8());
-            if self.current_action.note_plaintext_version != NOTE_VERSION_ORCHARD
-                && self.current_action.note_plaintext_version != NOTE_VERSION_IRONWOOD
-            {
+            // The Ironwood value pool carries V3 note plaintexts only, so a metadata byte
+            // announcing anything else describes a note this bundle cannot hold.
+            if self.current_action.note_plaintext_version != NOTE_VERSION_IRONWOOD {
                 return Err(ParserError::from_str(
-                    "Unknown PCZT ironwood notePlaintextVersion",
+                    "Bad PCZT ironwood notePlaintextVersion",
                 ));
             }
         }
@@ -485,6 +489,7 @@ impl PcztParser {
         self.pool_field_bytes.clear();
     }
 
+    #[inline(never)]
     fn finish_ironwood_enc_ciphertext(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -520,6 +525,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn finish_ironwood_out_ciphertext(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -544,6 +550,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn finish_current_ironwood_action(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -552,7 +559,11 @@ impl PcztParser {
             .current_action
             .out_ciphertext
             .ok_or_else(|| ParserError::from_str("Missing PCZT ironwood out_ciphertext"))?;
-        let note_ciphertext = self.current_ironwood_note_ciphertext(out_ciphertext)?;
+        if self.current_action.enc_ciphertext.len() != ORCHARD_ENC_CIPHERTEXT_SIZE {
+            return Err(ParserError::from_str(
+                "Missing PCZT ironwood enc_ciphertext for decryption",
+            ));
+        }
 
         self.verify_current_ironwood_cv_net()?;
         // A dummy padding spend uses a throwaway key, so recipient membership and
@@ -570,7 +581,14 @@ impl PcztParser {
             self.verify_current_ironwood_spend_nullifier(ironwood_fvk)?;
             self.ironwood_real_spend_count = self.ironwood_real_spend_count.saturating_add(1);
         }
-        self.validate_current_ironwood_output(ctx, &note_ciphertext)?;
+        // Lend the enc_ciphertext buffer out of `self` for the validation call: it already
+        // lives on the heap, so borrowing it keeps 580 bytes off this frame while the
+        // validation path still takes `&mut self`. It returns with its capacity intact.
+        let enc_ciphertext = core::mem::take(&mut self.current_action.enc_ciphertext);
+        let validated =
+            self.validate_current_ironwood_output(ctx, &enc_ciphertext, &out_ciphertext);
+        self.current_action.enc_ciphertext = enc_ciphertext;
+        validated?;
 
         self.ironwood_spend_value_sum = self
             .ironwood_spend_value_sum
@@ -616,63 +634,38 @@ impl PcztParser {
         Ok(())
     }
 
-    fn current_ironwood_note_ciphertext(
-        &self,
-        out_ciphertext: [u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
-    ) -> Result<TransmittedNoteCiphertext, ParserError> {
-        if self.current_action.enc_ciphertext.len() != ORCHARD_ENC_CIPHERTEXT_SIZE {
-            return Err(ParserError::from_str(
-                "Missing PCZT ironwood enc_ciphertext for decryption",
-            ));
-        }
-
-        let enc_ciphertext: [u8; ORCHARD_ENC_CIPHERTEXT_SIZE] = self
-            .current_action
-            .enc_ciphertext
-            .as_slice()
-            .try_into()
-            .map_err(|_| ParserError::from_str("Bad PCZT ironwood enc_ciphertext length"))?;
-
-        Ok(TransmittedNoteCiphertext {
-            epk_bytes: self.current_action.ephemeral_key,
-            enc_ciphertext,
-            out_ciphertext,
-        })
-    }
-
-    fn current_ironwood_compact_action(
-        &self,
-        note_ciphertext: &TransmittedNoteCiphertext,
-    ) -> OrchardCompactAction {
+    fn current_ironwood_compact_action(&self, enc_ciphertext: &[u8]) -> OrchardCompactAction {
         let mut enc_ciphertext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
         enc_ciphertext_prefix
-            .copy_from_slice(&note_ciphertext.enc_ciphertext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
+            .copy_from_slice(&enc_ciphertext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
 
         OrchardCompactAction {
             nullifier: self.current_action.nullifier,
             cmx: self.current_action.cmx,
-            ephemeral_key: note_ciphertext.epk_bytes,
+            ephemeral_key: self.current_action.ephemeral_key,
             enc_ciphertext_prefix,
         }
     }
 
+    #[inline(never)]
     fn try_decipher_current_ironwood_output(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
-        note_ciphertext: &TransmittedNoteCiphertext,
+        enc_ciphertext: &[u8],
+        out_ciphertext: &[u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
     ) -> Result<bool, ParserError> {
         let Some(keys) = ctx.tx_info.orchard_decipher_keys.as_ref() else {
             debug!("No PCZT ironwood decipher keys available");
             return Ok(false);
         };
 
-        let compact = self.current_ironwood_compact_action(note_ciphertext);
+        let compact = self.current_ironwood_compact_action(enc_ciphertext);
         let network = keys.network;
 
         match decipher_compact_value(
             &keys.internal_ivk,
             &compact,
-            true, // V6 Ironwood pool accepts both V2 and V3 notes
+            true, // V6 Ironwood pool accepts both V2 and V3 note plaintexts
         ) {
             Ok(Some(output)) => {
                 self.validate_deciphered_ironwood_output(&output)?;
@@ -690,14 +683,14 @@ impl PcztParser {
             compact,
             rk: self.current_action.rk,
             cv_net: self.current_action.cv_net,
-            enc_ciphertext: &note_ciphertext.enc_ciphertext,
-            out_ciphertext: note_ciphertext.out_ciphertext,
+            enc_ciphertext,
+            out_ciphertext: *out_ciphertext,
         };
 
         match decipher_value_with_ovk(
             &keys.external_ovk,
             &action,
-            true, // V6 Ironwood pool accepts both V2 and V3 notes
+            true, // V6 Ironwood pool accepts both V2 and V3 note plaintexts
         ) {
             Ok(Some(output)) => {
                 self.validate_deciphered_ironwood_output(&output)?;
@@ -714,12 +707,14 @@ impl PcztParser {
         Ok(false)
     }
 
+    #[inline(never)]
     fn validate_current_ironwood_output(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
-        note_ciphertext: &TransmittedNoteCiphertext,
+        enc_ciphertext: &[u8],
+        out_ciphertext: &[u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
     ) -> Result<(), ParserError> {
-        if self.try_decipher_current_ironwood_output(ctx, note_ciphertext)? {
+        if self.try_decipher_current_ironwood_output(ctx, enc_ciphertext, out_ciphertext)? {
             return Ok(());
         }
 
@@ -732,6 +727,7 @@ impl PcztParser {
         ))
     }
 
+    #[inline(never)]
     fn validate_current_ironwood_dummy_output(&self) -> Result<bool, ParserError> {
         if self.current_action.output_value != 0 {
             return Ok(false);
@@ -879,7 +875,9 @@ impl PcztParser {
         let address =
             UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(output.raw_address)])
                 .map(|address| address.encode(&network))
-                .unwrap_or_else(|_| format!("ironwood:{}", HexSlice(&output.raw_address)));
+                // No fallback string: a recipient the user cannot check against their own
+                // wallet is worse than refusing to sign.
+                .map_err(|_| ParserError::from_str("Cannot encode PCZT ironwood output address"))?;
         let memo = Self::ironwood_output_memo_display(&output, is_change)?;
 
         debug!(
@@ -902,6 +900,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn verify_current_ironwood_cv_net(&self) -> Result<(), ParserError> {
         let Some(rcv_bytes) = self.current_action.rcv else {
             return Err(ParserError::from_str("Missing PCZT ironwood rcv"));
@@ -933,6 +932,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn verify_current_ironwood_spend_nullifier(&self, fvk: &OrchardFvk) -> Result<(), ParserError> {
         let mut diversifier = [0u8; 11];
         diversifier.copy_from_slice(&self.current_action.spend_recipient[..11]);
@@ -1041,6 +1041,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn verify_current_ironwood_rk(&self, ask: &OrchardAsk) -> Result<(), ParserError> {
         let alpha = self
             .current_action
@@ -1065,6 +1066,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn finish_ironwood_anchor(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -1140,6 +1142,7 @@ impl PcztParser {
         Ok(())
     }
 
+    #[inline(never)]
     fn finish_ironwood_zip32_derivation(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
