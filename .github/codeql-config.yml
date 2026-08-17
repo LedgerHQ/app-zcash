@@ -1,8 +1,0 @@
-name: app-zcash CodeQL configuration
-
-# Findings should concern code we wrote. The vendored crates are upstream releases plus a small
-# documented Ledger delta (see vendor/patches/), and analysing them buries our own results in
-# thousands of upstream ones.
-paths-ignore:
-  - vendor
-  - tests
