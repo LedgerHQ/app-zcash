@@ -1348,24 +1348,47 @@ def test_pczt_ironwood_v2_metadata_byte_rejected(backend):
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
-@pytest.mark.skip(
-    reason="Requires a Pallas-valid (rk, alpha) pair where rk is deliberately wrong — "
-           "needs Pallas group arithmetic unavailable in this test harness. "
-           "Rejection verified by code inspection: ironwood.rs verify_current_ironwood_rk() "
-           "recomputes rk = SpendAuthorizationKey(path).randomize(alpha) and returns an error "
-           "on mismatch before any signature is produced."
-)
 def test_pczt_ironwood_rk_mismatch_rejected(backend):
-    pass
+    """A real Ironwood spend whose rk does not match alpha and the signing key is refused.
+
+    This is the one check binding a signature to the device's own key. The device recomputes
+    rk from the derived spend authorizing key and compares raw bytes, so a wrong rk needs no
+    curve arithmetic to construct — flipping one bit is enough, exactly as the Orchard pool's
+    test_pczt_sign_tx_orchard_rk_mismatch_rejected does.
+
+    The check only runs for a real spend (spend_value != 0); a dummy padding spend derives no
+    ask and is refused at signing time instead.
+    """
+    client = ZcashCommandSender(backend)
+    action = _valid_ironwood_action()
+    action.rk = bytes([_RK_ALPHA_1[0] ^ 1]) + _RK_ALPHA_1[1:]
+    bundle = PcztIronwoodBundle(
+        actions=[action],
+        flags=3,
+        value_balance=300000,
+        anchor=bytes(32),
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+            ironwood_bundle=bundle,
+        ):
+            pytest.fail("Device accepted a PCZT Ironwood action with mismatched rk")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
 @pytest.mark.skip(
-    reason="Requires constructing a bundle whose per-action spend_value or output_value sum "
-           "exceeds i64::MAX (9223372036854775807) with a matching cv_net — needs Pallas "
-           "commitment arithmetic unavailable in this test harness. "
-           "Rejection verified by code inspection: ironwood.rs finish_current_ironwood_action() "
-           "uses checked_add on the running sums (spend/output), and the value balance magnitude "
-           "is cast via i64::try_from() which errors on overflow."
+    reason="Unreachable by construction, so there is nothing to exercise. read_ironwood_value "
+           "bounds every spend and output value to MAX_MONEY (2.1e15 zatoshis) via "
+           "Zatoshis::from_nonnegative_i64_le_bytes, and MAX_PCZT_IRONWOOD_ACTIONS_NUMBER caps a "
+           "bundle at 10 actions, so the largest sum finish_current_ironwood_action can accumulate "
+           "is 2.1e16 — three orders of magnitude below u64::MAX. The checked_add on the running "
+           "sums is defence in depth behind that range check, not an untested path: a host cannot "
+           "supply a value large enough to reach it."
 )
 def test_pczt_ironwood_value_sum_overflow_rejected(backend):
     pass
