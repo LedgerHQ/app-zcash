@@ -132,8 +132,10 @@ impl PcztParser {
 
         // In the case of internal transfers between pools (for example, transparent -> Orchard or Orchard -> transparent),
         // we have to display the internal outputs on the clear-sign screen.
+        // Not in swap mode: there is no screen to reveal anything on, and clearing `is_change`
+        // would make `check_swap_params` see several external outputs where the transaction has one.
         let has_external_output = ctx.tx_info.outputs.iter().any(|output| !output.is_change);
-        let reveal_self_outputs = !has_external_output;
+        let reveal_self_outputs = !has_external_output && ctx.swap_params.is_none();
         if reveal_self_outputs {
             debug!("PCZT has no external outputs; displaying self-transfer output");
             // PCZT does not read tx_info.outputs after review; this only affects UI filtering.
@@ -148,9 +150,18 @@ impl PcztParser {
         let spent_from_private = spent_from_private || self.ironwood_spend_value_sum > 0;
         let transfer_type =
             TransferType::classify(spent_from_public, spent_from_private, &ctx.tx_info.outputs);
-        let review_result = ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type);
-
-        if !ok!(review_result) {
+        // Swap mode substitutes validation for review, exactly as the legacy path does: the user
+        // already approved the operation in the Exchange app, which drives this flow without
+        // interaction, so prompting here would both stall it and ask about something the user has
+        // already seen. The cross-check is what makes that safe — it refuses any transaction that
+        // does not match what Exchange asked for.
+        if let Some(swap_params) = ctx.swap_params {
+            ok!(crate::swap::check_swap_params(
+                swap_params,
+                &ctx.tx_info.outputs,
+                fees
+            ));
+        } else if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type)) {
             return Err(ParserError::user());
         }
 

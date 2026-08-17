@@ -84,6 +84,7 @@ pub fn handler_pczt_header(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), A
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
         },
         data,
     ) {
@@ -114,6 +115,7 @@ pub fn handler_pczt_transparent_input(
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
         },
         data,
     ) {
@@ -149,6 +151,7 @@ pub fn handler_pczt_transparent_output(
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
         },
         data,
     ) {
@@ -185,6 +188,7 @@ pub fn handler_pczt_orchard_action(
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
         },
         data,
     ) {
@@ -223,6 +227,7 @@ pub fn handler_pczt_ironwood_action(
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
         },
         data,
     ) {

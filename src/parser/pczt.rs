@@ -12,6 +12,7 @@ use ::orchard::keys::Scope as OrchardScope;
 use corez::io::Read;
 use ledger_device_sdk::ecc::Secret;
 use ledger_device_sdk::hash::HashInit as _;
+use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::log::{debug, info};
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
 use zcash_encoding::CompactSize;
@@ -182,6 +183,9 @@ pub struct PcztParserCtx<'ctx> {
     pub tx_state: &'ctx mut TxSigningState,
     pub tx_info: &'ctx mut TxInfo,
     pub hashers: &'ctx mut Hashers,
+    /// Present only when the Exchange app drove this app into swap mode, in which case the
+    /// transaction is validated against the Exchange's request instead of being shown to the user.
+    pub swap_params: Option<&'ctx CreateTxParams>,
 }
 
 /// Ironwood signing records share the same layout as Orchard — alias for correct naming.
