@@ -22,3 +22,23 @@ jobs:
     uses: LedgerHQ/ledger-app-workflows/.github/workflows/reusable_lint.yml@v1
     with:
       source: './src'
+
+  # The reusable lint workflow only runs `cargo fmt --check` for Rust apps, and
+  # `RUST.instructions.md` asks for clippy too. Scoped to this repo's own crates: the
+  # vendored crates are path dependencies, so cargo does not cap their lints and a global
+  # `-D warnings` would break on an upstream bump rather than on our code.
+  check_clippy:
+    name: Run clippy on every supported device
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-dev-tools:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [nanox, nanosplus, stax, flex, apex_p]
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Clippy
+        run: cargo clippy -p zcash -p ledger_zcash_crypto --target ${{ matrix.target }} -- -D warnings

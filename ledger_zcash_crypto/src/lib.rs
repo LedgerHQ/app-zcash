@@ -50,10 +50,9 @@ const ORCHARD_RIVK_INTERNAL_DOMAIN_SEPARATOR: u8 = 0x83;
 const ORCHARD_ESK_DOMAIN_SEPARATOR: u8 = 0x04;
 const ORCHARD_RCM_DOMAIN_SEPARATOR: u8 = 0x05;
 const ORCHARD_PSI_DOMAIN_SEPARATOR: u8 = 0x09;
-// Note plaintext version bytes (lead byte of enc_ciphertext plaintext).
-pub(crate) const NOTE_VERSION_ORCHARD: u8 = 0x02;
-// ZIP 2005 §3.2.1 (Ironwood): V3 note plaintext version byte and quantum-recoverable rcm
-// domain separator.  Only available when V3 note support is enabled.
+// ZIP 2005 §3.2.1 (Ironwood): V3 note plaintext version byte (lead byte of the enc_ciphertext
+// plaintext) and quantum-recoverable rcm domain separator. Callers name the version they expect,
+// so this one only selects the V3 commitment formula once a plaintext is in hand.
 pub(crate) const NOTE_VERSION_IRONWOOD: u8 = 0x03;
 const ORCHARD_QR_RCM_DOMAIN_SEPARATOR: u8 = 0x0B;
 const PRF_EXPAND_BYTES: usize = 64;
