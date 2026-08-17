@@ -1,0 +1,44 @@
+name: CodeQL
+
+# The reusable CodeQL workflow in ledger-app-workflows is C-only: it hardcodes `language: cpp`
+# and builds with `make BOLOS_SDK=…`, neither of which applies to a cargo-ledger app. This runs
+# CodeQL's Rust analysis directly instead.
+#
+# `build-mode: none` extracts from source rather than from a compilation, so the ARM device
+# toolchain is not needed here — the build is already covered by the other workflows.
+#
+# Results go to the Security tab; findings do not fail the job. Treat a *failure* here as a
+# setup problem, and the findings themselves as review input.
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+      - develop
+  pull_request:
+
+jobs:
+  analyse:
+    name: Analyse Rust sources
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: rust
+          build-mode: none
+          queries: security-and-quality
+          config-file: ./.github/codeql-config.yml
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
