@@ -35,12 +35,10 @@ impl PcztParser {
         let is_v5 = tx_version_raw == V5_TX_VERSION && version_group_id == V5_VERSION_GROUP_ID;
         let is_v6 = tx_version_raw == V6_TX_VERSION && version_group_id == V6_VERSION_GROUP_ID;
 
-        if !is_v5 {
-            if !is_v6 {
-                return Err(ParserError::from_str(
-                    "Unsupported PCZT transaction version",
-                ));
-            }
+        if !is_v5 && !is_v6 {
+            return Err(ParserError::from_str(
+                "Unsupported PCZT transaction version",
+            ));
         }
 
         let consensus_branch_id = ok!(BranchId::try_from(branch_id_raw));

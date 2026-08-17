@@ -19,7 +19,6 @@ use ledger_device_sdk::hash::{
 };
 use pasta_curves::pallas;
 
-use crate::NOTE_VERSION_ORCHARD;
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
     ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
