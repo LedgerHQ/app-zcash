@@ -19,6 +19,7 @@ from application_client.pczt import (
     PcztIronwoodAction,
     PcztIronwoodBundle,
     PcztOrchardBundle,
+    PcztTransparentInput,
     PcztTransparentOutput,
 )
 from application_client.zcash_command_sender import (
@@ -88,6 +89,16 @@ _SPEND_RSEED = bytes.fromhex("1a000000000000000000000000000000000000000000000000
 _TRANSPARENT_OUTPUT_599K = PcztTransparentOutput(
     value=599000,
     script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+)
+
+# Funds the 599000 output with a 1000-zat fee, for the cases that carry no shielded value.
+_TRANSPARENT_INPUT_600K = PcztTransparentInput(
+    prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+    prevout_index=0,
+    value=600000,
+    script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+    sequence=bytes.fromhex("00000000"),
+    signing_path="m/44'/133'/0'/0/2",
 )
 
 # Empty Orchard bundle used to advance the state machine to OrchardActionsDone.
@@ -312,6 +323,64 @@ def test_pczt_ironwood_v2_version1_rejected_for_v6(backend):
             pczt_version=1,  # force incorrect version for a V6 tx
         ):
             pytest.fail("Device accepted PCZT_VERSION_1 for a V6 transaction")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_ironwood_v2_empty_bundle_accepted(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A V6 transaction may carry an empty Ironwood bundle, and must still be signable.
+
+    A transaction that spends only Orchard notes after NU6.3 is a V6 transaction with no Ironwood
+    actions. ZIP 229 gives its `ironwood_digest_v6` the empty-input value rather than dropping the
+    node from the txid tree — librustzcash's own V6 txid test feeds `empty_hash("ZTxIdIronwd_H_v6")`
+    for exactly this shape. Refusing the empty bundle would also strand the transaction a second way,
+    since V6 defers the user review to Ironwood finalisation.
+
+    This is a non-regression test on the flow: it shows the empty bundle is accepted, the review runs
+    and a signature comes back. That the digest matches consensus rests on the ZIP and on the
+    librustzcash cross-check, not on this test.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_600K],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
+        ironwood_bundle=PcztIronwoodBundle(
+            actions=[], flags=0, value_balance=0, anchor=bytes(32)
+        ),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_v2_empty_bundle_accepted")
+
+    signature = client.pczt_sign_transparent(input_index=0).data
+    assert len(signature) >= 70
+
+
+def test_pczt_ironwood_v2_bundle_rejected_on_v5_transaction(backend):
+    """The mirror of the case above: an Ironwood bundle on a V5-declared transaction.
+
+    The Ironwood pool exists only in V6. A V5 transaction reaches OrchardActionsDone as soon as its
+    Orchard bundle is parsed, so nothing in the section ordering stops the host from following it
+    with an Ironwood bundle. Accepting one would leave the parser holding is_v6 == false while an
+    Ironwood digest is appended — a digest tree matching no consensus rule.
+
+    PcztGlobal() defaults to tx_version 5, and pczt_version 1 is the correct pairing for it, so this
+    request is rejected for its structure rather than for a version mismatch.
+    """
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=[],
+            transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
+            ironwood_bundle=_two_real_spends_bundle(),
+            pczt_version=1,
+        ):
+            pytest.fail("Device accepted an Ironwood bundle on a V5 transaction")
 
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 

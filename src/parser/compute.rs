@@ -1,9 +1,11 @@
 use crate::consts::{OVERWINTERED_FLAG, V6_TX_VERSION, V6_VERSION_GROUP_ID};
-use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use crate::parser::personalization::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
     ZCASH_TX_PERSONALIZATION_PREFIX,
+};
+use crate::parser::personalization::{
+    ZCASH_IRONWOOD_HASH_PERSONALIZATION, ZCASH_ORCHARD_HASH_PERSONALIZATION_V6,
 };
 use corez::io::Write;
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
@@ -373,8 +375,19 @@ fn finalize_signature_hash_from_transparent_digest(
     ok!(hasher.update(transparent_digest));
     ok!(hasher.update(&sapling_digest));
     ok!(hasher.update(&orchard_digest));
-    if tx_info.has_ironwood_bundle {
-        ok!(hasher.update(&tx_info.ironwood_digest));
+    // ZIP 229: `ironwood_digest_v6` is a child of `txid_digest_v6` for *every* V6 transaction, and
+    // takes the empty-input value when the bundle has no actions — the same treatment the Orchard
+    // node gets above. Gating on the bundle's presence instead would omit the node entirely and
+    // produce a digest no consensus rule recognises. Confirmed against librustzcash's own V6 txid
+    // test, which feeds `empty_hash("ZTxIdIronwd_H_v6")` for a transaction with no Ironwood bundle.
+    if tx_info.is_v6 {
+        let ironwood_digest = if tx_info.ironwood_digest == [0; 32] {
+            empty_digest(ZCASH_IRONWOOD_HASH_PERSONALIZATION)?
+        } else {
+            tx_info.ironwood_digest
+        };
+        debug!("Ironwood hash: {}", HexSlice(&ironwood_digest));
+        ok!(hasher.update(&ironwood_digest));
     }
     ok!(hasher.finalize(&mut tx_info.signature_digest));
 
