@@ -2,6 +2,26 @@ use crate::tx::SupportedTxVersion;
 
 use super::*;
 
+/// Ceiling on a host-declared shielded component count in the legacy parser.
+///
+/// This parser digests an arbitrary previous transaction to compute a trusted input, so it has to
+/// tolerate what the chain actually carries — far more than any wallet builds. A Zcash block cannot
+/// hold anywhere near this many shielded components, so the bound refuses only counts whose purpose
+/// is to make the parser loop, and keeps `count * ORCHARD_MEMO_SIZE` inside a 32-bit `usize`.
+const MAX_LEGACY_SHIELDED_COUNT: usize = 10_000;
+
+fn read_bounded_shielded_count(
+    reader: &mut ByteReader<'_>,
+    what: &'static str,
+) -> Result<usize, ParserError> {
+    let count: usize = ok!(CompactSize::read_t(&mut *reader));
+    if count > MAX_LEGACY_SHIELDED_COUNT {
+        error!("Too many {} components: {}", what, count);
+        return Err(ParserError::from_str("Too many shielded components"));
+    }
+    Ok(count)
+}
+
 impl LegacyParser {
     pub fn parse_input(
         &mut self,
@@ -290,13 +310,21 @@ impl LegacyParser {
             Zatoshis::from_nonnegative_i64_le_bytes(tmp)
         });
 
-        if ctx
-            .trusted_input_info
-            .input_idx
-            .expect("should be set at this point")
-            == self.output_parsed_count as u32
-        {
+        // Set by the first packet of the trusted-input flow. Absent means the flow was entered as a
+        // continuation, which the dispatcher now refuses — keep the check here so reaching this
+        // state by any other route fails with a status word rather than exiting the app.
+        let requested_idx = ok!(
+            ctx.trusted_input_info.input_idx.ok_or(()),
+            "Trusted input index not set"
+        );
+
+        if requested_idx == self.output_parsed_count as u32 {
             ctx.trusted_input_info.amount = amount.into_u64();
+            // Set here, where the requested index is matched, rather than at the end of the parse:
+            // an index the transaction does not have must leave the flag clear so the handler
+            // refuses, instead of sealing an amount of zero under the trusted-input HMAC as if it
+            // had been read from the chain.
+            ctx.trusted_input_info.is_input_processed = true;
             info!(
                 "Found amount for trusted input: {}",
                 ctx.trusted_input_info.amount
@@ -401,19 +429,39 @@ impl LegacyParser {
     ) -> Result<(), ParserError> {
         info!("Output hashing done");
 
-        self.sapling_spend_count = ok!(CompactSize::read_t(&mut *reader));
-        self.sapling_output_count = ok!(CompactSize::read_t(&mut *reader));
-        self.orchard_action_count = ok!(CompactSize::read_t(&mut *reader));
+        // Bounded because every other host-declared quantity in this parser is, and because these
+        // drive the streamed shielded sections. The ceiling is deliberately far above anything a
+        // wallet builds — this parser digests an arbitrary previous transaction to compute a trusted
+        // input, so it must tolerate what the chain actually carries — while still refusing a count
+        // whose only purpose is to make the parser loop.
+        self.sapling_spend_count = read_bounded_shielded_count(reader, "sapling spend")?;
+        self.sapling_output_count = read_bounded_shielded_count(reader, "sapling output")?;
+        self.orchard_action_count = read_bounded_shielded_count(reader, "orchard action")?;
         // ZIP-229 adds a fourth pool: a v6 transaction announces its Ironwood action count
         // even when the Orchard one is zero.
         if let SupportedTxVersion::V6 = ctx.tx_info.tx_version() {
-            self.ironwood_action_count = ok!(CompactSize::read_t(&mut *reader));
+            self.ironwood_action_count = read_bounded_shielded_count(reader, "ironwood action")?;
         }
 
         info!("Sapling spend remaining: {}", self.sapling_spend_count);
         info!("Sapling output count: {}", self.sapling_output_count);
         info!("Orchard action count: {}", self.orchard_action_count);
         info!("Ironwood action count: {}", self.ironwood_action_count);
+
+        // A V4 txid is SHA-256d over the whole V4 serialisation, shielded fields included, but only
+        // the transparent part reaches `v4_tx_hasher` — the shielded parsers feed the ZIP-244 digest
+        // tree, which has no meaning for V4. A V4 transaction carrying shielded components would
+        // therefore produce a wrong txid inside a valid HMAC. Refuse it rather than vouch for a
+        // trusted input that references an outpoint which does not exist.
+        if let SupportedTxVersion::V4 = ctx.tx_info.tx_version()
+            && (self.sapling_spend_count > 0
+                || self.sapling_output_count > 0
+                || self.orchard_action_count > 0)
+        {
+            return Err(ParserError::from_str(
+                "V4 transaction with shielded components is not supported",
+            ));
+        }
 
         if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {
             self.state = LegacyParserState::ProcessSapling;

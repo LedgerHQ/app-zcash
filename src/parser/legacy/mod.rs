@@ -446,7 +446,6 @@ impl LegacyParser {
             ok!(ctx.hashers.v4_tx_hasher.update(reader.remaining_slice()));
         }
 
-        ctx.trusted_input_info.is_input_processed = true;
         self.state = LegacyParserState::TransactionParsed;
 
         compute::tx_id(ctx)?;

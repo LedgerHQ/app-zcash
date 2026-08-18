@@ -101,6 +101,8 @@ pub enum AppSW {
     ExecutionError = 0x6400,
     WrongApduLength = 0x6700, // Normally we should use StatusWord::BadLen(0x6e03)
     CommandIncompatibleFileStructure = 0x6981,
+    // Aliased on purpose: the legacy protocol this app must stay wire-compatible with reports
+    // both conditions with the same word.
     SecurityStatusNotSatisfied = StatusWords::NothingReceived as u16,
     IncorrectData = 0x6A80,
     NotEnoughMemorySpace = 0x6A84,
@@ -127,7 +129,9 @@ pub enum AppSW {
     Licensing = 0x6F42,
     Halted = 0x6FAA,
     Deny = StatusWords::UserCancelled as u16,
-    ConditionsOfUseNotSatisfied = 0x6986, // 0x6985
+    // 0x6986, not the 0x6985 an ISO reading would suggest: the legacy protocol uses 0x6985 for a
+    // user denial (see `Deny`), so this condition takes the adjacent word.
+    ConditionsOfUseNotSatisfied = 0x6986,
     //TxWrongLength = 0x6F00,
     TechnicalProblem = 0x6F00,
     VersionParsingFail = 0x6F01,
@@ -236,10 +240,12 @@ impl TryFrom<ApduHeader> for Instruction {
                     display: (value.p1 & P1_GET_PUBLIC_KEY_DISPLAY) != 0,
                 })
             }
-            (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
-                first: p1 == P1_FIRST,
-                next: p1 == P1_NEXT,
-            }),
+            (INS_GET_TRUSTED_INPUT, p1, 0) if p1 == P1_FIRST || p1 == P1_NEXT => {
+                Ok(Instruction::GetTrustedInput {
+                    first: p1 == P1_FIRST,
+                    next: p1 == P1_NEXT,
+                })
+            }
             (
                 INS_HASH_INPUT_START,
                 P1_HASH_INPUT_START_FIRST | P1_HASH_INPUT_START_NEXT,
@@ -326,12 +332,23 @@ impl TryFrom<ApduHeader> for Instruction {
                     sw: AppSW::WrongP1P2,
                 })
             }
-            (_, _, _) => {
-                if value.p1 != 0 || value.p2 != 0 {
-                    return Err(AppSW::WrongP1P2);
-                }
-                Err(AppSW::InsNotSupported)
-            }
+            // A routed instruction reached here because its P1/P2 did not match any of its arms.
+            // An unrouted one never had P1/P2 semantics at all, so the reply must not depend on
+            // them — otherwise the dispatcher's error contract varies with bytes it never parsed,
+            // and a prober can tell the two conditions apart for free.
+            (
+                INS_GET_WALLET_PUBLIC_KEY
+                | INS_GET_TRUSTED_INPUT
+                | INS_HASH_INPUT_START
+                | INS_HASH_SIGN
+                | INS_HASH_INPUT_FINALIZE_FULL
+                | INS_GET_FIRMWARE_VERSION
+                | INS_GET_VK
+                | INS_GET_SHIELD_ADDR,
+                _,
+                _,
+            ) => Err(AppSW::WrongP1P2),
+            (_, _, _) => Err(AppSW::InsNotSupported),
         }
     }
 }

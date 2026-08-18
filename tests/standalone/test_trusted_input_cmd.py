@@ -99,7 +99,7 @@ def test_trusted_input_sapling_v5_multi(backend):
         + "ec224bd72791daed879010322da1614878dacca61370576f0d5a12566f23db806c6ee3e71bb929f9d217a26d692cc4f5a18c400d2de6ce7208190d50be41f5478d076ff42bfb0e4e7e8021f1618f8700966e1e73041683980bd46768647d5ca2a3c706cb470f77fcd1547f8d7e25234b77332220d523813900d562f7f5dbcbb4"  # noqa: E501
     )
 
-    trusted_input_idx = 1
+    trusted_input_idx = 0
 
     client = ZcashCommandSender(backend)
 
@@ -108,7 +108,7 @@ def test_trusted_input_sapling_v5_multi(backend):
 
     assert txid.hex() == "35f812ce32a94bbd7679a7f4a71c08b9fb263462352157a5c87fa569ad1d7814"
     assert idx == trusted_input_idx
-    assert amount == 0
+    assert amount == 1480000
 
 
 def test_trusted_input_orchard_v5_simple(backend):
@@ -618,12 +618,12 @@ def test_trusted_input_sapling_v5_single_old_2(backend):
 def test_trusted_input_sapling_v5_multi_old(backend):
     # TXID == 14781dad69a57fc8a5572135623426fbb9081ca7f4a77976bd4ba932ce12f835
     TXID_LEN = 112
-    EXPECTED_TRUSTED_INPUT = "35f812ce32a94bbd7679a7f4a71c08b9fb263462352157a5c87fa569ad1d781401000000"
+    EXPECTED_TRUSTED_INPUT = "35f812ce32a94bbd7679a7f4a71c08b9fb263462352157a5c87fa569ad1d781400000000"
 
     transport = ZcashCommandSender(backend)
 
     # with sapling apdus
-    sw, _ = transport.exchange_raw("e04200001100000001050000800a27a7265510e7c800")
+    sw, _ = transport.exchange_raw("e04200001100000000050000800a27a7265510e7c800")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04280000101")
     assert sw == 0x9000

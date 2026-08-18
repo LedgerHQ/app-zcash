@@ -153,10 +153,17 @@ impl LegacyParser {
                 .tx_memo_hasher
                 .init_with_perso(bundle.memos_personalization()));
 
+            // `usize` is 32-bit on the device, so a host-declared action count high enough to wrap
+            // this product would silently shrink the memo section instead of failing.
+            let memos_size = ok!(
+                action_count.checked_mul(ORCHARD_MEMO_SIZE).ok_or(()),
+                "Action count overflows the memo section size"
+            );
+
             self.state = LegacyParserState::ProcessActionsMemo {
                 bundle,
-                size: action_count * ORCHARD_MEMO_SIZE,
-                remaining_size: action_count * ORCHARD_MEMO_SIZE,
+                size: memos_size,
+                remaining_size: memos_size,
             };
         }
 
