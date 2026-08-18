@@ -568,8 +568,8 @@ impl PcztParser {
         // A dummy padding spend uses a throwaway key, so recipient membership and
         // nullifier can only be checked on real spends. `spend_value` is not merely
         // declared: `cv_net` above binds it and `validate_current_ironwood_output`
-        // below pins `output_value`, so a real spend cannot pose as a dummy.
-        // V2 and V3 dummies both have their cmx recomputed and verified.
+        // below pins `output_value`, so a real spend cannot pose as a dummy. A dummy still has its
+        // cmx recomputed and verified.
         let is_real_spend = self.current_action.spend_value != 0;
         if is_real_spend {
             let ironwood_fvk = self
