@@ -368,6 +368,16 @@ impl PcztParser {
         *self = Self::new();
     }
 
+    /// Whether a PCZT session owns the transaction state: a header has been accepted and the
+    /// session has not been reset.
+    ///
+    /// The legacy and PCZT paths write the same `TxContext`. A legacy round entered inside this
+    /// window would hash its own fields into the state a PCZT review approved, and would reach
+    /// the legacy signing state without a review of its own.
+    pub fn is_session_active(&self) -> bool {
+        self.state != PcztParserState::WaitHeaderAndGlobal || self.pczt_finished
+    }
+
     // Returns the account Orchard spending key, deriving it via
     // `zip32_orchard_derive` exactly once per PCZT session and caching it for
     // reuse. Reusing the cached key is mandatory, not an optimization: the

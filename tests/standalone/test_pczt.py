@@ -1,5 +1,7 @@
 # pylint: disable=C0301
 
+import struct
+
 import pytest
 from application_client.pczt import (
     PcztGlobal,
@@ -9,7 +11,11 @@ from application_client.pczt import (
     PcztTransparentOutput,
 )
 from application_client.zcash_command_sender import (
+    CLA,
     Errors,
+    InsType,
+    P1,
+    P2,
     ZcashCommandSender,
 )
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
@@ -1710,4 +1716,83 @@ def test_pczt_sign_tx_v5_orchard_divergent_signing_path_rejected(
         ):
             pytest.fail("Device accepted Orchard actions with divergent signing paths")
 
+    assert e.value.status == Errors.SW_BAD_STATE
+
+
+def _apdu(ins: int, p1: int, p2: int, data: bytes) -> str:
+    return (struct.pack(">BBBBB", CLA, ins, p1, p2, len(data)) + data).hex()
+
+
+# The legacy header the app expects: transaction version, version group id and consensus branch id,
+# each little-endian, then a CompactSize transparent input count. Zero inputs is what sends the
+# second-round parser straight to its ready-to-sign state.
+_V5_TX_VERSION_OVERWINTERED = 0x80000005
+_V5_VERSION_GROUP_ID = 0x26A7270A
+_NU6_BRANCH_ID = 0xC8E71055
+_LEGACY_V5_HEADER_NO_INPUTS = struct.pack(
+    "<IIIB", _V5_TX_VERSION_OVERWINTERED, _V5_VERSION_GROUP_ID, _NU6_BRANCH_ID, 0
+)
+
+# HASH_SIGN's extra header data: an unused path size and auth length, then locktime, sighash type
+# and expiry height, all big-endian.
+_SIGHASH_ALL = 0x01
+_LEGACY_EXTRA_HEADER_DATA = struct.pack(">BBIBI", 0, 0, 0, _SIGHASH_ALL, 0)
+
+# Legacy instructions that do not reset the transaction context, and would therefore act on the
+# state a PCZT session owns. P1_NEXT takes neither reset branch of its handler.
+_LEGACY_NON_RESETTING_APDUS = {
+    "hash_sign_extra_header": _apdu(InsType.HASH_SIGN, 0x00, 0x00, _LEGACY_EXTRA_HEADER_DATA),
+    "hash_input_start_next": _apdu(
+        InsType.HASH_INPUT_START,
+        P1.P1_HASH_INPUT_START_NEXT,
+        P2.P2_HASH_INPUT_START_SAPLING,
+        _LEGACY_V5_HEADER_NO_INPUTS,
+    ),
+    "get_trusted_input_next": _apdu(
+        InsType.GET_TRUSTED_INPUT, P1.P1_NEXT, P2.P2_NONE, _LEGACY_V5_HEADER_NO_INPUTS
+    ),
+}
+
+
+@pytest.mark.parametrize("apdu_name", sorted(_LEGACY_NON_RESETTING_APDUS))
+def test_pczt_review_does_not_unlock_legacy_signing(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    apdu_name: str,
+):
+    """A PCZT review must not stand in for a legacy first round.
+
+    The legacy path treats a completed first round as proof that the transaction has been shown
+    to the user, and lets the second round reach the signing state without a review of its own.
+    Both paths write the same transaction context, so a legacy instruction that does not reset it
+    must be refused while a PCZT session owns it: the legacy round describes a different
+    transaction, which the user has never seen.
+
+    Each case gets its own session because the first refusal resets the context.
+    """
+    PCZT_GLOBAL = PcztGlobal()
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    TRANSPARENT_OUTPUT = PcztTransparentOutput(
+        value=81628565,
+        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=[TRANSPARENT_OUTPUT],
+    ):
+        _review_approve(scenario_navigator, "test_pczt_review_does_not_unlock_legacy_signing")
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.exchange_raw(_LEGACY_NON_RESETTING_APDUS[apdu_name])
     assert e.value.status == Errors.SW_BAD_STATE
