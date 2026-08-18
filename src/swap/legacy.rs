@@ -22,6 +22,13 @@ pub fn get_check_address_params<
 
     let arg = arg0 as *const u32;
 
+    // SAFETY: `arg0` is the `os_lib_call` argument the OS passes to a library-mode entry point. The
+    // OS is the only writer, and by that contract it points at a `libargs_s` of at least five words
+    // (`id`, `command`, `chain_config`, then the union) whose union member is a valid
+    // `check_address_parameters_t`. The caller is app-exchange, which the OS refuses to lib-call
+    // unless it is at least as trusted as this app, so these reads are as trustworthy as the OS
+    // handover itself. Nothing here validates the *contents*: the derivation path and the reference
+    // address are attacker-influenced data and are checked by `check_address` afterwards.
     libarg.id = unsafe { *arg };
     libarg.command = unsafe { *arg.add(1) };
     libarg.unused = unsafe { *arg.add(2) };
@@ -41,6 +48,9 @@ pub fn get_check_address_params<
     check_address_params.coin_config_len = params.coin_configuration_length as usize;
 
     info!("==> GET_COIN_CONFIG");
+    // SAFETY: source and destination are distinct — `coin_configuration` lives in the Exchange app's
+    // frame, the destination in this one — and the copy length is clamped to the destination buffer
+    // below, so an over-long coin configuration truncates instead of overflowing.
     unsafe {
         params.coin_configuration.copy_to_nonoverlapping(
             check_address_params.coin_config.as_mut_ptr(),

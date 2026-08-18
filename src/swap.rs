@@ -70,6 +70,7 @@ pub use swap::get_check_address_params;
 use crate::swap::panic_handler::{set_swap_panic_handler, swap_panic_handler};
 use crate::tx::TxOutput;
 use crate::utils::bip32_path::BIP32_BYTES_PER_SEGMENT;
+use crate::utils::{Bip44CheckMode, check_bip44_compliance};
 use crate::{
     consts::{ZCASH_DECIMALS, ZCASH_TICKER},
     utils::{
@@ -107,10 +108,11 @@ use alloc::{format, string::ToString};
 /// comm.append(b"Amount mismatch: tx=1000, swap=2000");
 /// ```
 ///
-/// # Template Note
+/// # Granularity
 ///
-/// This is a template/placeholder enum. In a production application, you may want to add
-/// specific error codes to provide more granular error information. For example:
+/// The variants carried here are the ones the swap path distinguishes today. Exchange maps every
+/// app error to `IncorrectData` on the wire, so these codes serve the app's own logs rather than the
+/// host. Extending them is a matter of what a failure report needs to say, for example:
 ///
 /// ```rust,ignore
 /// pub enum SwapAppErrorCode {
@@ -336,7 +338,7 @@ pub fn swap_main(arg0: u32) {
 ///
 /// 1. Parse BIP32 derivation path from params
 /// 2. Derive public key from the path
-/// 3. Compute address from public key (Keccak256 hash)
+/// 3. Compute the transparent address from the public key (HASH160, base58check)
 /// 4. Compare with reference address from Exchange
 ///
 /// # Important Notes
@@ -344,8 +346,8 @@ pub fn swap_main(arg0: u32) {
 /// - **No heap allocation**: Uses stack arrays only (BSS memory is shared with Exchange)
 /// - **Hex string comparison**: Exchange sends address as hex string via C API,
 ///   so we convert our computed address to hex for comparison
-/// - **Address format**: This app uses Ethereum-style addresses (last 20 bytes of
-///   Keccak256 hash of pubkey). Adapt this for your blockchain's address format.
+/// - **Address format**: a Zcash transparent P2PKH address — base58check over HASH160 of the
+///   compressed public key, the same derivation `handler_get_public_key` uses
 ///
 /// # Arguments
 ///
@@ -366,6 +368,14 @@ fn check_address(params: &CheckAddressParams) -> Result<bool, SwapAppErrorCode> 
         &params.dpath[..params.dpath_len * BIP32_BYTES_PER_SEGMENT],
     )
     .map_err(|_e| SwapAppErrorCode::FailedToDeriveAddress)?;
+
+    // Same prefix restriction the APDU key-export path applies. Exchange is a trusted caller, so
+    // this is defense in depth — but the path it forwards originates with the host, and refusing an
+    // out-of-prefix one here costs nothing.
+    if !check_bip44_compliance(&bip32_path, Bip44CheckMode::PrefixOnly) {
+        error!("Swap check_address path outside the app's derivation prefixes");
+        return Err(SwapAppErrorCode::FailedToDeriveAddress);
+    }
 
     let extended_public_key = ExtendedPublicKey::try_from(&bip32_path)
         .map_err(|_e| SwapAppErrorCode::FailedToDeriveAddress)?;
@@ -415,12 +425,12 @@ fn check_address(params: &CheckAddressParams) -> Result<bool, SwapAppErrorCode> 
 /// * `params` - Contains:
 ///   - `amount`: Big-endian encoded amount bytes (right-aligned in 16-byte buffer)
 ///   - `amount_len`: Actual number of significant bytes
-///   - `coin_config`: Coin configuration (unused - hardcoded to CRAB in this template)
+///   - `coin_config`: coin configuration from the CAL descriptor (unused: the ticker is fixed)
 ///   - `is_fee`: Whether this is a fee amount
 ///
 /// # Returns
 ///
-/// Stack-allocated string formatted as "CRAB {value}" (e.g., "CRAB 1.5")
+/// Stack-allocated string formatted as "ZEC {value}" (e.g., "ZEC 1.5")
 ///
 /// # Memory Safety
 ///

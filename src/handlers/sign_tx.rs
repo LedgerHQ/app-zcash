@@ -107,13 +107,10 @@ pub fn handler_hash_input_finalize_full(
     if is_change_info {
         let path: Bip32Path = data.try_into()?;
 
-        let public_key_with_cc = ExtendedPublicKey::try_from(&path)?;
-
-        let change_pk_hash = public_key_with_cc.compressed_public_key_hash160()?;
-        ctx.tx_info.change_pk_hash = Some(change_pk_hash);
-
-        info!("Change pk hash: {}", HexSlice(&change_pk_hash));
-
+        // Validate before assigning. A change hash is what removes an output from the review screen,
+        // so it must not be installed from a path that is then rejected — leaving that to the
+        // main-loop reset on error would make a clear-signing property depend on error handling in
+        // another file.
         if !check_bip44_compliance(
             &path,
             Bip44CheckMode::Full {
@@ -123,6 +120,12 @@ pub fn handler_hash_input_finalize_full(
             error!("Change address path not Bip44 compliant");
             return Err(AppSW::ConditionsOfUseNotSatisfied);
         }
+
+        let public_key_with_cc = ExtendedPublicKey::try_from(&path)?;
+        let change_pk_hash = public_key_with_cc.compressed_public_key_hash160()?;
+        ctx.tx_info.change_pk_hash = Some(change_pk_hash);
+
+        info!("Change pk hash: {}", HexSlice(&change_pk_hash));
 
         return Ok(());
     }
