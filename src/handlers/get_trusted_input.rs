@@ -23,6 +23,14 @@ pub fn handler_get_trusted_input(
 ) -> Result<(), AppSW> {
     let mut data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
+    // Only the first packet resets the context; a continuation parses into the transaction state
+    // already there. During a PCZT session that state is the one the review approved, and the
+    // hashers a continuation re-initialises are the ones its signature digest is built from.
+    if !first && ctx.pczt_parser.is_session_active() {
+        error!("Trusted-input continuation during a PCZT session");
+        return Err(AppSW::BadState);
+    }
+
     if first {
         info!("Reset TX context");
         ctx.reset(LegacyParserMode::TrustedInput);

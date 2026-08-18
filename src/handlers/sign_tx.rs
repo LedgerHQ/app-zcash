@@ -35,13 +35,21 @@ pub fn handler_hash_input_start(
     first: bool,
     continue_hashing: bool,
 ) -> Result<(), AppSW> {
+    // Only a first round that is not a continuation resets the context; every other shape reuses
+    // whatever transaction state is already there, which is sound only after a legacy round.
+    // Refuse them while a PCZT session owns that state, whatever its transaction version.
+    let resets_context = first && !continue_hashing;
+    if !resets_context && ctx.pczt_parser.is_session_active() {
+        error!("Legacy round during a PCZT session");
+        return Err(AppSW::BadState);
+    }
+
     if continue_hashing {
         // A continuation keeps the transaction state of the previous round, so it may
-        // only follow a legacy round. `is_v6` is set by the PCZT path alone: seeing it
-        // here means the host interleaved two incompatible flows, and continuing would
-        // parse legacy fields under a V6 transaction version.
+        // only follow a legacy round. `is_v6` is reachable here through a V6 trusted-input
+        // round, and continuing would parse legacy fields under a V6 transaction version.
         if ctx.tx_info.is_v6 {
-            error!("Legacy continuation after a V6 PCZT header");
+            error!("Legacy continuation after a V6 transaction header");
             return Err(AppSW::BadState);
         }
 
@@ -188,6 +196,14 @@ fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
 }
 
 pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
+    // Legacy signing reads the transaction state a legacy round built. During a PCZT session that
+    // state belongs to the PCZT, and its extra-header branch would overwrite the locktime, sighash
+    // type and expiry height the reviewed transaction is signed over.
+    if ctx.pczt_parser.is_session_active() {
+        error!("Legacy signing during a PCZT session");
+        return Err(AppSW::BadState);
+    }
+
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
     if data.is_empty() {
