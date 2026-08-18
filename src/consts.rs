@@ -5,7 +5,17 @@ pub const ZCASH_TICKER: &str = "ZEC";
 pub const ZCASH_DECIMALS: u32 = 8;
 pub const ZCASH_DECIMALS_DIV: u64 = 10u64.pow(ZCASH_DECIMALS);
 
+// Legacy path only. It stays wide because computing a trusted input means parsing a whole previous
+// transaction, whose outputs carry arbitrary on-chain scripts this app does not choose. The legacy
+// parser reuses one `script_bytes` buffer, cleared per script, so the width costs one buffer rather
+// than one per input.
 pub const MAX_SCRIPT_SIZE: usize = 1024 * 2;
+// PCZT path. Every transparent input's script is retained for the whole session, so this bound is
+// multiplied by MAX_PCZT_TRANSPARENT_INPUTS_NUMBER against an 8192-byte heap. 252 is the host's own
+// hard limit — the single-byte CompactSize boundary in ledger-zcash-utils, which refuses anything
+// longer — and it is an order of magnitude above the P2PKH scripts (25 bytes) the host actually
+// builds.
+pub const MAX_PCZT_SCRIPT_SIZE: usize = 252;
 // Limit the number of transparent outputs in the legacy parser due to device memory constraints.
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
 pub const SIGHASH_ALL: u8 = 0x01;

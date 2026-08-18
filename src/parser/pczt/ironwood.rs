@@ -26,6 +26,17 @@ impl PcztParser {
     ) -> Result<(), ParserError> {
         debug!("PCZT ironwood actions start");
 
+        // The Ironwood pool exists only in V6 (docs/PCZT_APDU.md). Reaching here on a V5-declared
+        // transaction is a host error, and continuing would build a digest tree that matches no
+        // consensus rule: the header digest would be emitted the V5 way, the Orchard anchor already
+        // committed the V5 way, and the Ironwood digest appended regardless. Refuse instead of
+        // asserting the version below.
+        if !ctx.tx_info.is_v6 {
+            return Err(ParserError::from_str(
+                "Ironwood bundle on a non-V6 transaction",
+            ));
+        }
+
         let action_count: usize = ok!(CompactSize::read_t(&mut *reader));
         if action_count > MAX_PCZT_IRONWOOD_ACTIONS_NUMBER {
             return Err(ParserError::from_str("Too many PCZT ironwood actions"));
@@ -41,16 +52,20 @@ impl PcztParser {
 
         self.pczt_finished = false;
 
+        self.reset_ironwood_bundle_state(action_count);
+
+        // An empty Ironwood bundle is the natural encoding for a V6 transaction that spends only
+        // Orchard notes, and ZIP 229 gives it the empty-input digest rather than no node at all. The
+        // bundle flag stays clear so `compute.rs` supplies that empty digest, and finalizing here is
+        // what runs the user review — which V6 defers to this point, so refusing the empty bundle
+        // would leave such a transaction unsignable.
         if action_count == 0 {
-            return Err(ParserError::from_str(
-                "Ironwood bundle with zero actions is invalid",
-            ));
+            return self.finalize_ironwood_actions(ctx);
         }
 
         self.has_ironwood_bundle = true;
         self.is_v6_tx = true;
         ctx.tx_info.has_ironwood_bundle = true;
-        self.reset_ironwood_bundle_state(action_count);
 
         {
             ok!(ctx
