@@ -2,7 +2,9 @@ use ledger_device_sdk::NVMData;
 use ledger_device_sdk::nvm::*;
 use zeroize::{Zeroize, Zeroizing};
 
-// This is necessary to store the object in NVM and not in RAM
+// Backing store for the NBGL home screen's settings pane. The app exposes no toggles, but
+// `NbglHomeAndSettings::settings()` still requires a storage handle, so this slot is what
+// `Settings::get_mut` hands it — not a spare slot awaiting a use.
 const SETTINGS_SIZE: usize = 10;
 #[unsafe(link_section = ".nvm_data")]
 static mut DATA: NVMData<AtomicStorage<[u8; SETTINGS_SIZE]>> =

@@ -39,9 +39,11 @@ jobs:
     with:
       upload_app_binaries_artifact: "zcash_app_binaries"
       builder: ledger-app-builder
-      # Builds with ledger_device_sdk/stack_usage so the ragger job can report per-test stack
-      # consumption. The summary stays empty until ragger registers its --get_stack_consumption
-      # option; the instrumented build is harmless meanwhile.
+      # Builds with ledger_device_sdk/stack_usage, which is what lets the ragger job report per-test
+      # stack consumption. That reporting is already on: reusable_ragger_tests.yml defaults
+      # `post_stack_consumption` to true and passes `--get-stack-consumption` to pytest itself, so the
+      # only thing needed here is the instrumented build. The swap job opts out of the summary on its
+      # side, so the two do not compete for the same PR comment.
       enable_stack_consumption: true
 
   tests_standalone:

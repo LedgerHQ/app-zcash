@@ -1306,7 +1306,7 @@ def test_pczt_ironwood_v2_metadata_byte_rejected(backend):
     instead of parsing on, even though the ciphertext here would decrypt as a valid V3 note.
 
     That the commitment formula follows the authenticated plaintext[0] rather than this
-    metadata byte stays covered by test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted.
+    metadata byte stays covered by test_pczt_ironwood_dummy_with_v3_metadata_byte_accepted.
     """
     client = ZcashCommandSender(backend)
     action = PcztIronwoodAction(
@@ -1596,21 +1596,18 @@ def test_pczt_ironwood_v2_metadata_byte_rejected_on_dummy(backend):
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
-def test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted(
+def test_pczt_ironwood_dummy_with_v3_metadata_byte_accepted(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """Metadata byte note_plaintext_version=0x03 with a V2-format ciphertext is accepted.
+    """A dummy output is accepted with the metadata byte present and set to 0x03.
 
-    _DUMMY_ENC_CIPHERTEXT carries a V2 plaintext (lead byte 0x02 after decryption), so
-    parse_and_validate_note_plaintext selects the V2 commitment formula (note_commitment,
-    not note_commitment_v3), because the branch is driven by plaintext[0], not by the
-    unauthenticated metadata byte.  The cmx check still runs and passes against _DUMMY_CMX.
+    The 116-byte metadata packet on a zero-value output: the dummy path, with notePlaintextVersion
+    explicitly present rather than left to the parser's default. The pool is V3-only, so the dummy
+    path recomputes cmx with the V3 formula and the metadata byte must be 0x03 — this checks that
+    supplying it explicitly agrees with defaulting it.
 
-    This tests backward-compatibility of the 116-byte metadata packet: a host that sends
-    note_plaintext_version=0x03 alongside a V2-format enc_ciphertext is not rejected.
-    For the genuine V3 commitment path (plaintext[0]=0x03, note_commitment_v3 exercised)
-    see test_pczt_ironwood_v3_real_output_accepted.
+    For the real-spend V3 commitment path see test_pczt_ironwood_v3_real_output_accepted.
     """
     client = ZcashCommandSender(backend)
     action = _dummy_ironwood_action()
@@ -1628,7 +1625,7 @@ def test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted(
         transparent_outputs=[],
         ironwood_bundle=bundle,
     ):
-        _review_approve(scenario_navigator, "test_pczt_v3_metadata_byte_with_v2_ciphertext_accepted")
+        _review_approve(scenario_navigator, "test_pczt_ironwood_dummy_with_v3_metadata_byte_accepted")
 
     auth_sig = client.pczt_sign_transparent(input_index=0).data
     assert len(auth_sig) >= 70
