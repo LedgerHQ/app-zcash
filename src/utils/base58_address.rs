@@ -58,7 +58,7 @@ impl ToBase58Address for ArrayString<TRANSPARENT_ADDRESS_B58_LEN> {
         buf[..P2PKH_PAYLOAD_LEN].copy_from_slice(payload);
 
         // checksum
-        let checksum = sha256_checksum(&buf[..P2PKH_PAYLOAD_LEN]);
+        let checksum = sha256_checksum(&buf[..P2PKH_PAYLOAD_LEN])?;
         buf[P2PKH_PAYLOAD_LEN..].copy_from_slice(&checksum);
 
         // base58 → ArrayString

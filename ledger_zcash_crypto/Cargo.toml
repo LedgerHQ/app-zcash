@@ -13,7 +13,10 @@ chacha20 = { version = "0.9", default-features = false }
 ff = { version = "0.13", default-features = false }
 # `alloc` provides the imported `arithmetic::CurveAffine`; without it this crate builds only
 # through the app's feature unification, never standalone.
-pasta_curves = { version = "0.5", default-features = false, features = ["alloc"] }
+# `repr-c` is load-bearing, not cosmetic: `projective_point` transmutes into `pallas::Point`, whose
+# `repr(C)` is behind this feature (`#[cfg_attr(feature = "repr-c", repr(C))]`). Without it the field
+# order is unspecified and that transmute is unsound.
+pasta_curves = { version = "0.5", default-features = false, features = ["alloc", "repr-c"] }
 
 [features]
 # Enables the Ledger SDK on-device unit-test framework (TestType / sdk_test_runner). The
