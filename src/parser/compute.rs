@@ -378,10 +378,13 @@ fn finalize_signature_hash_from_transparent_digest(
     // ZIP 229: `ironwood_digest_v6` is a child of `txid_digest_v6` for every V6 transaction, taking
     // the empty-input value when the bundle has no actions.
     if tx_info.is_v6 {
-        let ironwood_digest = if tx_info.ironwood_digest == [0; 32] {
-            empty_digest(ZCASH_IRONWOOD_HASH_PERSONALIZATION)?
-        } else {
+        // The bundle flag says whether a digest was computed; a zero digest would say it by
+        // coincidence. Signing is gated on the parser being finished, so a set flag here means
+        // `finish_ironwood_anchor` has already finalized the digest.
+        let ironwood_digest = if tx_info.has_ironwood_bundle {
             tx_info.ironwood_digest
+        } else {
+            empty_digest(ZCASH_IRONWOOD_HASH_PERSONALIZATION)?
         };
         debug!("Ironwood hash: {}", HexSlice(&ironwood_digest));
         ok!(hasher.update(&ironwood_digest));

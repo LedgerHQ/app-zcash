@@ -20,6 +20,19 @@ String responses are encoded as:
 PCZT command payload framing is documented separately in
 [PCZT_APDU.md](./PCZT_APDU.md).
 
+## Accepted derivation paths
+
+The app is installed with two BIP32 prefixes: `44'/133'` for the transparent tree
+and `32'/133'` for the shielded one. The OS refuses anything outside them, but the
+app checks the prefix itself and answers `IncorrectData` (`0x6A80`), because an OS
+refusal surfaces through the derivation syscall as an abort rather than as a
+status word.
+
+Beyond the prefix, each command constrains the shape it accepts, and the
+constraint differs by purpose: signing needs to know whether a path is a change
+path, whereas key export must not dictate a shape to the host. The requirement is
+stated with each command below.
+
 ## Legacy transparent signing commands
 
 Four commands implement the transparent and V4-Sapling signing flow the app inherits from
@@ -55,7 +68,10 @@ Zcash deviations:
   - `0x00`: derive without displaying the address
   - `0x01`: display the transparent address for user approval
 - P2: `0x00`
-- Data: BIP32 path.
+- Data: BIP32 path. Only the prefix is constrained — purpose `44` or `32`
+  followed by the Zcash coin type, the hardening bit being ignored in this check
+  — so the host may request an account-level path or any deeper one. A path
+  outside the two prefixes returns `IncorrectData`.
 - Response:
   - `public_key_len u8`
   - secp256k1 public key bytes, currently 65 bytes
@@ -95,6 +111,14 @@ with an empty response.
   - P1 `0x00`, P2 `0x00`: Orchard BIP32 account path followed by transparent BIP32 account path.
   - P1 `0x00`, P2 `0x01`: Orchard BIP32 account path.
   - P1 `0x80`: empty.
+
+  Both P2 modes require the Orchard path to be exactly the three-component ZIP-32
+  account form `m/32'/<coin_type>'/<account>'`, with purpose and coin type
+  hardened and the account hardened; the transparent path of the unified mode must
+  likewise be a three-component account path under purpose `44`. Anything else
+  returns `IncorrectData`. The restriction applies to both modes, not only the
+  unified one: a viewing key exposes an account's entire shielded history, and the
+  confirmation screen shows the key bytes rather than the path it came from.
 - Response:
   - P2 `0x00`: string response containing the UFVK.
   - P2 `0x01`: raw Orchard FVK bytes.

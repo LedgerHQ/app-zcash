@@ -24,6 +24,10 @@ components.
   count `0` when either transparent section is empty.
 - `PCZT_ORCHARD_ACTION` is always sent. Use Orchard action count `0` when the
   transaction has no Orchard actions.
+- `PCZT_IRONWOOD_ACTION` is always sent for a V6 transaction, and only for one.
+  Use Ironwood action count `0` when the transaction has no Ironwood actions;
+  omitting the command leaves a V6 transaction unsignable, because V6 defers the
+  user review to Ironwood finalization. See "Empty Ironwood bundle" below.
 - `P1_FIRST`, `P1_NEXT`, and `P1_LAST` frame the APDU packet sequence for one
   `PCZT_*` command.
 - A one-packet command uses `P1_FIRST`.
@@ -44,6 +48,10 @@ components.
 - The current app limits are: at most 10 transparent inputs, at most 10
   transparent outputs, at most 10 Orchard actions, and at most 10 Ironwood
   actions.
+- A transparent `script_pubkey` is at most 252 bytes. Every transparent input's
+  script is retained for the whole session, so the bound is what keeps ten of
+  them inside the device heap. 252 is also the largest value a one-byte
+  CompactSize encodes, which is the limit the host applies on its own side.
 
 ## PCZT_HEADER
 
@@ -182,7 +190,8 @@ Sent only for V6 transactions. The per-action wire layout is identical to
 Packet sequence:
 
 1. Count packet:
-   - Ironwood action count as CompactSize (must be ≥ 1; count `0` is rejected)
+   - Ironwood action count as CompactSize. Count `0` is valid and carries no
+     per-action or trailer packet — see "Empty Ironwood bundle" below.
 
 2. For each Ironwood action, in order: same packet sequence as
    `PCZT_ORCHARD_ACTION` per-action (spend small fields, `zip32_derivation`,
@@ -196,7 +205,30 @@ Packet sequence:
      not included in the txid sighash
 
 The last APDU packet of the bundle trailer carries `P2_PCZT_FINISHED`,
-triggering the device review screen and enabling signing commands.
+triggering the device review screen and enabling signing commands. An empty
+bundle has no trailer, so its count packet carries the marker instead.
+
+### Empty Ironwood bundle
+
+A V6 transaction that neither spends nor creates an Ironwood note — an
+Orchard-only spend after NU6.3 — sends this command with action count `0` and
+nothing else. The count packet is then the whole command, so it carries
+`P1_FIRST` and, being also the last packet of the last bundle command,
+`P2_PCZT_FINISHED`. It is what triggers the review screen.
+
+Count `0` is accepted rather than rejected for two independent reasons:
+
+- ZIP 229 makes `ironwood_digest_v6` a child of `txid_digest_v6` for **every** V6
+  transaction, taking its empty-input value when the bundle has no actions. The
+  node is part of the signed digest tree either way, exactly as the Orchard node
+  is, so an empty bundle is not a transaction without an Ironwood commitment.
+- A V6 transaction defers its user review to Ironwood finalization, so this
+  command is where the review happens. Omitting it leaves the transaction
+  reviewed by nothing and therefore unsignable — the device fails closed, but the
+  host gets no diagnostic naming the missing section.
+
+An Ironwood bundle on a transaction that declared V5 is rejected, whatever its
+action count.
 
 ### Ironwood validation requirements
 

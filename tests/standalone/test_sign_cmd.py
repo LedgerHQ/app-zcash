@@ -908,3 +908,92 @@ def test_trusted_input_rejects_v4_transaction_with_shielded_components(backend):
         transport.exchange_raw(ONE_SAPLING_SPEND)
 
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+# The legacy signing round up to, but excluding, the change-information packet. Reused by the test
+# below so that a rejection can only come from the derivation path under test. Same vector as
+# test_sign_tx_with_v5_nu5_input.
+_LEGACY_TRUSTED_INPUT_ROUND = [
+    "e04200001100000000050000800a27a726b4d0d6c201",
+    "e0428000257acad6b8eec3158ecee566c0f08ff721d94d44b0cf66ee220ad4f9d1692d2ab5000000006a",
+    "e04280003247304402200d6900cafe4189b9dfebaa965584f39e07cf6086ed5a97c84a5a76035dddcf7302206263c8b7202227e0ab33dd",
+    "e042800032263e04f7a4384d34daa9279bfdebb03bf4b62123590121023e7c3ab4b4a42466f2c72c79afd426a0714fed74f884cd11abb4",
+    "e04280000ad76a72fa4a6900000000",
+    "e04280000101",
+    "e042800022957edd04000000001976a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac",
+    "e042800003000000",
+]
+# The path this vector legitimately uses for its change output: m/44'/133'/2'/1/0.
+_LEGACY_VALID_CHANGE_PATH = "058000002c80000085800000020000000100000000"
+
+
+def _open_legacy_change_info_state(transport) -> None:
+    for apdu in _LEGACY_TRUSTED_INPUT_ROUND:
+        sw, _ = transport.exchange_raw(apdu)
+        assert sw == 0x9000
+
+    sw, trusted_input = transport.exchange_raw("e042800009000000000400000000")
+    assert sw == 0x9000
+    trusted_input = trusted_input.hex()
+    assert len(trusted_input) == 112
+
+    for apdu in [
+        "e04400050d050000800a27a726b4d0d6c201",
+        "e04480053b0138" + trusted_input + "19",
+        "e04480801d76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac00000000",
+        "e04480050400000000",
+    ]:
+        sw, _ = transport.exchange_raw(apdu)
+        assert sw == 0x9000
+
+
+@pytest.mark.parametrize(
+    "change_path",
+    [
+        # A ZIP-32 account path: the shielded shape, which carries no change component at all. It
+        # must not satisfy a check whose whole purpose is to constrain that component.
+        pytest.param("03800000208000008580000000", id="zip32_account_path"),
+        # Change index 0 — a receive path, not a change path.
+        pytest.param("058000002c80000085800000020000000000000000", id="receive_path"),
+        # Account 101', one past the accepted ceiling.
+        pytest.param("058000002c80000085800000650000000100000000", id="account_over_ceiling"),
+        # Address index 50001, one past the accepted ceiling.
+        pytest.param("058000002c8000008580000002000000010000c351", id="address_index_over_ceiling"),
+    ],
+)
+def test_legacy_change_info_rejects_non_change_path(backend, change_path):
+    """The change-information packet is what removes an output from the review screen.
+
+    An output the device treats as change is dropped from the amounts, addresses and memos the user
+    approves, so the path granting that status has to be a genuine BIP-44 change path. Each case
+    below differs from the vector's own valid path in exactly one component, except the first, which
+    is the shielded shape and has no change component to constrain.
+
+    The PCZT path has the same guard and its own test; this covers the legacy one, which needs a
+    single APDU to reach it.
+    """
+    transport = ZcashCommandSender(backend)
+
+    _open_legacy_change_info_state(transport)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw(
+            "e04aff00" + f"{len(bytes.fromhex(change_path)):02x}" + change_path
+        )
+
+    assert e.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+
+
+def test_legacy_change_info_accepts_the_vector_change_path(backend):
+    """Counterpart to the rejections above: the same state, the vector's own change path, accepted.
+
+    Without it a regression that refused every path would leave the four negative cases green.
+    """
+    transport = ZcashCommandSender(backend)
+
+    _open_legacy_change_info_state(transport)
+
+    sw, _ = transport.exchange_raw(
+        "e04aff00" + f"{len(bytes.fromhex(_LEGACY_VALID_CHANGE_PATH)):02x}" + _LEGACY_VALID_CHANGE_PATH
+    )
+    assert sw == 0x9000

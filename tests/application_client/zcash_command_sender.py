@@ -114,6 +114,7 @@ class GetShieldedAddressMode(IntEnum):
 
 class Errors(IntEnum):
     SW_DENY = 0x6985
+    SW_CONDITIONS_OF_USE_NOT_SATISFIED = 0x6986
     SW_WRONG_P1P2 = 0x6B00
     SW_INS_NOT_SUPPORTED = 0x6D00
     SW_CLA_NOT_SUPPORTED = 0x6E00

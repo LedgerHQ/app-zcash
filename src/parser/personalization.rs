@@ -38,7 +38,14 @@ pub const ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION: &[u8; 16] = b"Zcash___Tx
 pub const ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrAmountsHash";
 pub const ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrScriptsHash";
 
-// --- NU6.3 / V6 personalizations, per ZIP 229 ---
+// --- NU6.3 / V6 personalizations ---
+//
+// Every string below is byte-identical to the "Anchor commitment (version 6)" table of ZIP 229 and
+// to the vendored `orchard` (`src/bundle/commitments.rs`), checked one by one. They decide which
+// digest tree a signature commits to, and no test here compares a V6 sighash against an independent
+// implementation, so the ZIP is the reference and this note records that it was used.
+// The two auth-commitment strings are unused by the device (signer only, no bindingSig) and are
+// kept so the set is complete against that table.
 
 /// `sapling_spends_noncompact_digest_v6`, which omits the anchor. Every other Sapling node keeps its
 /// v5 personalization in a v6 transaction.
