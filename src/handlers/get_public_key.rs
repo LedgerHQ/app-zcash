@@ -55,10 +55,8 @@ pub fn handler_get_public_key(comm: &mut Comm, display: bool) -> Result<(), AppS
         .try_into()?;
     debug!("path {:?}", bip32_path);
 
-    // The app's own prefixes, checked here rather than left to the OS: this handler answers with no
-    // screen at all when `display` is false, and it is what a host uses to learn the public key of a
-    // path it wants a change output attributed to. An out-of-prefix request must come back as a
-    // status word, where relying on the derivation syscall would abort the app instead.
+    // Answers with no screen when `display` is false, so the app restricts its own prefixes and
+    // reports an out-of-prefix request as a status word.
     if !check_bip44_compliance(&bip32_path, Bip44CheckMode::PrefixOnly) {
         error!("Public key path outside the app's derivation prefixes");
         return Err(AppSW::IncorrectData);

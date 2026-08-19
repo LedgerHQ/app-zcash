@@ -10,8 +10,7 @@ pub mod extended_public_key;
 pub mod hashers;
 use crate::AppSW;
 
-// The parsers hand over a bare script body, with no CompactSize length prefix, so the opcode of an
-// OP_RETURN script is its first byte.
+// The parsers hand over a bare script body, so the OP_RETURN opcode is its first byte.
 const OP_RETURN_OPCODE_INDEX: usize = 0;
 const OP_RETURN_OPCODE: u8 = 0x6A;
 const REGULAR_OUTPUT_SCRIPT_LEN: usize = 25;
@@ -172,10 +171,8 @@ pub enum Bip44CheckMode {
     /// Purpose and coin type on a five-component BIP-44 path, or a ZIP-32 account path.
     OnlyCoinType,
     Zip32Only,
-    /// Purpose and coin type only, at any depth. For key export, where the host legitimately asks
-    /// for account-level and deeper paths and the app must not dictate their shape — but must still
-    /// refuse anything outside its own prefixes itself, rather than leaving that to the OS and
-    /// getting an abort instead of a status word when the OS refuses.
+    /// Purpose and coin type only, at any depth: key export accepts account-level and deeper paths,
+    /// so the app restricts its prefixes without dictating the shape.
     PrefixOnly,
 }
 
@@ -197,10 +194,8 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     let is_zip32_shape =
         path.len() == ZIP32_PATH_LEN && (path[0] & UNHARDENED_MASK) == ZIP32_PURPOSE;
 
-    // The mode decides which shape is acceptable, and it has to be consulted *before* the shape.
-    // A ZIP-32 account path has no change, account-ceiling or address-index component, so letting
-    // its shape pick the branch would make `Full` vacuous — and `Full` is what keeps a change
-    // output honest: an output whose path passes it is removed from the review screen.
+    // The mode decides which shape is acceptable, so it is consulted before the shape: a ZIP-32
+    // account path has no change, account or address-index component for `Full` to constrain.
     match mode {
         Bip44CheckMode::PrefixOnly => {
             if path.len() < BIP44_PREFIX_LEN {
@@ -232,8 +227,7 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
                 return false;
             }
         }
-        // Both shapes are legitimate here: shielded action derivations arrive as ZIP-32 account
-        // paths, transparent ones as BIP-44.
+        // Shielded derivations arrive as ZIP-32 account paths, transparent ones as BIP-44.
         Bip44CheckMode::OnlyCoinType => {}
     }
 

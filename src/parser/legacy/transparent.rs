@@ -310,9 +310,8 @@ impl LegacyParser {
             Zatoshis::from_nonnegative_i64_le_bytes(tmp)
         });
 
-        // Set by the first packet of the trusted-input flow. Absent means the flow was entered as a
-        // continuation, which the dispatcher now refuses — keep the check here so reaching this
-        // state by any other route fails with a status word rather than exiting the app.
+        // Set by the first packet of the trusted-input flow; absent means this state was reached
+        // without one.
         let requested_idx = ok!(
             ctx.trusted_input_info.input_idx.ok_or(()),
             "Trusted input index not set"
@@ -320,10 +319,8 @@ impl LegacyParser {
 
         if requested_idx == self.output_parsed_count as u32 {
             ctx.trusted_input_info.amount = amount.into_u64();
-            // Set here, where the requested index is matched, rather than at the end of the parse:
-            // an index the transaction does not have must leave the flag clear so the handler
-            // refuses, instead of sealing an amount of zero under the trusted-input HMAC as if it
-            // had been read from the chain.
+            // Only a matched index marks the input processed: the handler refuses an index the
+            // transaction does not have rather than sealing a zero amount under the HMAC.
             ctx.trusted_input_info.is_input_processed = true;
             info!(
                 "Found amount for trusted input: {}",
@@ -429,11 +426,6 @@ impl LegacyParser {
     ) -> Result<(), ParserError> {
         info!("Output hashing done");
 
-        // Bounded because every other host-declared quantity in this parser is, and because these
-        // drive the streamed shielded sections. The ceiling is deliberately far above anything a
-        // wallet builds — this parser digests an arbitrary previous transaction to compute a trusted
-        // input, so it must tolerate what the chain actually carries — while still refusing a count
-        // whose only purpose is to make the parser loop.
         self.sapling_spend_count = read_bounded_shielded_count(reader, "sapling spend")?;
         self.sapling_output_count = read_bounded_shielded_count(reader, "sapling output")?;
         self.orchard_action_count = read_bounded_shielded_count(reader, "orchard action")?;
@@ -448,11 +440,8 @@ impl LegacyParser {
         info!("Orchard action count: {}", self.orchard_action_count);
         info!("Ironwood action count: {}", self.ironwood_action_count);
 
-        // A V4 txid is SHA-256d over the whole V4 serialisation, shielded fields included, but only
-        // the transparent part reaches `v4_tx_hasher` — the shielded parsers feed the ZIP-244 digest
-        // tree, which has no meaning for V4. A V4 transaction carrying shielded components would
-        // therefore produce a wrong txid inside a valid HMAC. Refuse it rather than vouch for a
-        // trusted input that references an outpoint which does not exist.
+        // A V4 txid is SHA-256d over the whole V4 serialisation, shielded fields included, yet only
+        // the transparent part reaches `v4_tx_hasher`.
         if let SupportedTxVersion::V4 = ctx.tx_info.tx_version()
             && (self.sapling_spend_count > 0
                 || self.sapling_output_count > 0

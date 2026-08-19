@@ -5,16 +5,11 @@ pub const ZCASH_TICKER: &str = "ZEC";
 pub const ZCASH_DECIMALS: u32 = 8;
 pub const ZCASH_DECIMALS_DIV: u64 = 10u64.pow(ZCASH_DECIMALS);
 
-// Legacy path only. It stays wide because computing a trusted input means parsing a whole previous
-// transaction, whose outputs carry arbitrary on-chain scripts this app does not choose. The legacy
-// parser reuses one `script_bytes` buffer, cleared per script, so the width costs one buffer rather
-// than one per input.
+// Legacy path only, and wide because a trusted input is computed by parsing a whole previous
+// transaction, whose outputs carry arbitrary on-chain scripts. One shared buffer, cleared per script.
 pub const MAX_SCRIPT_SIZE: usize = 1024 * 2;
-// PCZT path. Every transparent input's script is retained for the whole session, so this bound is
-// multiplied by MAX_PCZT_TRANSPARENT_INPUTS_NUMBER against an 8192-byte heap. 252 is the host's own
-// hard limit — the single-byte CompactSize boundary in ledger-zcash-utils, which refuses anything
-// longer — and it is an order of magnitude above the P2PKH scripts (25 bytes) the host actually
-// builds.
+// PCZT path, where every transparent input's script is retained for the session. 252 is the host's
+// own limit, the single-byte CompactSize boundary.
 pub const MAX_PCZT_SCRIPT_SIZE: usize = 252;
 // Limit the number of transparent outputs in the legacy parser due to device memory constraints.
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
@@ -116,9 +111,8 @@ impl TryFrom<u8> for P2ShieldedAddrMode {
     }
 }
 
-// NU6.3 / V6 transaction constants — gated until ratification (zcash_protocol 0.10.0)
-// The overwintered flag (bit 31) is ORed into the transaction version in the header digest
-// per ZIP-244 §T.1 and ZIP-229.
+// The overwintered flag (bit 31) is ORed into the transaction version in the header digest, per
+// ZIP-244 §T.1 and ZIP-229.
 pub const OVERWINTERED_FLAG: u32 = 0x8000_0000;
 pub const V6_TX_VERSION: u32 = 6;
 pub const V6_VERSION_GROUP_ID: u32 = 0xD884B698;

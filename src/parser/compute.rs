@@ -375,11 +375,8 @@ fn finalize_signature_hash_from_transparent_digest(
     ok!(hasher.update(transparent_digest));
     ok!(hasher.update(&sapling_digest));
     ok!(hasher.update(&orchard_digest));
-    // ZIP 229: `ironwood_digest_v6` is a child of `txid_digest_v6` for *every* V6 transaction, and
-    // takes the empty-input value when the bundle has no actions — the same treatment the Orchard
-    // node gets above. Gating on the bundle's presence instead would omit the node entirely and
-    // produce a digest no consensus rule recognises. Confirmed against librustzcash's own V6 txid
-    // test, which feeds `empty_hash("ZTxIdIronwd_H_v6")` for a transaction with no Ironwood bundle.
+    // ZIP 229: `ironwood_digest_v6` is a child of `txid_digest_v6` for every V6 transaction, taking
+    // the empty-input value when the bundle has no actions.
     if tx_info.is_v6 {
         let ironwood_digest = if tx_info.ironwood_digest == [0; 32] {
             empty_digest(ZCASH_IRONWOOD_HASH_PERSONALIZATION)?

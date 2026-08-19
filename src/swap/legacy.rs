@@ -48,9 +48,7 @@ pub fn get_check_address_params<
     check_address_params.coin_config_len = params.coin_configuration_length as usize;
 
     info!("==> GET_COIN_CONFIG");
-    // SAFETY: source and destination are distinct — `coin_configuration` lives in the Exchange app's
-    // frame, the destination in this one — and the copy length is clamped to the destination buffer
-    // below, so an over-long coin configuration truncates instead of overflowing.
+    // SAFETY: distinct frames, and the length is clamped to the destination buffer.
     unsafe {
         params.coin_configuration.copy_to_nonoverlapping(
             check_address_params.coin_config.as_mut_ptr(),
@@ -60,17 +58,7 @@ pub fn get_check_address_params<
         );
     }
 
-    // this is original part of sdk function which was patched
-    // info!("==> GET_DPATH_LENGTH");
-    // check_address_params.dpath_len =
-    //     DPATH_STAGE_SIZE.min(unsafe { *(params.address_parameters as *const u8) as usize });
-
-    // info!("==> GET_DPATH");
-    // for i in 1..1 + check_address_params.dpath_len * 4 {
-    //     check_address_params.dpath[i - 1] = unsafe { *(params.address_parameters.add(i)) };
-    // }
-
-    // patch begin
+    // `address_parameters` carries the component count at offset 1 and the path from offset 2.
     info!("==> GET_DPATH_LENGTH");
     check_address_params.dpath_len =
         DPATH_STAGE_SIZE.min(unsafe { *(params.address_parameters.add(1)) as usize });
@@ -79,7 +67,6 @@ pub fn get_check_address_params<
     for i in 0..check_address_params.dpath_len * 4 {
         check_address_params.dpath[i] = unsafe { *(params.address_parameters.add(2 + i)) };
     }
-    // patch end
 
     info!("==> GET_REF_ADDRESS");
     let (address, address_len) =

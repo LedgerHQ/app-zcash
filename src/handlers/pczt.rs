@@ -65,9 +65,6 @@ fn finish_pczt_if_requested(ctx: &mut TxContext, requested: bool) -> Result<(), 
     }
 
     info!("PCZT is finished and ready to sign");
-    // `is_tx_parsed_once` stays untouched: it is the legacy protocol's proof that a first round
-    // reviewed *its* transaction, and lets the second round sign without a screen. PCZT signing
-    // gates on `pczt_parser.is_finished()` instead.
 
     Ok(())
 }
