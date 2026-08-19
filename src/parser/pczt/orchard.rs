@@ -1289,10 +1289,11 @@ impl PcztParser {
         self.state = PcztParserState::OrchardActionsDone;
         // For V6, defer the user review to Ironwood finalization so that the fee display
         // includes both the Orchard and Ironwood value balances (review_outputs sums them).
-        // Invariant: every V6 (NU6.3) transaction has an Ironwood bundle, so finalize_ironwood_actions
-        // is always called after this point and will invoke review_outputs. A V6 PCZT without an
-        // Ironwood bundle would leave outputs_reviewed = false, permanently blocking signing — this
-        // is the correct fail-closed behavior for an out-of-spec transaction.
+        // Invariant: every V6 (NU6.3) transaction sends an Ironwood bundle — empty when it holds no
+        // action, which is still finalized — so finalize_ironwood_actions always runs after this
+        // point and invokes review_outputs. A V6 PCZT that omits the bundle command altogether
+        // leaves outputs_reviewed = false, permanently blocking signing: the correct fail-closed
+        // behavior for an out-of-spec transaction.
         if ctx.tx_info.is_v6 {
             return Ok(());
         }
