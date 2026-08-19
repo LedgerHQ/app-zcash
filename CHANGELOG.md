@@ -2,6 +2,20 @@
 
 ## 3.9.2
 
+- Require a five-component BIP-44 path for a change output, so a ZIP-32 account path can no longer
+  be accepted as change and remove an output from the review screen
+- Restrict the derivation paths accepted by public-key and viewing-key export to the app's own
+  prefixes, and answer with a status word where the derivation syscall aborted
+- Include the Ironwood node in the signature digest of every V6 transaction, with its empty-input
+  value when the bundle carries no action, and accept an empty Ironwood bundle (ZIP 229)
+- Reject an Ironwood bundle on a transaction that declared V5
+- Accept only the documented P1 values for `GET_TRUSTED_INPUT`
+- Refuse a trusted input for an output index the transaction does not contain
+- Refuse a V4 transaction carrying shielded components, whose txid this parser does not cover
+- Bound the legacy parser's shielded component counts and the PCZT transparent script size
+- Build `pasta_curves` with `repr-c`, which the point conversion in `ledger_zcash_crypto` relies on,
+  and enforce the layout with a compile-time assertion
+- Stop the reply to an unsupported instruction from varying with P1/P2
 - Bound the Ironwood PCZT parser's stack usage to the Orchard path's, and keep the Orchard and
   Ironwood note ciphertexts off the action-finalisation frame
 - Reject a V2 note plaintext version byte in an Ironwood bundle
