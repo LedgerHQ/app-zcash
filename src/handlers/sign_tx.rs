@@ -35,14 +35,20 @@ pub fn handler_hash_input_start(
     first: bool,
     continue_hashing: bool,
 ) -> Result<(), AppSW> {
+    // Any shape that does not reset the context reuses the transaction state already there, which is
+    // sound only after a legacy round.
+    let resets_context = first && !continue_hashing;
+    if !resets_context && ctx.pczt_parser.is_session_active() {
+        error!("Legacy round during a PCZT session");
+        return Err(AppSW::BadState);
+    }
+
     if continue_hashing {
         // A continuation keeps the transaction state of the previous round, so it may
-        // only follow a legacy round. `is_v6` is set by the PCZT path alone: seeing it
-        // here means the host interleaved two incompatible flows, and continuing would
-        // parse legacy fields under a V6 transaction version.
-        #[cfg(feature = "zcash_unstable")]
+        // only follow a legacy round. `is_v6` is reachable here through a V6 trusted-input
+        // round, and continuing would parse legacy fields under a V6 transaction version.
         if ctx.tx_info.is_v6 {
-            error!("Legacy continuation after a V6 PCZT header");
+            error!("Legacy continuation after a V6 transaction header");
             return Err(AppSW::BadState);
         }
 
@@ -100,13 +106,8 @@ pub fn handler_hash_input_finalize_full(
     if is_change_info {
         let path: Bip32Path = data.try_into()?;
 
-        let public_key_with_cc = ExtendedPublicKey::try_from(&path)?;
-
-        let change_pk_hash = public_key_with_cc.compressed_public_key_hash160()?;
-        ctx.tx_info.change_pk_hash = Some(change_pk_hash);
-
-        info!("Change pk hash: {}", HexSlice(&change_pk_hash));
-
+        // A change hash removes an output from the review screen, so it is installed only from a
+        // path that passed the check.
         if !check_bip44_compliance(
             &path,
             Bip44CheckMode::Full {
@@ -116,6 +117,12 @@ pub fn handler_hash_input_finalize_full(
             error!("Change address path not Bip44 compliant");
             return Err(AppSW::ConditionsOfUseNotSatisfied);
         }
+
+        let public_key_with_cc = ExtendedPublicKey::try_from(&path)?;
+        let change_pk_hash = public_key_with_cc.compressed_public_key_hash160()?;
+        ctx.tx_info.change_pk_hash = Some(change_pk_hash);
+
+        info!("Change pk hash: {}", HexSlice(&change_pk_hash));
 
         return Ok(());
     }
@@ -189,6 +196,13 @@ fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
 }
 
 pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
+    // Legacy signing reads the transaction state a legacy round built; during a PCZT session that
+    // state belongs to the PCZT.
+    if ctx.pczt_parser.is_session_active() {
+        error!("Legacy signing during a PCZT session");
+        return Err(AppSW::BadState);
+    }
+
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
     if data.is_empty() {

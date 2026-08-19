@@ -1,87 +1,110 @@
-# Ledger Rust App Development Guide
+# Ledger Zcash App Development Guide
 
-This is a Rust application for Ledger hardware wallets (Nano X, S+, Stax, Flex, Apex P) using the `ledger_device_sdk`.
+This is a Rust application for Ledger hardware wallets using the `ledger_device_sdk`. Supported devices are
+declared in `ledger_app.toml`.
+
+The rules in the `ledger-app-ai-instructions` submodule apply in full and are authoritative over this file:
+`EMBEDDED.instructions.md` (hardware and security constraints, UI and clear signing, secrets, comments),
+`RUST.instructions.md`, `TEST.instructions.md` and `REVIEW.instructions.md`. This guide adds only what is
+specific to this app.
 
 ## Core Development Principles
 
-**Logging**: ALWAYS add `debug_print` logs at key points, especially in complex logic flows:
+**Logging**: instrument key points so a failure can be diagnosed under Speculos:
 - Entry/exit of important functions
 - Before/after critical operations (crypto, parsing, validation)
 - Both success and failure paths
-- Key variable values (paths, addresses, amounts) for debugging
-- Use `ledger_device_sdk::testing::debug_print()` for all logging
+- Use the SDK log macros — `debug!`, `info!`, `error!` from `ledger_device_sdk::log` — not `debug_print`
+
+**Never log secret or key-derived material.** Spending keys, seeds, `ask`/`nk`/`ivk` values and anything
+derived from them must not be printed on any path, including debug builds. Logging a value because it would
+help debugging does not make it safe to log. Amounts, addresses and derivation paths already appear in
+existing traces; secrets never do, and that boundary is deliberate.
+
+**Security overrides availability**: on anything unexpected, return an error. No fallbacks, no default
+values, no clamping.
 
 ## Architecture
 
-**APDU Command Flow**: The app follows a strict request-response pattern via APDU (Application Protocol Data Unit):
-1. `Comm` receives APDU with CLA=0xe0, INS, P1, P2 parameters
-2. `Instruction` enum parses APDU header into strongly-typed commands (see `src/main.rs:96-127`)
-3. Handler functions in `src/handlers/` process commands and return `Result<(), AppSW>`
-4. `AppSW` enum (status words) maps errors to specific hex codes (e.g., `0x6985` = Deny)
+**APDU Command Flow**: strict request-response over APDU:
+1. `Comm` receives an APDU with CLA=0xe0, INS, P1, P2
+2. The `Instruction` enum in `src/main.rs` parses the header into strongly-typed commands, rejecting
+   unsupported P1/P2 combinations there rather than in the handlers
+3. Handlers in `src/handlers/` process commands and return `Result<(), AppSW>`
+4. `AppSW` maps errors to status words (e.g. `0x6985` = Deny, `0xB007` = BadState)
 
-**Multi-chunk Transaction Handling**: Large transactions use chunked transmission (see `src/handlers/sign_tx.rs`):
-- Chunk 0: BIP32 path only
-- Chunks 1-3: Transaction data (max 510 bytes total via `MAX_TRANSACTION_LEN`)
-- P2 byte: `0x80` = more chunks, `0x00` = last chunk
-- TxContext maintains state between chunks with `raw_tx: Vec<u8>` accumulator
+**Two signing protocols share one `TxContext`**, and that sharing is the subtlest part of the codebase:
+- **Legacy** (INS `0x42`/`0x44`/`0x48`/`0x4A`) — trusted-input transparent and V4 Sapling signing,
+  inherited from the Bitcoin app lineage. Contract: `docs/APDU.md`
+- **PCZT** (INS `0x52`–`0x59`) — Orchard and Ironwood shielded signing over a partially-created
+  transaction, streamed field by field. Contract: `docs/PCZT_APDU.md`
 
-**UI System**: NBGL (New Boilerplate Graphics Library) for all supported devices:
+Both write the same `TxContext`, so a legacy instruction that does not reset it must refuse to run while a
+PCZT session is active (`PcztParser::is_session_active`). Preserve that guard when touching
+`src/handlers/`. The PCZT side is a state machine (`PcztParserState`): every entry point matches only the
+states its own section owns, and any other state is a `BadState` error — do not add a permissive arm.
+
+`docs/APDU.md` and `docs/PCZT_APDU.md` are the contract the host is written against. If code and doc
+disagree, that is a defect in one of them; do not silently follow the code.
+
+**UI System**: NBGL for all supported devices:
 - Home screen via `NbglHomeAndSettings` in `src/app_ui/menu.rs`
-- Transaction/address review via `NbglReview` with `Field` arrays
-- Device-specific glyphs loaded via `include_gif!()` macro with conditional compilation (`#[cfg(target_os = "stax")]`)
+- Transaction and address review via `NbglReview` with `Field` arrays (`src/app_ui/sign.rs`)
+- Device glyphs via `include_gif!()` in `src/app_ui.rs`
 
 ## Build & Test Workflow
 
-**Building** (requires Docker or VS Code extension):
+**Building** (requires the Ledger Docker image or the VS Code extension):
 ```bash
-cargo ledger build nanox -- --features debug -Zunstable-options
-# Output: target/{device}/release/app-boilerplate-rust
+cargo ledger build flex          # one of: nanox | nanosplus | stax | flex | apex_p
+# output: target/<target>/release/zcash
 ```
 
-**Testing with Ragger**:
+**Functional tests with Ragger**:
 ```bash
-pip install -r tests/requirements.txt
-pytest tests/ --tb=short -v --device {nanosp|nanox|stax|flex}
+pip install -r tests/standalone/requirements.txt
+pytest tests/standalone/ --device flex        # device names differ from cargo targets: nanos+ -> nanosp
 ```
-Tests use `BoilerplateCommandSender` client (see `tests/application_client/`) and `scenario_navigator` for UI automation.
+Tests use the `ZcashCommandSender` client in `tests/application_client/` and `scenario_navigator` for UI
+automation. Build APDUs from named fields with `struct.pack`; raw hex payloads are against the test rules.
+Never delete snapshots by hand; regenerate deliberately with `--golden_run` scoped by `-k`.
 
-**Emulator** (for manual testing):
+**Crypto crate unit tests**:
 ```bash
-speculos --apdu-port 9999 --api-port 5001 --model stax target/stax/release/app-boilerplate-rust
-# UI at localhost:5001 (Nano) or via X server (Stax/Flex)
+cargo test -p ledger_zcash_crypto --features unit_test --target apex_p
 ```
+These are SDK `TestType` cases run by `sdk_test_runner` under Speculos, not `#[test]` functions. Without the
+feature and a device target they compile away and the run reports success over an empty set.
 
 ## Key Patterns
 
-**Error Handling**: All handlers return `Result<(), AppSW>`. Never use `unwrap()` except in `build.rs`. Map SDK errors to specific `AppSW` variants (e.g., `.map_err(|_| AppSW::KeyDeriveFail)`).
+**Error Handling**: handlers return `Result<(), AppSW>`. Never use `unwrap()` or `expect()` outside
+`build.rs` and cases where failure is genuinely impossible and commented as such. Map SDK errors to specific
+`AppSW` variants.
 
-**BIP32 Paths**: Encoded as length byte + 4-byte chunks. `Bip32Path` wrapper in `src/utils.rs` validates format via `TryFrom<&[u8]>`.
+**BIP32 Paths**: length byte + 4-byte chunks; `Bip32Path` in `src/utils/bip32_path.rs` validates the format
+via `TryFrom<&[u8]>`. Derivation is restricted to the coin-specific prefixes declared in `Cargo.toml`
+(`[package.metadata.ledger] path`).
 
-**Cryptography**:
-- Key derivation: `Secp256k1::derive_from_path()` from `ledger_device_sdk::ecc`
-- Hashing: `Keccak256` for Ethereum-style addresses and message signing
-- Signature format: DER-encoded + parity byte appended
+**Cryptography**: never reimplement primitives in app code — call the SDK, or `ledger_zcash_crypto` for the
+Pallas/Sinsemilla/RedPallas work this chain needs. Shielded key derivation goes through `src/zip32.rs`.
+Vendored forks of `orchard`, `sapling-crypto` and `reddsa` live in `vendor/`; the local delta is described by
+`vendor/patches/`, and changing a vendored crate means regenerating those.
 
-**Transaction Deserialization**: Uses `serde-json-core` (no_std compatible). The `Tx` struct in `sign_tx.rs` shows memo/to-address pattern with `#[serde(with = "hex::serde")]` for hex-encoded fields.
+**Settings Storage**: NVM via `AtomicStorage` in `src/settings.rs`, linked to the `.nvm_data` section and
+surfaced through the `NbglHomeAndSettings` switch UI.
 
-**Settings Storage**: NVM (non-volatile memory) via `AtomicStorage` in `src/settings.rs`. Linked to `.nvm_data` section. Settings integrate with `NbglHomeAndSettings` switch UI.
-
-**Device-Specific Code**: Pervasive use of `#[cfg(target_os = "...")]` for glyphs, icons, and UI differences between Nano (smaller screens) vs Stax/Flex (touch screens).
-
-## Integration Points
-
-**Python Test Client** (`tests/application_client/`):
-- `boilerplate_command_sender.py`: Sends APDUs via Ragger backend
-- `boilerplate_response_unpacker.py`: Parses binary responses
-- `boilerplate_transaction.py`: Creates JSON transactions matching Rust `Tx` struct
-
-**Build Script** (`build.rs`): Processes GIF icons into PNG glyphs for NBGL at compile time using `image` crate.
-
-**Metadata** (`Cargo.toml`): `[package.metadata.ledger]` section defines app name, icons, derivation paths, and flags per device.
+**Device-Specific Code**: `#[cfg(target_os = "...")]` for glyphs, icons and screen differences between Nano
+and the touch devices.
 
 ## Critical Constraints
 
-- `#![no_std]` environment: Use `alloc::vec::Vec`, `alloc::format!`, never `std::`
-- Stack limits: Avoid deep recursion; prefer iterative patterns
-- APDU max size: ~255 bytes per chunk
-- Transaction review must call `show_status_and_home_if_needed()` to display NBGL success/failure screens
+- `#![no_std]`: use `alloc::vec::Vec`, `alloc::format!`, never `std::`
+- Heap is 8192 bytes by default; the declared wire bounds are larger than it, so do not assume an allocation
+  succeeds, and do not raise a bound without checking what it costs at runtime
+- Stack is the binding limit on Nano X: avoid recursion, keep large values off shared frames, and use
+  `#[inline(never)]` where a frame would otherwise be coalesced into a caller's
+- APDU payload is at most 255 bytes per packet; anything larger is streamed and must be bounded before
+  being accumulated
+- Transaction review must reach `show_status_and_home_if_needed()` so NBGL displays the success or failure
+  screen

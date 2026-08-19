@@ -13,11 +13,6 @@ impl PcztParser {
         }
 
         let version = ok!(reader.read_u32_le());
-        #[cfg(not(feature = "zcash_unstable"))]
-        if version != PCZT_VERSION_1 {
-            return Err(ParserError::from_str("Unsupported PCZT version"));
-        }
-        #[cfg(feature = "zcash_unstable")]
         if version != PCZT_VERSION_1 && version != PCZT_VERSION_2 {
             return Err(ParserError::from_str("Unsupported PCZT version"));
         }
@@ -38,20 +33,12 @@ impl PcztParser {
         let branch_id_raw = ok!(reader.read_u32_le());
 
         let is_v5 = tx_version_raw == V5_TX_VERSION && version_group_id == V5_VERSION_GROUP_ID;
-        #[cfg(feature = "zcash_unstable")]
         let is_v6 = tx_version_raw == V6_TX_VERSION && version_group_id == V6_VERSION_GROUP_ID;
 
-        if !is_v5 {
-            #[cfg(not(feature = "zcash_unstable"))]
+        if !is_v5 && !is_v6 {
             return Err(ParserError::from_str(
                 "Unsupported PCZT transaction version",
             ));
-            #[cfg(feature = "zcash_unstable")]
-            if !is_v6 {
-                return Err(ParserError::from_str(
-                    "Unsupported PCZT transaction version",
-                ));
-            }
         }
 
         let consensus_branch_id = ok!(BranchId::try_from(branch_id_raw));
@@ -82,7 +69,6 @@ impl PcztParser {
         ctx.tx_info.branch_id_raw = branch_id_raw;
         ctx.tx_info.locktime = fallback_lock_time.unwrap_or_default();
         ctx.tx_info.expiry_height = expiry_height;
-        #[cfg(feature = "zcash_unstable")]
         {
             ctx.tx_info.is_v6 = is_v6;
         }
@@ -92,7 +78,6 @@ impl PcztParser {
                 "PCZT version 1 required for V5 transaction",
             ));
         }
-        #[cfg(feature = "zcash_unstable")]
         if is_v6 && self.pczt_version != PCZT_VERSION_2 {
             return Err(ParserError::from_str(
                 "PCZT version 2 required for V6 transaction",
@@ -123,9 +108,6 @@ impl PcztParser {
             ));
         }
 
-        #[cfg(not(feature = "zcash_unstable"))]
-        let ironwood_vb: i64 = 0;
-        #[cfg(feature = "zcash_unstable")]
         let ironwood_vb: i64 = self.ironwood_value_balance;
         let fees_i128 = i128::from(ctx.tx_info.total_amount)
             + i128::from(self.orchard_value_balance)
@@ -150,8 +132,10 @@ impl PcztParser {
 
         // In the case of internal transfers between pools (for example, transparent -> Orchard or Orchard -> transparent),
         // we have to display the internal outputs on the clear-sign screen.
+        // Not in swap mode: there is no screen to reveal anything on, and clearing `is_change`
+        // would make `check_swap_params` see several external outputs where the transaction has one.
         let has_external_output = ctx.tx_info.outputs.iter().any(|output| !output.is_change);
-        let reveal_self_outputs = !has_external_output;
+        let reveal_self_outputs = !has_external_output && ctx.swap_params.is_none();
         if reveal_self_outputs {
             debug!("PCZT has no external outputs; displaying self-transfer output");
             // PCZT does not read tx_info.outputs after review; this only affects UI filtering.
@@ -163,13 +147,21 @@ impl PcztParser {
         let spent_from_public = self.transparent_input_count > 0;
         let spent_from_private = self.orchard_spend_value_sum > 0;
         // Ironwood is a shielded pool; any Ironwood spend must set the from_private flag.
-        #[cfg(feature = "zcash_unstable")]
         let spent_from_private = spent_from_private || self.ironwood_spend_value_sum > 0;
         let transfer_type =
             TransferType::classify(spent_from_public, spent_from_private, &ctx.tx_info.outputs);
-        let review_result = ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type);
-
-        if !ok!(review_result) {
+        // Swap mode substitutes validation for review, exactly as the legacy path does: the user
+        // already approved the operation in the Exchange app, which drives this flow without
+        // interaction, so prompting here would both stall it and ask about something the user has
+        // already seen. The cross-check is what makes that safe — it refuses any transaction that
+        // does not match what Exchange asked for.
+        if let Some(swap_params) = ctx.swap_params {
+            ok!(crate::swap::check_swap_params(
+                swap_params,
+                &ctx.tx_info.outputs,
+                fees
+            ));
+        } else if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type)) {
             return Err(ParserError::user());
         }
 

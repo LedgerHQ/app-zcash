@@ -50,13 +50,10 @@ const ORCHARD_RIVK_INTERNAL_DOMAIN_SEPARATOR: u8 = 0x83;
 const ORCHARD_ESK_DOMAIN_SEPARATOR: u8 = 0x04;
 const ORCHARD_RCM_DOMAIN_SEPARATOR: u8 = 0x05;
 const ORCHARD_PSI_DOMAIN_SEPARATOR: u8 = 0x09;
-// Note plaintext version bytes (lead byte of enc_ciphertext plaintext).
-pub(crate) const NOTE_VERSION_ORCHARD: u8 = 0x02;
-// ZIP 2005 §3.2.1 (Ironwood): V3 note plaintext version byte and quantum-recoverable rcm
-// domain separator.  Only available when V3 note support is enabled.
-#[cfg(feature = "zcash_unstable")]
+// ZIP 2005 §3.2.1 (Ironwood): V3 note plaintext version byte (lead byte of the enc_ciphertext
+// plaintext) and quantum-recoverable rcm domain separator. Callers name the version they expect,
+// so this one only selects the V3 commitment formula once a plaintext is in hand.
 pub(crate) const NOTE_VERSION_IRONWOOD: u8 = 0x03;
-#[cfg(feature = "zcash_unstable")]
 const ORCHARD_QR_RCM_DOMAIN_SEPARATOR: u8 = 0x0B;
 const PRF_EXPAND_BYTES: usize = 64;
 const ORCHARD_VALUE_COMMITMENT_VALUE_BASEPOINT_BYTES: [u8; 32] = [
@@ -235,7 +232,6 @@ pub fn orchard_spend_nullifier_bytes(
 /// Use this when recomputing the nullifier of a V3 spend note inside a PCZT;
 /// V2 and V3 notes share the same Sinsemilla message structure but derive the
 /// commitment trapdoor (rcm) differently.
-#[cfg(feature = "zcash_unstable")]
 pub fn orchard_spend_nullifier_bytes_v3(
     nk: &[u8; 32],
     raw_address: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
@@ -260,7 +256,6 @@ pub fn orchard_note_commitment_bytes(
 /// Identical Sinsemilla message as V2 (`g_d ‖ pk_d ‖ value ‖ rho ‖ psi`) but the
 /// trapdoor uses the quantum-recoverable rcm derivation (domain separator 0x0B,
 /// fields g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi hashed alongside rseed).
-#[cfg(feature = "zcash_unstable")]
 pub fn orchard_note_commitment_v3_bytes(
     recipient: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
     value: u64,
@@ -329,6 +324,9 @@ pub fn orchard_ivk(ak: &[u8; 32], nk: &[u8; 32], rivk: &[u8; 32]) -> Result<[u8;
     Ok(ivk.to_repr())
 }
 
+// Isolated from its caller: `message` alone is 510 bytes and the builder below holds ~1020,
+// which must not coalesce into a frame that already carries note or ciphertext buffers.
+#[inline(never)]
 fn orchard_commit_ivk(
     ak: &pallas::Base,
     nk: &pallas::Base,
@@ -338,6 +336,7 @@ fn orchard_commit_ivk(
     sinsemilla_short_commit(ORCHARD_COMMIT_IVK_PERSONALIZATION, &message, rivk)
 }
 
+#[inline(never)]
 fn orchard_commit_ivk_message(
     ak: &pallas::Base,
     nk: &pallas::Base,

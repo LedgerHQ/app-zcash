@@ -19,7 +19,6 @@ use ledger_device_sdk::hash::{
 };
 use pasta_curves::pallas;
 
-use crate::NOTE_VERSION_ORCHARD;
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
     ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
@@ -30,7 +29,6 @@ use crate::{
     sinsemilla::{extract_p_pallas, sinsemilla_short_commit, sinsemilla_short_commit_point},
     to_pallas_base_bytes, to_pallas_scalar_bytes,
 };
-#[cfg(feature = "zcash_unstable")]
 use crate::{NOTE_VERSION_IRONWOOD, ORCHARD_QR_RCM_DOMAIN_SEPARATOR};
 
 pub const ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE: usize = 52;
@@ -86,27 +84,17 @@ pub struct DecipheredOrchardOutput {
 pub fn decipher_value_with_ovk(
     ovk: &[u8; HASH_SIZE],
     action: &OrchardActionCiphertext<'_>,
-    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
+    expected_note_version: u8,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
-    try_output_recovery_with_ovk(
-        ovk,
-        action,
-        #[cfg(feature = "zcash_unstable")]
-        allow_v3,
-    )
+    try_output_recovery_with_ovk(ovk, action, expected_note_version)
 }
 
 pub fn decipher_compact_value(
     ivk: &[u8; HASH_SIZE],
     compact: &OrchardCompactAction,
-    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
+    expected_note_version: u8,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
-    try_compact_note_decryption_with_ivk(
-        ivk,
-        compact,
-        #[cfg(feature = "zcash_unstable")]
-        allow_v3,
-    )
+    try_compact_note_decryption_with_ivk(ivk, compact, expected_note_version)
 }
 
 #[inline(never)]
@@ -161,7 +149,6 @@ pub fn spend_nullifier_bytes(
 /// Uses [`note_commitment_v3_point`] instead of [`note_commitment_point`] so
 /// that the commitment matches the on-chain V3 note and the derived nullifier
 /// agrees with the value in the PCZT.
-#[cfg(feature = "zcash_unstable")]
 #[inline(never)]
 pub fn spend_nullifier_bytes_v3(
     nk: &[u8; HASH_SIZE],
@@ -228,7 +215,7 @@ pub fn note_commitment_bytes(
 fn try_output_recovery_with_ovk(
     ovk: &[u8; HASH_SIZE],
     action: &OrchardActionCiphertext<'_>,
-    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
+    expected_note_version: u8,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let rho = match pallas_base_from_repr(action.compact.nullifier) {
         Ok(rho) => rho,
@@ -283,15 +270,14 @@ fn try_output_recovery_with_ovk(
         Some(&esk),
         &rho,
         Some(memo),
-        #[cfg(feature = "zcash_unstable")]
-        allow_v3,
+        expected_note_version,
     )
 }
 
 fn try_compact_note_decryption_with_ivk(
     ivk: &[u8; HASH_SIZE],
     compact: &OrchardCompactAction,
-    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
+    expected_note_version: u8,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let rho = match pallas_base_from_repr(compact.nullifier) {
         Ok(rho) => rho,
@@ -317,11 +303,9 @@ fn try_compact_note_decryption_with_ivk(
     let mut note_plaintext_prefix = compact.enc_ciphertext_prefix;
     chacha20_decrypt_compact(&k_enc, &mut note_plaintext_prefix);
 
-    let Some(diversifier) = parse_note_plaintext_diversifier(
-        &note_plaintext_prefix,
-        #[cfg(feature = "zcash_unstable")]
-        allow_v3,
-    ) else {
+    let Some(diversifier) =
+        parse_note_plaintext_diversifier(&note_plaintext_prefix, expected_note_version)
+    else {
         return Ok(None);
     };
 
@@ -338,8 +322,7 @@ fn try_compact_note_decryption_with_ivk(
         None,
         &rho,
         None,
-        #[cfg(feature = "zcash_unstable")]
-        allow_v3,
+        expected_note_version,
     )
 }
 
@@ -350,13 +333,9 @@ fn parse_and_validate_note_plaintext(
     expected_esk: Option<&[u8; HASH_SIZE]>,
     rho: &pallas::Base,
     memo: Option<Box<[u8]>>,
-    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
+    expected_note_version: u8,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
-    let Some(note_plaintext) = parse_note_plaintext_prefix(
-        plaintext,
-        #[cfg(feature = "zcash_unstable")]
-        allow_v3,
-    ) else {
+    let Some(note_plaintext) = parse_note_plaintext_prefix(plaintext, expected_note_version) else {
         return Ok(None);
     };
 
@@ -381,9 +360,6 @@ fn parse_and_validate_note_plaintext(
     // quantum-recoverable rcm derivation additionally binds g_d, pk_d, and value, which
     // prevents a malicious host from swapping cmx to commit to a different recipient
     // while presenting a valid enc_ciphertext for the device's IVK.
-    #[cfg(not(feature = "zcash_unstable"))]
-    let cmx = note_commitment(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?;
-    #[cfg(feature = "zcash_unstable")]
     let cmx = if plaintext[0] == NOTE_VERSION_IRONWOOD {
         note_commitment_v3(&g_d, pk_d, note_plaintext.value, rho, &note_plaintext.rseed)?
     } else {
@@ -550,29 +526,19 @@ struct OrchardNotePlaintextPrefix {
 
 fn parse_note_plaintext_diversifier(
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
-    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
+    expected_note_version: u8,
 ) -> Option<[u8; DIVERSIFIER_SIZE]> {
-    parse_note_plaintext_prefix(
-        plaintext,
-        #[cfg(feature = "zcash_unstable")]
-        allow_v3,
-    )
-    .map(|parsed| parsed.diversifier)
+    parse_note_plaintext_prefix(plaintext, expected_note_version).map(|parsed| parsed.diversifier)
 }
 
 fn parse_note_plaintext_prefix(
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
-    #[cfg(feature = "zcash_unstable")] allow_v3: bool,
+    expected_note_version: u8,
 ) -> Option<OrchardNotePlaintextPrefix> {
-    // The version byte is the only structural difference between V2 and V3 note formats.
-    // allow_v3 further gates V3 acceptance to callers in the Ironwood pool (V6 bundles).
-    #[cfg(not(feature = "zcash_unstable"))]
-    if plaintext[0] != NOTE_VERSION_ORCHARD {
-        return None;
-    }
-    #[cfg(feature = "zcash_unstable")]
-    if plaintext[0] != NOTE_VERSION_ORCHARD && !(allow_v3 && plaintext[0] == NOTE_VERSION_IRONWOOD)
-    {
+    // Exactly one note plaintext version is valid per value pool: Orchard carries V2, Ironwood
+    // carries V3 (`BundleVersion::note_version` upstream). A plaintext whose lead byte is not the
+    // version this pool holds belongs to the other one and must not be treated as decrypted.
+    if plaintext[0] != expected_note_version {
         return None;
     }
 
@@ -636,7 +602,6 @@ fn note_commitment(
 /// Unlike the V2 rcm derivation (which only takes rseed and rho), the V3 trapdoor
 /// additionally commits to the recipient's `g_d` and `pk_d` and to the note `value`,
 /// providing post-quantum binding of the note commitment to all note fields.
-#[cfg(feature = "zcash_unstable")]
 fn orchard_rcm_v3(
     rseed: &[u8; HASH_SIZE],
     g_d: &[u8; HASH_SIZE],
@@ -660,7 +625,6 @@ fn orchard_rcm_v3(
 /// The Sinsemilla message is identical to V2 — `(g_d, pk_d, value, rho, psi)` — but the
 /// trapdoor `rcm` uses the quantum-recoverable derivation from `orchard_rcm_v3`, which
 /// binds the trapdoor to all note fields and therefore ties `cmx` to the specific recipient.
-#[cfg(feature = "zcash_unstable")]
 #[inline(never)]
 pub(crate) fn orchard_note_commitment_v3(
     recipient: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
@@ -683,7 +647,6 @@ pub(crate) fn orchard_note_commitment_v3(
     note_commitment_v3(&g_d, &pk_d, value, &rho, rseed)
 }
 
-#[cfg(feature = "zcash_unstable")]
 #[inline(never)]
 fn note_commitment_v3(
     g_d: &[u8; HASH_SIZE],
@@ -741,7 +704,6 @@ fn note_commitment_point(
 /// Identical Sinsemilla message; uses [`orchard_rcm_v3`] so the trapdoor binds
 /// all note fields (g_d, pk_d, value, rho, psi), matching the on-chain V3
 /// commitment.  Required for nullifier recomputation of V3 spend notes.
-#[cfg(feature = "zcash_unstable")]
 #[inline(never)]
 fn note_commitment_v3_point(
     g_d: &[u8; HASH_SIZE],
@@ -802,6 +764,7 @@ fn bytes_eq(lhs: &[u8; HASH_SIZE], rhs: &[u8; HASH_SIZE]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ledger_device_sdk::testing::TestType;
 
     // `_DUMMY_NULLIFIER` from test_pczt_ironwood.py
     const DUMMY_NULLIFIER: [u8; 32] = [
@@ -836,47 +799,48 @@ mod tests {
     ///
     /// If the two formulas were accidentally identical, the clear-signing bypass
     /// (`test_pczt_ironwood_v3_note_tampered_cmx_rejected`) would not be caught.
-    #[cfg(feature = "zcash_unstable")]
-    #[test]
-    fn note_commitment_v3_differs_from_v2_for_same_inputs() {
-        let rho = pallas_base_from_repr(DUMMY_NULLIFIER)
-            .expect("DUMMY_NULLIFIER encodes a valid Pallas base field element");
-        let g_d = crate::diversify_hash_ledger(&INTERNAL_DIVERSIFIER)
-            .expect("INTERNAL_DIVERSIFIER is a valid Orchard diversifier");
+    #[test_case]
+    const NOTE_COMMITMENT_V3_DIFFERS_FROM_V2: TestType = TestType {
+        modname: module_path!(),
+        name: "note_commitment_v3_differs_from_v2_for_same_inputs",
+        f: || {
+            let rho = pallas_base_from_repr(DUMMY_NULLIFIER).map_err(|_| ())?;
+            let g_d = crate::diversify_hash_ledger(&INTERNAL_DIVERSIFIER).map_err(|_| ())?;
 
-        let cmx_v2 = note_commitment(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
-            .expect("V2 note_commitment must succeed for valid inputs");
-        let cmx_v3 = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
-            .expect("note_commitment_v3 must succeed for valid inputs");
+            let cmx_v2 =
+                note_commitment(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED).map_err(|_| ())?;
+            let cmx_v3 = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+                .map_err(|_| ())?;
 
-        // The V3 rcm derivation additionally commits to g_d, pk_d, and value, so the
-        // two formulas must yield distinct commitments for the same note fields.
-        assert_ne!(
-            cmx_v2, cmx_v3,
-            "note_commitment_v3 must produce a distinct cmx from note_commitment \
-             (rcm derivations differ: V2 binds only rseed+rho, V3 also binds g_d+pk_d+value)"
-        );
-    }
+            // The V3 rcm derivation additionally commits to g_d, pk_d and value, so the
+            // two formulas must yield distinct commitments for the same note fields.
+            if cmx_v2 == cmx_v3 {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 
     /// `note_commitment_v3` must be deterministic: identical inputs produce identical output.
-    #[cfg(feature = "zcash_unstable")]
-    #[test]
-    fn note_commitment_v3_is_deterministic() {
-        let rho = pallas_base_from_repr(DUMMY_NULLIFIER)
-            .expect("DUMMY_NULLIFIER encodes a valid Pallas base field element");
-        let g_d = crate::diversify_hash_ledger(&INTERNAL_DIVERSIFIER)
-            .expect("INTERNAL_DIVERSIFIER is a valid Orchard diversifier");
+    #[test_case]
+    const NOTE_COMMITMENT_V3_IS_DETERMINISTIC: TestType = TestType {
+        modname: module_path!(),
+        name: "note_commitment_v3_is_deterministic",
+        f: || {
+            let rho = pallas_base_from_repr(DUMMY_NULLIFIER).map_err(|_| ())?;
+            let g_d = crate::diversify_hash_ledger(&INTERNAL_DIVERSIFIER).map_err(|_| ())?;
 
-        let cmx_first = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
-            .expect("first call to note_commitment_v3 must succeed");
-        let cmx_second = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
-            .expect("second call to note_commitment_v3 must succeed");
+            let cmx_first = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+                .map_err(|_| ())?;
+            let cmx_second = note_commitment_v3(&g_d, &INTERNAL_PK_D, VALUE, &rho, &DUMMY_RSEED)
+                .map_err(|_| ())?;
 
-        assert_eq!(
-            cmx_first, cmx_second,
-            "note_commitment_v3 must be deterministic"
-        );
-    }
+            if cmx_first != cmx_second {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 
     /// `spend_nullifier_bytes_v3` must produce a different nullifier than
     /// `spend_nullifier_bytes` for the same note fields.
@@ -885,49 +849,56 @@ mod tests {
     /// derivations; the commitment point therefore differs, which propagates into
     /// the nullifier computation `nk_prf + psi + cm`.  If this test passes, the
     /// firmware correctly distinguishes V2 from V3 spend nullifiers.
-    #[cfg(feature = "zcash_unstable")]
-    #[test]
-    fn spend_nullifier_bytes_v3_differs_from_v2() {
-        let mut recipient = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
-        recipient[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
-        recipient[DIVERSIFIER_SIZE..].copy_from_slice(&INTERNAL_PK_D);
+    #[test_case]
+    const SPEND_NULLIFIER_BYTES_V3_DIFFERS_FROM_V2: TestType = TestType {
+        modname: module_path!(),
+        name: "spend_nullifier_bytes_v3_differs_from_v2",
+        f: || {
+            let mut recipient = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
+            recipient[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+            recipient[DIVERSIFIER_SIZE..].copy_from_slice(&INTERNAL_PK_D);
 
-        // Any valid Pallas base field element works as nk for this differential test.
-        let nk = [0u8; HASH_SIZE];
+            // Any valid Pallas base field element works as nk for this differential test.
+            let nk = [0u8; HASH_SIZE];
 
-        let nf_v2 = spend_nullifier_bytes(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
-            .expect("V2 spend_nullifier_bytes must succeed for valid inputs");
-        let nf_v3 =
-            spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
-                .expect("V3 spend_nullifier_bytes_v3 must succeed for valid inputs");
+            let nf_v2 =
+                spend_nullifier_bytes(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                    .map_err(|_| ())?;
+            let nf_v3 =
+                spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                    .map_err(|_| ())?;
 
-        assert_ne!(
-            nf_v2, nf_v3,
-            "V3 nullifier must differ from V2 nullifier for the same note fields              (the commitment trapdoor differs, which changes the commitment point              and therefore the final nullifier)"
-        );
-    }
+            if nf_v2 == nf_v3 {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 
     /// `spend_nullifier_bytes_v3` must be deterministic: identical inputs produce
     /// identical output.
-    #[cfg(feature = "zcash_unstable")]
-    #[test]
-    fn spend_nullifier_bytes_v3_is_deterministic() {
-        let mut recipient = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
-        recipient[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
-        recipient[DIVERSIFIER_SIZE..].copy_from_slice(&INTERNAL_PK_D);
+    #[test_case]
+    const SPEND_NULLIFIER_BYTES_V3_IS_DETERMINISTIC: TestType = TestType {
+        modname: module_path!(),
+        name: "spend_nullifier_bytes_v3_is_deterministic",
+        f: || {
+            let mut recipient = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
+            recipient[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+            recipient[DIVERSIFIER_SIZE..].copy_from_slice(&INTERNAL_PK_D);
 
-        let nk = [0u8; HASH_SIZE];
+            let nk = [0u8; HASH_SIZE];
 
-        let nf_first =
-            spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
-                .expect("first call to spend_nullifier_bytes_v3 must succeed");
-        let nf_second =
-            spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
-                .expect("second call to spend_nullifier_bytes_v3 must succeed");
+            let nf_first =
+                spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                    .map_err(|_| ())?;
+            let nf_second =
+                spend_nullifier_bytes_v3(&nk, &recipient, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                    .map_err(|_| ())?;
 
-        assert_eq!(
-            nf_first, nf_second,
-            "spend_nullifier_bytes_v3 must be deterministic"
-        );
-    }
+            if nf_first != nf_second {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 }

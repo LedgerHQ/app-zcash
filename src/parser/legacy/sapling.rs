@@ -1,6 +1,5 @@
 use crate::parser::personalization::ZCASH_SAPLING_OUTPUTS_MEMOS_HASH_PERSONALIZATION;
 use crate::parser::personalization::ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION;
-#[cfg(feature = "zcash_unstable")]
 use crate::parser::personalization::ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION_V6;
 use crate::parser::personalization::{
     ZCASH_SAPLING_OUTPUTS_COMPACT_HASH_PERSONALIZATION, ZCASH_SAPLING_OUTPUTS_HASH_PERSONALIZATION,
@@ -51,7 +50,6 @@ impl LegacyParser {
             // hashed into the spends non-compact digest nor streamed by the host, and
             // that digest takes its own personalization. v4 and v5 are unchanged.
             let (anchor, non_compact_personalization) = match ctx.tx_info.tx_version() {
-                #[cfg(feature = "zcash_unstable")]
                 SupportedTxVersion::V6 => (
                     None,
                     ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION_V6,

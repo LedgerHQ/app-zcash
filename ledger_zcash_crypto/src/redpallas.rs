@@ -507,18 +507,22 @@ struct ProjectivePointLayout {
 }
 
 pub(crate) fn projective_point(x: pallas::Base, y: pallas::Base, z: pallas::Base) -> pallas::Point {
-    debug_assert_eq!(
-        core::mem::size_of::<ProjectivePointLayout>(),
-        core::mem::size_of::<pallas::Point>(),
-    );
-    debug_assert_eq!(
-        core::mem::align_of::<ProjectivePointLayout>(),
-        core::mem::align_of::<pallas::Point>(),
-    );
+    // Compile-time, so a layout change breaks the build instead of shipping. `debug_assert!` would
+    // not: it is compiled out of the release profile this app is built with.
+    const {
+        assert!(
+            core::mem::size_of::<ProjectivePointLayout>() == core::mem::size_of::<pallas::Point>()
+        );
+        assert!(
+            core::mem::align_of::<ProjectivePointLayout>()
+                == core::mem::align_of::<pallas::Point>()
+        );
+    }
 
-    // SAFETY: This bridges from SDK-exported affine coordinates into the
-    // current `pasta_curves` projective layout `(x, y, z)`. It relies on the
-    // pinned `pasta_curves` 0.5 point representation used in this workspace.
+    // SAFETY: bridges SDK-exported affine coordinates into the `pasta_curves` projective layout
+    // `(x, y, z)`. Sound because the crate is built with the `repr-c` feature, which is what gives
+    // `pallas::Point` a guaranteed C field order; see the dependency comment in Cargo.toml. Size and
+    // alignment are asserted above at compile time.
     unsafe { core::mem::transmute(ProjectivePointLayout { x, y, z }) }
 }
 

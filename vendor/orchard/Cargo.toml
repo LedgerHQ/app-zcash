@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.85.1"
 name = "orchard"
-version = "0.15.0"
+version = "0.15.5"
 authors = [
     "Sean Bowe <ewillbefull@gmail.com>",
     "Jack Grigg <thestr4d@gmail.com>",
@@ -77,6 +77,10 @@ ledger = [
 ]
 unstable-frost = []
 unstable-voting-circuits = []
+verifier-fingerprint = [
+    "circuit",
+    "halo2_proofs/unstable-verifier-fingerprint",
+]
 
 [lib]
 name = "orchard"
@@ -145,7 +149,7 @@ optional = true
 default-features = false
 
 [dependencies.halo2_proofs]
-version = "0.3"
+version = "0.3.5"
 features = [
     "batch",
     "floor-planner-v1-legacy-pdqsort",
@@ -177,7 +181,8 @@ version = "0.11"
 default-features = false
 
 [dependencies.pasta_curves]
-version = "0.5"
+version = "0.5.2"
+features = ["glv"]
 
 [dependencies.plotters]
 version = "0.3.0"
@@ -224,7 +229,7 @@ default-features = false
 version = "0.1.1"
 
 [dependencies.zcash_note_encryption]
-version = "0.4"
+version = "0.4.2"
 
 [dependencies.zcash_spec]
 version = "0.2.1"
@@ -250,11 +255,14 @@ features = ["test-dependencies"]
 [dev-dependencies.proptest]
 version = ">=1.0.0, <1.7.0"
 
+[dev-dependencies.rand_chacha]
+version = "0.3"
+
 [dev-dependencies.shardtree]
 version = "0.6"
 
 [dev-dependencies.zcash_note_encryption]
-version = "0.4"
+version = "0.4.2"
 features = ["pre-zip-212"]
 
 [target."cfg(unix)".dev-dependencies.inferno]
