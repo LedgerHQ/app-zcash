@@ -332,10 +332,8 @@ impl TryFrom<ApduHeader> for Instruction {
                     sw: AppSW::WrongP1P2,
                 })
             }
-            // A routed instruction reached here because its P1/P2 did not match any of its arms.
-            // An unrouted one never had P1/P2 semantics at all, so the reply must not depend on
-            // them — otherwise the dispatcher's error contract varies with bytes it never parsed,
-            // and a prober can tell the two conditions apart for free.
+            // A routed instruction lands here on an unmatched P1/P2; an unrouted one never had
+            // P1/P2 semantics, so its reply does not depend on them.
             (
                 INS_GET_WALLET_PUBLIC_KEY
                 | INS_GET_TRUSTED_INPUT

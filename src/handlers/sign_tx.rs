@@ -35,9 +35,8 @@ pub fn handler_hash_input_start(
     first: bool,
     continue_hashing: bool,
 ) -> Result<(), AppSW> {
-    // Only a first round that is not a continuation resets the context; every other shape reuses
-    // whatever transaction state is already there, which is sound only after a legacy round.
-    // Refuse them while a PCZT session owns that state, whatever its transaction version.
+    // Any shape that does not reset the context reuses the transaction state already there, which is
+    // sound only after a legacy round.
     let resets_context = first && !continue_hashing;
     if !resets_context && ctx.pczt_parser.is_session_active() {
         error!("Legacy round during a PCZT session");
@@ -107,10 +106,8 @@ pub fn handler_hash_input_finalize_full(
     if is_change_info {
         let path: Bip32Path = data.try_into()?;
 
-        // Validate before assigning. A change hash is what removes an output from the review screen,
-        // so it must not be installed from a path that is then rejected — leaving that to the
-        // main-loop reset on error would make a clear-signing property depend on error handling in
-        // another file.
+        // A change hash removes an output from the review screen, so it is installed only from a
+        // path that passed the check.
         if !check_bip44_compliance(
             &path,
             Bip44CheckMode::Full {
@@ -199,9 +196,8 @@ fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
 }
 
 pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
-    // Legacy signing reads the transaction state a legacy round built. During a PCZT session that
-    // state belongs to the PCZT, and its extra-header branch would overwrite the locktime, sighash
-    // type and expiry height the reviewed transaction is signed over.
+    // Legacy signing reads the transaction state a legacy round built; during a PCZT session that
+    // state belongs to the PCZT.
     if ctx.pczt_parser.is_session_active() {
         error!("Legacy signing during a PCZT session");
         return Err(AppSW::BadState);

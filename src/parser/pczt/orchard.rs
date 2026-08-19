@@ -1270,11 +1270,7 @@ impl PcztParser {
 
         self.orchard_signed_action_count = self.orchard_signed_action_count.saturating_add(1);
 
-        // Zeroize the cached account spending key as soon as the last action is signed — it is no
-        // longer needed and must not outlive its usage. Both pools sign with the same key, so an
-        // Ironwood bundle still awaiting signatures keeps it alive: releasing it here would force a
-        // second `zip32_orchard_derive`, which the cache exists to avoid, and would drop the path
-        // the one-account-per-transaction check compares against.
+        // Both pools sign with the same key, so it is released once neither has a signature left.
         if self.are_orchard_signatures_done() && self.are_ironwood_signatures_done() {
             self.clear_orchard_spending_key();
         }
