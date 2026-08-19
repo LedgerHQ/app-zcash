@@ -78,7 +78,7 @@ if [[ "${#vendor_repo_dirs[@]}" -gt 0 ]]; then
     fi
 fi
 
-clone_repo "https://github.com/zcash/orchard.git"               "8de172448be10f3a470f9ac83198dc8a185986ad" "$VENDOR_DIR/orchard"
+clone_repo "https://github.com/zcash/orchard.git"               "29d1d55db62153dcaeef8ef631c8991c53ed1248" "$VENDOR_DIR/orchard"
 clone_repo "https://github.com/ferrilab/radium.git"             "3f27e0d827338aee919213fd071b99819a1b9fff" "$VENDOR_DIR/radium"
 clone_repo "https://github.com/rust-bitcoin/rust-secp256k1.git" "secp256k1-0.29.1"                         "$VENDOR_DIR/rust-secp256k1"
 clone_repo "https://github.com/zcash/sapling-crypto.git"        "8186b407b47b595a2ea4f04c73d59fdd83bd401f" "$VENDOR_DIR/sapling-crypto"

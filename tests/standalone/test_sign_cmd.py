@@ -796,3 +796,115 @@ def test_sign_tx_with_v4_nu6_input(backend, scenario_navigator):
         sig.hex()
         == "31440220488d0fca08431682cd5f10968a72affdd569f61a4a358f73edf05d0fb4a3e1a702204722751bd7d27f999ed714694ad024465d54c288a9cc560559d9594914d92ac501"  # noqa: E501
     )
+
+
+# A trusted-input round over one real mainnet transaction, up to but excluding the packet that
+# declares the shielded component counts. The tests below reuse it and vary exactly one field, so
+# that a rejection can only come from the field under test.
+#
+# Layout of the first packet: requested output index (4 bytes, big-endian), then the V5 header
+# (version, version group id, consensus branch id) and the input count.
+_V5_TRUSTED_INPUT_HEADER_AND_COUNT = "050000800a27a726b4d0d6c201"
+_V5_TRUSTED_INPUT_BODY = [
+    "e04280002598cd6cd9559cd98109ad0622f899bc38805f11648e4f985ebe344b8238f87b13010000006b",
+    "e04280003248304502210095104ae9d53a95105be4ba5a31caddff2ae83ced24b21ab4aec6d735d568fad102206e054b158047529bb736",
+    "e042800032c810902ea7fc8d92f3f604c1b2a8bb0b92f0e6c016a8012102010a560c7325827df0212bca20f5cf6556b1345991b6b64b46",
+    "e04280000b9c616e758230a5ffffffff",
+    "e04280000102",  # two transparent outputs
+    "e0428000221595dd04000000001976a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac",
+    "e042800022a245117c140000001976a914c8b56e00740e62449a053c15bdd4809f720b5cb588ac",
+]
+# Shielded component counts: nSpendsSapling, nOutputsSapling, nActionsOrchard — all zero here.
+_V5_TRUSTED_INPUT_NO_SHIELDED = "e042800003000000"
+# locktime, extra-data length, expiry height. The packet that completes the round.
+_V5_TRUSTED_INPUT_EXTRA = "e0428000090000000004f9081a00"
+
+
+def _send_v5_trusted_input_prefix(transport, requested_output_index: int) -> None:
+    index = requested_output_index.to_bytes(4, byteorder="big").hex()
+    first_packet = "e0420000" + "11" + index + _V5_TRUSTED_INPUT_HEADER_AND_COUNT
+
+    for apdu in [first_packet] + _V5_TRUSTED_INPUT_BODY:
+        sw, _ = transport.exchange_raw(apdu)
+        assert sw == 0x9000
+
+
+def test_trusted_input_rejects_out_of_range_output_index(backend):
+    """A trusted input is only vouched for once the requested output has actually been seen.
+
+    The HMAC that seals a trusted input makes the device's word final: the signing round reads the
+    amount straight out of the blob. Returning one for an index the transaction does not have would
+    seal an amount of zero as if it had been read from the chain, so the round has to fail instead.
+
+    The transaction carries two outputs, so index 2 is one past the end.
+    """
+    transport = ZcashCommandSender(backend)
+
+    _send_v5_trusted_input_prefix(transport, requested_output_index=2)
+
+    sw, _ = transport.exchange_raw(_V5_TRUSTED_INPUT_NO_SHIELDED)
+    assert sw == 0x9000
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw(_V5_TRUSTED_INPUT_EXTRA)
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_trusted_input_rejects_unbounded_shielded_count(backend):
+    """A host-declared shielded component count is bounded like every other count in this parser.
+
+    Left unbounded it drives the streamed shielded sections, and `count * memo_size` would wrap a
+    32-bit `usize` — silently shrinking the memo section rather than failing. The ceiling sits far
+    above anything a real transaction carries, so only a count meant to make the parser loop is
+    refused.
+
+    65536 is above the ceiling and is the smallest value the five-byte CompactSize form encodes
+    canonically, so the rejection cannot come from a non-canonical encoding instead.
+    """
+    OVER_CEILING_SAPLING_SPEND_COUNT = "fe00000100"
+    counts = OVER_CEILING_SAPLING_SPEND_COUNT + "00" + "00"
+
+    transport = ZcashCommandSender(backend)
+
+    _send_v5_trusted_input_prefix(transport, requested_output_index=0)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw("e0428000" + "07" + counts)
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_trusted_input_rejects_v4_transaction_with_shielded_components(backend):
+    """A V4 txid covers the whole V4 serialisation, shielded fields included — and this parser only
+    feeds the transparent part to the V4 hasher; the shielded parsers feed the ZIP-244 digest tree,
+    which has no meaning for V4.
+
+    So a V4 transaction carrying Sapling components would yield a txid that matches no transaction on
+    chain, sealed inside a valid HMAC, and the signature built on it would reference an outpoint that
+    does not exist. Refusing is the only honest answer until the V4 serialisation is covered.
+
+    This is the V4 NU6 vector from test_sign_tx_with_v4_nu6_input with one field changed: one Sapling
+    spend declared instead of none.
+    """
+    ONE_SAPLING_SPEND = "e042800003010000"
+
+    transport = ZcashCommandSender(backend)
+
+    for apdu in [
+        "e042000011000000000400008085202f895510e7c801",
+        "e042800025b53e61d09f49b165a21fed754ab228e789193d664cd4ab026ccccaf6b30740ba1e0000006a",
+        "e04280003247304402202ffcfd634ae68631af2435b537d33e86a0a38338e3841aecf6d0f54cadef979f0220469c7cd94d52be1183e4f9",
+        "e04280003275035388254a4b49a22bee691f8b3d32e65b05167e012102529734fe55e9de06341c90ab8dc11f144ddcfaed136f49edcdb2",
+        "e04280000a875bfb0eadb3ffffffff",
+        "e04280000102",
+        "e04280002262e52a03000000001976a914c91bd3bb62b6abbb0005ea78613c0c4f11330b4a88ac",
+        "e04280002201ae8700000000001976a9149014582e6407d13434d7dac8bb53e4616356501688ac",
+    ]:
+        sw, _ = transport.exchange_raw(apdu)
+        assert sw == 0x9000
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw(ONE_SAPLING_SPEND)
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION

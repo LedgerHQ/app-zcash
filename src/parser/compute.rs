@@ -1,11 +1,11 @@
-#[cfg(feature = "zcash_unstable")]
 use crate::consts::{OVERWINTERED_FLAG, V6_TX_VERSION, V6_VERSION_GROUP_ID};
-#[cfg(feature = "zcash_unstable")]
-use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use crate::parser::personalization::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
     ZCASH_TX_PERSONALIZATION_PREFIX,
+};
+use crate::parser::personalization::{
+    ZCASH_IRONWOOD_HASH_PERSONALIZATION, ZCASH_ORCHARD_HASH_PERSONALIZATION_V6,
 };
 use corez::io::Write;
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
@@ -34,7 +34,6 @@ fn write_header_version(
     hasher: &mut Blake2b_256,
     is_v6: bool,
 ) -> Result<(), ParserError> {
-    #[cfg(feature = "zcash_unstable")]
     if is_v6 {
         ok!(hasher.update(&(V6_TX_VERSION | OVERWINTERED_FLAG).to_le_bytes()));
         ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
@@ -51,8 +50,7 @@ fn write_header_version(
 }
 
 /// The shared v5 txid digest tree. A v6 transaction reuses it verbatim and only appends
-/// the Ironwood bundle digest (ZIP-229); `is_v6` is a compile-time `false` unless the
-/// `zcash_unstable` feature is on, so every v6 statement below is gated out with it.
+/// the Ironwood bundle digest (ZIP-229).
 fn tx_id_v5_v6(
     ctx: &mut LegacyParserCtx<'_>,
     branch_id: BranchId,
@@ -113,7 +111,6 @@ fn tx_id_v5_v6(
     ok!(hasher.update(&sapling_hash));
     ok!(hasher.update(&orchard_hash));
 
-    #[cfg(feature = "zcash_unstable")]
     if is_v6 {
         let ironwood_hash =
             finalize_and_log_hash(&mut ctx.hashers.ironwood_hasher, "Ironwood hash")?;
@@ -137,12 +134,9 @@ pub fn tx_id(ctx: &mut LegacyParserCtx<'_>) -> Result<(), ParserError> {
         .expect("branch_id should be set at this point");
 
     match ctx.tx_info.tx_version() {
-        #[cfg(feature = "zcash_unstable")]
         version @ (SupportedTxVersion::V5 | SupportedTxVersion::V6) => {
             tx_id_v5_v6(ctx, branch_id, matches!(version, SupportedTxVersion::V6))?
         }
-        #[cfg(not(feature = "zcash_unstable"))]
-        SupportedTxVersion::V5 => tx_id_v5_v6(ctx, branch_id, false)?,
         SupportedTxVersion::V4 => {
             let mut first_round_hash = [0u8; 32];
             ok!(ctx.hashers.v4_tx_hasher.finalize(&mut first_round_hash));
@@ -301,17 +295,11 @@ fn compute_header_digest(tx_info: &mut TxInfo) -> Result<(), ParserError> {
 
     let mut hasher = Blake2b_256::default();
     ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-    #[cfg(feature = "zcash_unstable")]
     if tx_info.is_v6 {
         ok!(hasher.update(&(V6_TX_VERSION | OVERWINTERED_FLAG).to_le_bytes()));
         ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
         ok!(hasher.update(&tx_info.branch_id_raw.to_le_bytes()));
     } else {
-        ok!(tx_version.write(&mut hasher.as_writer()));
-        ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
-    }
-    #[cfg(not(feature = "zcash_unstable"))]
-    {
         ok!(tx_version.write(&mut hasher.as_writer()));
         ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
     }
@@ -366,9 +354,6 @@ fn finalize_signature_hash_from_transparent_digest(
 
     let sapling_digest = empty_digest(ZCASH_SAPLING_HASH_PERSONALIZATION)?;
     let orchard_digest = if tx_info.orchard_digest == [0; 32] {
-        #[cfg(not(feature = "zcash_unstable"))]
-        let perso = ZCASH_ORCHARD_V5_HASH_PERSONALIZATION;
-        #[cfg(feature = "zcash_unstable")]
         let perso = if tx_info.is_v6 {
             ZCASH_ORCHARD_HASH_PERSONALIZATION_V6
         } else {
@@ -390,9 +375,16 @@ fn finalize_signature_hash_from_transparent_digest(
     ok!(hasher.update(transparent_digest));
     ok!(hasher.update(&sapling_digest));
     ok!(hasher.update(&orchard_digest));
-    #[cfg(feature = "zcash_unstable")]
-    if tx_info.has_ironwood_bundle {
-        ok!(hasher.update(&tx_info.ironwood_digest));
+    // ZIP 229: `ironwood_digest_v6` is a child of `txid_digest_v6` for every V6 transaction, taking
+    // the empty-input value when the bundle has no actions.
+    if tx_info.is_v6 {
+        let ironwood_digest = if tx_info.ironwood_digest == [0; 32] {
+            empty_digest(ZCASH_IRONWOOD_HASH_PERSONALIZATION)?
+        } else {
+            tx_info.ironwood_digest
+        };
+        debug!("Ironwood hash: {}", HexSlice(&ironwood_digest));
+        ok!(hasher.update(&ironwood_digest));
     }
     ok!(hasher.finalize(&mut tx_info.signature_digest));
 

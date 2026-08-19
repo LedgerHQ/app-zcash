@@ -8,7 +8,7 @@ ledger_device_sdk = { version = "1.*", features = ["sys"] }
 
 [package]
 name = "zcash"
-version = "3.9.1"
+version = "3.9.2"
 authors = ["Ledger"]
 edition = "2024"
 
@@ -19,10 +19,11 @@ corez = { version = "0.1.1", default-features = false, features = ["alloc"] }
 arrayvec = { version = "0.7.6", default-features = false }
 bs58 = { version = "0.5.1", default-features = false }
 
-zcash_primitives = { version = "0.29.0", default-features = false }
-zcash_protocol = { version = "0.10.0", default-features = false }
+zcash_primitives = { version = "0.30.0", default-features = false }
+zcash_protocol = { version = "0.10.4", default-features = false }
+# Held at 0.4: zcash_{primitives,transparent,address} all resolve 0.4, so moving alone double-links.
 zcash_encoding = { version = "0.4.0", default-features = false }
-zcash_transparent = { version = "0.9.0", default-features = false }
+zcash_transparent = { version = "0.10.0", default-features = false }
 zcash_address = { version = "0.13.0", default-features = false }
 
 orchard = { path = "./vendor/orchard", default-features = false, features = ["ledger"] }
@@ -58,18 +59,7 @@ debug = true
 debug = true
 
 [features]
-# `zcash_unstable` is default-on: no release entry point passes `--features`, so anything
-# gated behind it would be missing from a shipped binary. Despite the name — inherited from
-# the librustzcash convention, where it marks pre-consensus protocol (NU7, ZIP-233) — the
-# app-level feature is a homonym of that convention, not an instance of it: it is declared
-# `zcash_unstable = []` and enables nothing in any dependency. What it gates is finalized,
-# activated consensus: NU6.3, live on mainnet since height 3428143 (2026-07-28), specified
-# by ZIP-229 and ZIP-258. V6 is already unconditional in our dependencies (`TxVersion::read`
-# decodes `(6, 0xD884B698)` in zcash_primitives 0.29.0; `BranchId::Nu6_3` = 0x37a5165b in
-# zcash_protocol 0.10.0). Enabling it therefore ships no pre-consensus code. Renaming it to
-# something truthful (`nu63`, `v6`) is the right follow-up and is left to the maintainers
-# whose convention the name follows.
-default = ["ledger_device_sdk/nano_nbgl", "legacy_path", "zcash_unstable"]
+default = ["ledger_device_sdk/nano_nbgl", "legacy_path"]
 
 testnet = []
 
@@ -77,7 +67,6 @@ testnet = []
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
 
 legacy_path = []
-zcash_unstable = ["ledger_zcash_crypto/zcash_unstable"]
 
 [package.metadata.ledger]
 curve = ["secp256k1", "jubjub"]

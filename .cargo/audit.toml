@@ -1,0 +1,17 @@
+# cargo-audit configuration.
+#
+# `RUST.instructions.md` requires dependencies to be checked for known *impactful*
+# vulnerabilities. Advisories listed here are recorded as not impactful, with the reason and
+# the dependency path that makes them unreachable. Anything not listed fails the build.
+
+[advisories]
+ignore = [
+    # Both are denial-of-service advisories in quick-xml 0.26, reachable only through
+    # orchard's benchmark tooling:
+    #   vendor/orchard [target."cfg(unix)".dev-dependencies] → pprof → inferno → quick-xml
+    # pprof writes flamegraphs for `cargo bench`. It is a dev-dependency of a vendored crate,
+    # so it is absent from `cargo ledger build` entirely and cannot be reached from an APDU.
+    # Drop these entries if the device ever links an XML parser.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]

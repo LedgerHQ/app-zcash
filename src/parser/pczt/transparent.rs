@@ -210,7 +210,7 @@ impl PcztParser {
         kind: TransparentScriptKind,
     ) -> Result<(), ParserError> {
         let script_size: usize = ok!(CompactSize::read_t(&mut *reader));
-        if script_size > MAX_SCRIPT_SIZE {
+        if script_size > MAX_PCZT_SCRIPT_SIZE {
             return Err(ParserError::from_str("Bad PCZT transparent script size"));
         }
 

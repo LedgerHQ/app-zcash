@@ -2,111 +2,15 @@
 """
 Self-contained Ragger/Speculos tests for the Ironwood PCZT signing flow.
 
-Scenario: V6 transaction with 0 transparent inputs, 1 transparent output,
-empty Orchard bundle (required to advance the state machine to OrchardActionsDone),
-and 2 Ironwood actions (both real spends).
+Scenario: V6 transaction with 0 transparent inputs, 1 transparent output, an empty Orchard
+bundle (needed to advance the state machine to OrchardActionsDone) and 2 Ironwood actions,
+both real spends.
 
-APDU sequence for this scenario
---------------------------------
-All APDUs use CLA=0xE0.
+The APDU sequence, the INS codes and the version rules are specified in docs/PCZT_APDU.md.
 
-Phase 1 — Header (INS=0x52, P1=FIRST=0x00, P2=0x00):
-  payload: "PCZT"(4) + pczt_version=2(4) + tx_version=6(4)
-         + version_group_id=0xD884B698(4) + consensus_branch_id=0x37A5165B(4)
-         + fallback_lock_time=Some(0)→0x01_0x00000000(5)
-         + expiry_height=0(4) + coin_type=133(4) + tx_modifiable=0(1) = 34 bytes
-
-  PCZT_VERSION_2 is required for V6 transactions — see src/parser/pczt/common.rs
-  parse_pczt_header() / parse_global():
-    if is_v6 && self.pczt_version != PCZT_VERSION_2 { return Err(...) }
-  Without the zcash_unstable Cargo feature, PCZT_VERSION_2 is unknown and the
-  firmware returns 0x6A80 (SW_INVALID_TRANSACTION).  This is the root cause of
-  the failing APDU documented in the task context:
-    => e05200002250435a54020000000600000098b684d85b16a53701000000007e8a34008500000000
-    <= 6a80
-  That log was produced against the develop branch (no zcash_unstable). Against
-  the ironwood-pczt-v2 worktree (zcash_unstable enabled) the same header is accepted.
-
-Phase 2 — Transparent inputs (INS=0x53):
-  Single packet (P1=FIRST=LAST=0x01): varint(0) — zero inputs, 1 byte.
-
-Phase 3 — Transparent outputs (INS=0x54):
-  Packet 0 (P1=FIRST=0x00): varint(1) — one output, 1 byte.
-  Packet 1 (P1=NEXT=0x80): value(8 LE) — 8 bytes.
-  Packets 2.. : varint(script_len) + script_pubkey — split at 255.
-  Last packet (P1=LAST=0x01): bip32_derivation — varint(0) = 1 byte (no derivation).
-
-Phase 4 — Orchard actions (INS=0x56):
-  Single packet (P1=FIRST=LAST): varint(0) + flags(1) + |vb|(8) + sign(1) + anchor(32) = 43 bytes.
-  P2=CONTINUE=0x00 (not pczt_finished), sent synchronously.
-  Purpose: advance the state machine through WaitOrchardTrailer → OrchardActionsDone.
-
-Phase 5 — Ironwood actions (INS=0x58), per action (repeated twice):
-  Packet A  (P1=FIRST on first action, P1=NEXT on subsequent):
-    cv_net(32) + nullifier(32) + rk(32) + spend_recipient(43)
-    + spend_value(8 LE) + spend_rho(32) + spend_rseed(32) + alpha(32) = 243 bytes
-    → firmware: parse_ironwood_action()
-  Packet B  (P1=NEXT):
-    seed_fingerprint(32) + pack_derivation_path(signing_path) = 48 bytes
-    → firmware: parse_ironwood_zip32_derivation()
-  Packet C  (P1=NEXT):
-    cmx(32) + ephemeral_key(32) = 64 bytes
-    → firmware: parse_ironwood_output()
-  Packets D–F (P1=NEXT, ×3):
-    varint(580)=fd2402(3) + enc_ciphertext(580 bytes) split 252+255+73 bytes
-    → firmware: parse_ironwood_enc_ciphertext_len() / parse_ironwood_enc_ciphertext()
-  Packet G  (P1=NEXT):
-    varint(80)=0x50(1) + out_ciphertext(80) = 81 bytes
-    → firmware: parse_ironwood_out_ciphertext_len() / parse_ironwood_out_ciphertext()
-  Packet H  (P1=NEXT for first action, P1=LAST for last action):
-    recipient(43) + value(8 LE) + rseed(32) + rcv(32) = 115 bytes
-    → firmware: parse_ironwood_output_metadata() with OUTPUT_METADATA_WITH_RCV_LEN=115
-
-  After last action: trailer packet (P1=LAST, P2=FINISHED=0x01):
-    flags(1) + |value_balance|(8 LE) + sign_byte(1) + anchor(32) = 42 bytes
-    → firmware: parse_ironwood_trailer()
-
-  The trailer's last packet is sent async; the device shows the review screen.
-
-Phase 6 — Sign (INS=0x59), one call per real spend:
-  CLA=0xE0 INS=0x59 P1=0x00 P2=<action_index> data=b""
-  Returns 64-byte spendAuthSig (RedPallas sign(rsk=ask+alpha, sighash)).
-
-SERIALIZER vs FIRMWARE DISCREPANCY ANALYSIS
---------------------------------------------
-No field-level mismatch was found between the Python ZcashCommandSender serializer
-(tests/application_client/zcash_command_sender.py) and the Rust ironwood parser
-(src/parser/pczt/ironwood.rs) for the ironwood-pczt-v2 worktree build.
-
-Field-by-field verification:
-  Spend group packet (parse_ironwood_action):
-    cv_net(32) nullifier(32) rk(32) spend_recipient(43)
-    spend_value(8) spend_rho(32) spend_rseed(32) alpha(32) = 243 bytes  ✓
-  ZIP32 derivation (parse_ironwood_zip32_derivation):
-    seed_fingerprint(32) [first] + BIP32-encoded path [rest]             ✓
-  Output compact (parse_ironwood_output):
-    cmx(32) + ephemeral_key(32) = 64 bytes                               ✓
-  enc_ciphertext (parse_ironwood_enc_ciphertext_len / _enc_ciphertext):
-    CompactSize(580) then 580 bytes; split at 255-byte APDU boundary     ✓
-  out_ciphertext (parse_ironwood_out_ciphertext_len / _out_ciphertext):
-    CompactSize(80) then 80 bytes                                         ✓
-  Output metadata (parse_ironwood_output_metadata):
-    recipient(43)+value(8)+rseed(32)+rcv(32) = 115 bytes                 ✓
-    with note_plaintext_version: +1 byte = 116 bytes                     ✓
-  Trailer (parse_ironwood_trailer):
-    flags(1)+|value_balance|(8)+sign_byte(1)+anchor(32) = 42 bytes       ✓
-
-The only observed discrepancy is PCZT version gating:
-  - Without zcash_unstable feature: only PCZT_VERSION_1 accepted → V6 header → 0x6A80.
-  - With zcash_unstable feature (this worktree): PCZT_VERSION_2 accepted for V6.
-  This is not a serializer/parser mismatch — it is an intentional feature gate.
-
-Note on enc_ciphertext split point: write_varint(580) = b"\\xfd\\x24\\x02" (3 bytes, compact
-size encoding). The first packet in the enc_ciphertext stream therefore contains
-3 bytes of length prefix + 252 bytes of data = 255 bytes total. The firmware
-parses the CompactSize from the first packet, then accumulates data via
-read_large_ironwood_vec() across subsequent packets. This is consistent with how
-the orchard parser works for the same field size.
+One non-obvious framing detail: write_varint(580) is 3 bytes, so the first enc_ciphertext
+packet carries 3 length bytes plus 252 data bytes; the firmware reads the CompactSize from
+that first packet and accumulates the remainder across the following ones.
 """
 
 import pytest
@@ -115,6 +19,7 @@ from application_client.pczt import (
     PcztIronwoodAction,
     PcztIronwoodBundle,
     PcztOrchardBundle,
+    PcztTransparentInput,
     PcztTransparentOutput,
 )
 from application_client.zcash_command_sender import (
@@ -168,7 +73,9 @@ _SPEND_RECIPIENT = bytes.fromhex(
 )
 _CV_NET = bytes.fromhex("00b3324110776396d31646041679fd6530d57c353c6be0a93a0cd55b30aa6d8b")
 _NULLIFIER = bytes.fromhex("ed37cc733c228dc3dda2cf088ba646f9d204adc9d8d6f95ec36126eb742c3a10")
-_CMX = bytes.fromhex("aa5a6343c80fff74db58be9d847515ab8456837633b6cdf52305544bc5107c31")
+# V3 note commitment: recipient _INTERNAL_RECIPIENT, value 0, nullifier _NULLIFIER,
+# rseed _RSEED. Regenerate with vendor/orchard gen_v3_valid_action_cmx.
+_CMX = bytes.fromhex("704b2bfa354eb974b10efe385d7ec56a12abbb906a3a95500bf9d6bbfcb7b73e")
 _RCV = bytes.fromhex("4200000000000000000000000000000000000000000000000000000000000000")
 _RSEED = bytes.fromhex("2e00000000000000000000000000000000000000000000000000000000000000")
 _SPEND_RHO = bytes.fromhex("0600000000000000000000000000000000000000000000000000000000000000")
@@ -182,6 +89,16 @@ _SPEND_RSEED = bytes.fromhex("1a000000000000000000000000000000000000000000000000
 _TRANSPARENT_OUTPUT_599K = PcztTransparentOutput(
     value=599000,
     script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+)
+
+# Funds the 599000 output with a 1000-zat fee, for the cases that carry no shielded value.
+_TRANSPARENT_INPUT_600K = PcztTransparentInput(
+    prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+    prevout_index=0,
+    value=600000,
+    script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+    sequence=bytes.fromhex("00000000"),
+    signing_path="m/44'/133'/0'/0/2",
 )
 
 # Empty Orchard bundle used to advance the state machine to OrchardActionsDone.
@@ -406,6 +323,64 @@ def test_pczt_ironwood_v2_version1_rejected_for_v6(backend):
             pczt_version=1,  # force incorrect version for a V6 tx
         ):
             pytest.fail("Device accepted PCZT_VERSION_1 for a V6 transaction")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_ironwood_v2_empty_bundle_accepted(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A V6 transaction may carry an empty Ironwood bundle, and must still be signable.
+
+    A transaction that spends only Orchard notes after NU6.3 is a V6 transaction with no Ironwood
+    actions. ZIP 229 gives its `ironwood_digest_v6` the empty-input value rather than dropping the
+    node from the txid tree — librustzcash's own V6 txid test feeds `empty_hash("ZTxIdIronwd_H_v6")`
+    for exactly this shape. Refusing the empty bundle would also strand the transaction a second way,
+    since V6 defers the user review to Ironwood finalisation.
+
+    This is a non-regression test on the flow: it shows the empty bundle is accepted, the review runs
+    and a signature comes back. That the digest matches consensus rests on the ZIP and on the
+    librustzcash cross-check, not on this test.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_600K],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
+        ironwood_bundle=PcztIronwoodBundle(
+            actions=[], flags=0, value_balance=0, anchor=bytes(32)
+        ),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_v2_empty_bundle_accepted")
+
+    signature = client.pczt_sign_transparent(input_index=0).data
+    assert len(signature) >= 70
+
+
+def test_pczt_ironwood_v2_bundle_rejected_on_v5_transaction(backend):
+    """The mirror of the case above: an Ironwood bundle on a V5-declared transaction.
+
+    The Ironwood pool exists only in V6. A V5 transaction reaches OrchardActionsDone as soon as its
+    Orchard bundle is parsed, so nothing in the section ordering stops the host from following it
+    with an Ironwood bundle. Accepting one would leave the parser holding is_v6 == false while an
+    Ironwood digest is appended — a digest tree matching no consensus rule.
+
+    PcztGlobal() defaults to tx_version 5, and pczt_version 1 is the correct pairing for it, so this
+    request is rejected for its structure rather than for a version mismatch.
+    """
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=[],
+            transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
+            ironwood_bundle=_two_real_spends_bundle(),
+            pczt_version=1,
+        ):
+            pytest.fail("Device accepted an Ironwood bundle on a V5 transaction")
 
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 

@@ -12,10 +12,7 @@ fn are_pczt_transparent_signatures_done(ctx: &TxContext) -> bool {
 }
 
 fn are_pczt_signatures_done(ctx: &TxContext) -> bool {
-    #[cfg(feature = "zcash_unstable")]
     let ironwood_done = ctx.pczt_parser.are_ironwood_signatures_done();
-    #[cfg(not(feature = "zcash_unstable"))]
-    let ironwood_done = true;
     are_pczt_transparent_signatures_done(ctx)
         && ctx.pczt_parser.are_orchard_signatures_done()
         && ironwood_done
@@ -68,7 +65,6 @@ fn finish_pczt_if_requested(ctx: &mut TxContext, requested: bool) -> Result<(), 
     }
 
     info!("PCZT is finished and ready to sign");
-    ctx.tx_signing_state.is_tx_parsed_once = true;
 
     Ok(())
 }
@@ -87,6 +83,7 @@ pub fn handler_pczt_header(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), A
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
         },
         data,
     ) {
@@ -117,6 +114,7 @@ pub fn handler_pczt_transparent_input(
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
         },
         data,
     ) {
@@ -152,6 +150,7 @@ pub fn handler_pczt_transparent_output(
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
         },
         data,
     ) {
@@ -188,6 +187,7 @@ pub fn handler_pczt_orchard_action(
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
         },
         data,
     ) {
@@ -205,7 +205,6 @@ pub fn handler_pczt_orchard_action(
     Ok(())
 }
 
-#[cfg(feature = "zcash_unstable")]
 pub fn handler_pczt_ironwood_action(
     comm: &mut Comm,
     ctx: &mut TxContext,
@@ -227,6 +226,7 @@ pub fn handler_pczt_ironwood_action(
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
+            swap_params: ctx.swap_params,
         },
         data,
     ) {
@@ -407,7 +407,6 @@ pub fn handler_pczt_sign_orchard(
     Ok(())
 }
 
-#[cfg(feature = "zcash_unstable")]
 pub fn handler_pczt_sign_ironwood(
     comm: &mut Comm,
     ctx: &mut TxContext,

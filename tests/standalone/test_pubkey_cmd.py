@@ -177,6 +177,56 @@ def test_get_ufvk_account_mismatch(backend):
     assert len(e.value.data) == 0
 
 
+# A path outside the app's two declared prefixes must come back as a status word. Leaving it to the
+# OS is not equivalent: the derivation syscall aborts the app rather than answering, and the caller
+# cannot tell a refusal from a crash.
+@pytest.mark.parametrize(
+    "path",
+    [
+        "m/44'/60'/0'/0/0",  # Ethereum coin type
+        "m/44'/0'/0'/0/0",  # Bitcoin coin type
+        "m/49'/133'/0'/0/0",  # right coin type, purpose the app does not declare
+        "m/133'/0'",  # coin type in the purpose position
+    ],
+    ids=["ethereum", "bitcoin", "undeclared_purpose", "coin_type_as_purpose"],
+)
+def test_get_public_key_rejects_out_of_prefix_path(backend, path):
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.get_public_key(path=path)
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert len(e.value.data) == 0
+
+
+# The Orchard FVK is derived from this path and exposes the account's whole shielded history, so the
+# restriction applies in this mode exactly as it does in the unified one — a viewing key must not be
+# exported for a path the app has no derivation for.
+@pytest.mark.parametrize(
+    "path",
+    [
+        "m/44'/133'/0'/0/0",  # BIP-44 shape where a ZIP-32 account path is required
+        "m/32'/133'/0'/0/0",  # right prefix, but not an account path
+        "m/32'/60'/0'",  # ZIP-32 shape, wrong coin type
+        "m/32'/133'/0",  # account not hardened
+    ],
+    ids=["bip44_shape", "too_deep", "wrong_coin_type", "unhardened_account"],
+)
+def test_get_orchard_fvk_rejects_non_zip32_path(backend, path):
+    with pytest.raises(ExceptionRAPDU) as e:
+        backend.exchange(
+            cla=CLA,
+            ins=InsType.GET_VK,
+            p1=P1.P1_GET_VK_FIRST,
+            p2=GetVkMode.ORCHARD_FVK,
+            data=pack_derivation_path(path),
+        )
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert len(e.value.data) == 0
+
+
 def test_get_orchard_fvk_confirm_accepted(backend, scenario_navigator):
     REF_ORCHARD_FVK_ACC_0 = bytes.fromhex(
         "e129bb7d06ed69a5ac01a664482ec9987fd19c40940bf76d98eb8b952974852949b0128d5072f9f92c7f7e8eb49a5434d2c04b67a30a55946d8322df3e484426f6151235e5897d34196943cb8f968312f1c8fba9ed82830b59f801b6de5da835"

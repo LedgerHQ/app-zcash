@@ -227,7 +227,7 @@ dependencies = [
  "bitflags 2.13.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1336,9 +1336,9 @@ dependencies = [
 
 [[package]]
 name = "halo2_proofs"
-version = "0.3.2"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05713f117155643ce10975e0bee44a274bcda2f4bb5ef29a999ad67c1fa8d4d3"
+checksum = "f5aca1c66059a919227dec97444a11a4350d2f9c820ca48690988f0aa0e81cbf"
 dependencies = [
  "blake2b_simd",
  "ff",
@@ -1605,15 +1605,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -1688,9 +1679,9 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "ledger_device_sdk"
-version = "1.36.1"
+version = "1.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d36088f33e948d2e544a043632ba76b76d663f67cf8090b7162d8945d132ed83"
+checksum = "3acdc6a09a4ca280789301e06db717a14fa35a15c9d92ad39e4ca00594944df4"
 dependencies = [
  "const-zero",
  "include_gif",
@@ -1704,9 +1695,9 @@ dependencies = [
 
 [[package]]
 name = "ledger_secure_sdk_sys"
-version = "1.16.3"
+version = "1.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "027f543582d3de5cb05db8f4b9cba5e89480ad03f63d133ca3757687475d8a06"
+checksum = "bb154a0b6f0f074d14dd7991b831a6263e68338dbb347046badc947e0999bcc4"
 dependencies = [
  "bindgen",
  "cc",
@@ -2049,7 +2040,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orchard"
-version = "0.15.0"
+version = "0.15.5"
 dependencies = [
  "aes",
  "bitvec",
@@ -2076,6 +2067,7 @@ dependencies = [
  "pprof",
  "proptest",
  "rand 0.8.7",
+ "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "reddsa",
  "serde",
@@ -2120,9 +2112,9 @@ dependencies = [
 
 [[package]]
 name = "pasta_curves"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3e57598f73cc7e1b2ac63c79c517b31a0877cd7c402cdcaa311b5208de7a095"
+checksum = "3437083215c505e867eea5478371feba43d7689d6d15ec0a209eb46fb0d4cda6"
 dependencies = [
  "blake2b_simd",
  "ff",
@@ -3053,7 +3045,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys",
@@ -3507,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "zcash"
-version = "3.9.1"
+version = "3.9.2"
 dependencies = [
  "arrayvec",
  "bs58",
@@ -3565,9 +3557,9 @@ dependencies = [
 
 [[package]]
 name = "zcash_primitives"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdbeccc05bfe63b6dee9e989c6ff5027421741562a4853c36504dd621f6a81b1"
+checksum = "34ca4de11896f704ffe6319c2cd7bc8fc6ab31a55cec80d26def15c009d83678"
 dependencies = [
  "blake2b_simd",
  "block-buffer 0.11.0-rc.3",
@@ -3594,9 +3586,9 @@ dependencies = [
 
 [[package]]
 name = "zcash_protocol"
-version = "0.10.0"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2973d210e74ebd81adc50828fbbb284ab6aaa099308097c42c47dc63cf3420fc"
+checksum = "043686451284bcb72e40ffa18e2cdcea3108e8468e3d021062c0b32c4a060c98"
 dependencies = [
  "corez",
  "hex",
@@ -3631,9 +3623,9 @@ dependencies = [
 
 [[package]]
 name = "zcash_transparent"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72e0f8c142bed366ed5886dcfa8772ec90b5420cc127e6cdb76b6744c53a287b"
+checksum = "547c012778bae17f58007731af074d638aa146ab0ecfc120adebf23d049aff6c"
 dependencies = [
  "bip32",
  "bs58",
