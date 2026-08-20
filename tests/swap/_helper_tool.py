@@ -97,13 +97,35 @@ def copy_build_output(clone_dir: str, dest_dir: str):
     run_cmd(f"cp -rT {clone_dir}/build {dest_dir}/build")
 
 
+def use_case_flags(clone_dir: Path, use_case: str) -> str:
+    """Resolve a use case declared in `ledger_app.toml` into the make flags it stands for.
+
+    The dependency owns the flags its use case expands to, and they move — reproducing them here
+    is how a local build silently drifts away from the one CI runs. Only the use case *name* is
+    stated on this side, matching what the root `ledger_app.toml` asks CI to build.
+    """
+    # Kept local: the module is imported on the host, where the standard library may predate tomllib.
+    import tomllib
+
+    manifest = clone_dir / "ledger_app.toml"
+    with manifest.open("rb") as f:
+        use_cases = tomllib.load(f).get("use_cases", {})
+
+    if use_case not in use_cases:
+        raise ValueError(f"{manifest} declares no use case '{use_case}' (has: {', '.join(sorted(use_cases))})")
+
+    return use_cases[use_case]
+
+
 # ==== Build app-exchange ====
 def clone_and_pull_exchange():
     clone_or_pull(APP_EXCHANGE_URL, APP_EXCHANGE_CLONE_DIR)
 
 
 def build_and_copy_exchange():
-    build_app(APP_EXCHANGE_CLONE_DIR, flags="")
+    # Without the test public key, Exchange refuses the test signing authority the swap client
+    # uses and every scenario dies on SIGN_VERIFICATION_FAIL (0x9D1A).
+    build_app(APP_EXCHANGE_CLONE_DIR, flags=use_case_flags(APP_EXCHANGE_CLONE_DIR, "dbg_use_test_keys"))
     copy_build_output(APP_EXCHANGE_CLONE_DIR, APP_EXCHANGE_DIR)
 
 
@@ -115,6 +137,6 @@ def clone_and_pull_ethereum():
 def build_and_copy_ethereum():
     build_app(
         APP_ETHEREUM_CLONE_DIR,
-        flags="COIN=ethereum CHAIN=ethereum CAL_TEST_KEY=1 DOMAIN_NAME_TEST_KEY=1 SET_PLUGIN_TEST_KEY=1 NFT_TEST_KEY=1 TRUSTED_NAME_TEST_KEY=1",  # noqa: E501
+        flags=f"COIN=ethereum CHAIN=ethereum {use_case_flags(APP_ETHEREUM_CLONE_DIR, 'use_test_keys')}",
     )
     copy_build_output(APP_ETHEREUM_CLONE_DIR, APP_ETHEREUM_DIR)
