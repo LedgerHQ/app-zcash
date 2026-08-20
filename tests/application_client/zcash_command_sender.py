@@ -35,6 +35,11 @@ MAX_APDU_LEN: int = 255
 
 CLA: int = 0xE0
 
+# P2PKH script of the UTXO that `forge_and_get_trusted_input` pays to, and therefore the script
+# `forge_tx_v5` spends. Exported so a test crafting the same spend on another signing path can
+# reuse it instead of restating the bytes.
+FORGED_UTXO_SCRIPT_PUBKEY: bytes = bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
+
 
 class P1(IntEnum):
     # Parameter 1 for first APDU number.
@@ -1033,7 +1038,7 @@ class ZcashCommandSender:
         locktime = params.locktime
         expiry = params.expiry
 
-        script_pubkey_in = bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
+        script_pubkey_in = FORGED_UTXO_SCRIPT_PUBKEY
         sequence = bytes.fromhex("00000000")
 
         script_pubkey_out = bytes.fromhex("76a914") + bytes.fromhex(params.recipient_publickey) + bytes.fromhex("88ac")
