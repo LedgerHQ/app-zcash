@@ -9,6 +9,7 @@ from application_client.pczt import (
     PcztOrchardBundle,
     PcztTransparentInput,
     PcztTransparentOutput,
+    pczt_transaction_bytes,
 )
 from application_client.zcash_command_sender import (
     CLA,
@@ -19,7 +20,6 @@ from application_client.zcash_command_sender import (
     ZcashCommandSender,
 )
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
-from application_client.zcash_utils import write_varint
 from application_client.zcash_verify_sign import (
     check_tx_v5_signature_validity,
 )
@@ -96,59 +96,6 @@ def _review_approve(
     )
 
 
-def _pczt_transaction_bytes(
-    pczt_global: PcztGlobal,
-    transparent_inputs: list[PcztTransparentInput],
-    transparent_outputs: list[PcztTransparentOutput],
-    orchard_bundle: PcztOrchardBundle | None = None,
-) -> bytes:
-    tx = bytearray(pczt_global.tx_header_bytes())
-    tx.extend(write_varint(len(transparent_inputs)))
-
-    for txin in transparent_inputs:
-        tx.extend(txin.prevout_txid)
-        tx.extend(txin.prevout_index.to_bytes(4, byteorder="little"))
-        tx.extend(write_varint(len(txin.script_pubkey)))
-        tx.extend(txin.script_pubkey)
-        tx.extend(txin.sequence)
-
-    tx.extend(write_varint(len(transparent_outputs)))
-    for txout in transparent_outputs:
-        tx.extend(txout.value.to_bytes(8, byteorder="little"))
-        tx.extend(write_varint(len(txout.script_pubkey)))
-        tx.extend(txout.script_pubkey)
-
-    tx.extend(write_varint(0))
-    tx.extend(write_varint(0))
-
-    if orchard_bundle is None:
-        tx.extend(write_varint(0))
-        return bytes(tx)
-
-    tx.extend(write_varint(len(orchard_bundle.actions)))
-
-    for action in orchard_bundle.actions:
-        tx.extend(action.nullifier)
-        tx.extend(action.cmx)
-        tx.extend(action.ephemeral_key)
-        tx.extend(action.enc_ciphertext[:52])
-
-    for action in orchard_bundle.actions:
-        tx.extend(action.enc_ciphertext[52:564])
-
-    for action in orchard_bundle.actions:
-        tx.extend(action.cv_net)
-        tx.extend(action.rk)
-        tx.extend(action.enc_ciphertext[564:])
-        tx.extend(action.out_ciphertext)
-
-    tx.extend(orchard_bundle.flags.to_bytes(1, byteorder="little"))
-    tx.extend(orchard_bundle.value_balance.to_bytes(8, byteorder="little", signed=True))
-    tx.extend(orchard_bundle.anchor)
-
-    return bytes(tx)
-
-
 def _sign_all_orchard_actions(
     client: ZcashCommandSender,
     orchard_bundle: PcztOrchardBundle,
@@ -203,7 +150,7 @@ def _assert_pczt_orchard_sign_digest(
     ):
         _review_approve(scenario_navigator, snapshot_test_name)
 
-    tx_bytes = _pczt_transaction_bytes(
+    tx_bytes = pczt_transaction_bytes(
         pczt_global,
         transparent_inputs,
         transparent_outputs,
@@ -266,7 +213,7 @@ def test_pczt_sign_tx_v5_simple(
         value=81628565,
         script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
     )
-    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], [TRANSPARENT_OUTPUT])
+    TX_BYTES = pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], [TRANSPARENT_OUTPUT])
 
     client = ZcashCommandSender(backend)
 
@@ -350,7 +297,7 @@ def test_pczt_sign_tx_v5_change(
         signing_path=CHANGE_PATH,
     )
     TRANSPARENT_OUTPUTS = [RECIPIENT_OUTPUT, CHANGE_OUTPUT]
-    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
+    TX_BYTES = pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
 
     client = ZcashCommandSender(backend)
 
@@ -414,7 +361,7 @@ def test_pczt_sign_tx_v5_change_hash_not_sticky(
         script_pubkey=bytes.fromhex("76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"),
     )
     TRANSPARENT_OUTPUTS = [RECIPIENT_WITH_CHANGE_DERIVATION, PAYMENT_TO_CHANGE_ADDRESS]
-    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
+    TX_BYTES = pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
 
     client = ZcashCommandSender(backend)
 
@@ -608,7 +555,7 @@ def test_pczt_sign_tx_v5_mult_inputs(
         value=86385175,
         script_pubkey=bytes.fromhex("76a9147340a80cad7353cff25bad918e73837c2e2863eb88ac"),
     )
-    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, TRANSPARENT_INPUTS, [TRANSPARENT_OUTPUT])
+    TX_BYTES = pczt_transaction_bytes(PCZT_GLOBAL, TRANSPARENT_INPUTS, [TRANSPARENT_OUTPUT])
 
     client = ZcashCommandSender(backend)
     public_keys = [
@@ -1109,7 +1056,7 @@ def test_pczt_sign_tx_v5_mult_outputs(
         signing_path=CHANGE_PATH,
     )
     TRANSPARENT_OUTPUTS = [RECIPIENT_OUTPUT, CHANGE_OUTPUT]
-    TX_BYTES = _pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
+    TX_BYTES = pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
 
     client = ZcashCommandSender(backend)
 
