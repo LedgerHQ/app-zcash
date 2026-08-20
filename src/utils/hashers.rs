@@ -31,18 +31,3 @@ impl ToHash160 for [u8] {
         Ok(ripemd160_output)
     }
 }
-
-pub fn sha256_checksum(input: &[u8]) -> Result<[u8; 4], AppSW> {
-    use ledger_device_sdk::hash::{HashInit, sha2::Sha2_256};
-
-    let mut h1 = Sha2_256::new();
-    let mut o1 = [0u8; 32];
-    h1.hash(input, &mut o1)
-        .map_err(|_| AppSW::TechnicalProblem)?;
-
-    let mut h2 = Sha2_256::new();
-    let mut o2 = [0u8; 32];
-    h2.hash(&o1, &mut o2).map_err(|_| AppSW::TechnicalProblem)?;
-
-    Ok([o2[0], o2[1], o2[2], o2[3]])
-}

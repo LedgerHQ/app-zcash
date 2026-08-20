@@ -195,6 +195,9 @@ that case the payload contains only CompactSize output count `0`. See
 [PCZT_APDU.md](./PCZT_APDU.md#pczt_transparent_output) for the exact payload
 layout.
 
+An output's `script_pubkey` must be a standard P2PKH or P2SH script. Any other
+form, including OP_RETURN, is refused with `IncorrectData`.
+
 ## INS_PCZT_ORCHARD_ACTION
 
 - INS: `0x56`
