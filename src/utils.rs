@@ -1,7 +1,7 @@
 use crate::consts::{UNHARDENED_MASK, ZCASH_BIP44_COIN_TYPE, ZIP32_PATH_LEN, ZIP32_PURPOSE};
 use crate::utils::bip32_path::Bip32Path;
 use alloc::vec::Vec;
-use ledger_device_sdk::log::{debug, error};
+use ledger_device_sdk::log::error;
 
 pub mod base58_address;
 pub mod bip32_path;
@@ -10,18 +10,11 @@ pub mod extended_public_key;
 pub mod hashers;
 use crate::AppSW;
 
-// The parsers hand over a bare script body, so the OP_RETURN opcode is its first byte.
-const OP_RETURN_OPCODE_INDEX: usize = 0;
-const OP_RETURN_OPCODE: u8 = 0x6A;
-const REGULAR_OUTPUT_SCRIPT_LEN: usize = 25;
-const REGULAR_OUTPUT_PREFIX: [u8; 3] = [0x76, 0xA9, 0x14];
-const REGULAR_OUTPUT_POSTFIX: [u8; 2] = [0x88, 0xAC];
-// A P2SH scriptPubKey is exactly `OP_HASH160 <20-byte push> <hash160> OP_EQUAL`.
-const P2SH_OUTPUT_SCRIPT_LEN: usize = 23;
-const P2SH_OUTPUT_PREFIX: [u8; 2] = [0xA9, 0x14];
-const P2SH_OUTPUT_POSTFIX: u8 = 0x87;
-const TRANSPARENT_ADDRESS_OFFSET: usize = 3;
-const TRANSPARENT_ADDRESS_HASH_LEN: usize = 20;
+pub use ledger_zcash_crypto::transparent_script::{
+    CheckDispOutput, check_output_displayable, output_script_is_op_return, output_script_is_p2sh,
+    output_script_is_regular,
+};
+
 // The two BIP32 prefixes this app is loaded with (`package.metadata.ledger.path`): BIP-44 for the
 // transparent tree, ZIP-32 for the shielded one. A path outside them is refused by the OS, and this
 // is what lets the app refuse it first, with a status word.
@@ -81,87 +74,6 @@ pub fn secure_memcmp(buf1: &[u8], buf2: &[u8]) -> bool {
     }
 
     error == 0
-}
-
-pub fn output_script_is_op_return(script_pubkey: &[u8]) -> bool {
-    if script_pubkey.is_empty() {
-        return false;
-    }
-
-    script_pubkey[OP_RETURN_OPCODE_INDEX] == OP_RETURN_OPCODE
-}
-
-pub fn output_script_is_regular(script_pubkey: &[u8]) -> bool {
-    if script_pubkey.len() != REGULAR_OUTPUT_SCRIPT_LEN {
-        return false;
-    }
-
-    if script_pubkey[..REGULAR_OUTPUT_PREFIX.len()] != REGULAR_OUTPUT_PREFIX {
-        return false;
-    }
-
-    if script_pubkey[script_pubkey.len() - REGULAR_OUTPUT_POSTFIX.len()..] != REGULAR_OUTPUT_POSTFIX
-    {
-        return false;
-    }
-
-    true
-}
-
-pub fn output_script_is_p2sh(script_pubkey: &[u8]) -> bool {
-    if script_pubkey.len() != P2SH_OUTPUT_SCRIPT_LEN {
-        return false;
-    }
-
-    if script_pubkey[..P2SH_OUTPUT_PREFIX.len()] != P2SH_OUTPUT_PREFIX {
-        return false;
-    }
-
-    script_pubkey[script_pubkey.len() - 1] == P2SH_OUTPUT_POSTFIX
-}
-
-#[derive(PartialEq, Debug)]
-pub enum CheckDispOutput {
-    None,
-    Displayable,
-    Change,
-}
-
-pub fn check_output_displayable(
-    script_pubkey: &[u8],
-    amount: u64,
-    change_address: Option<&[u8; 20]>,
-) -> CheckDispOutput {
-    debug!("Check output displayable");
-    debug!("ScriptPubKey: {:02X?}", script_pubkey);
-
-    if script_pubkey.is_empty() {
-        return CheckDispOutput::None;
-    }
-
-    if amount == 0 {
-        return CheckDispOutput::None;
-    }
-
-    if output_script_is_op_return(script_pubkey) || output_script_is_p2sh(script_pubkey) {
-        return CheckDispOutput::None;
-    }
-
-    let script_len = script_pubkey.len();
-    if script_len < TRANSPARENT_ADDRESS_OFFSET + TRANSPARENT_ADDRESS_HASH_LEN {
-        return CheckDispOutput::None;
-    }
-
-    if change_address.is_some_and(|change_address| {
-        &script_pubkey[TRANSPARENT_ADDRESS_OFFSET..][..TRANSPARENT_ADDRESS_HASH_LEN]
-            == change_address
-    }) {
-        debug!("Change output detected");
-        return CheckDispOutput::Change;
-    }
-
-    debug!("Displayable output detected");
-    CheckDispOutput::Displayable
 }
 
 pub enum Bip44CheckMode {

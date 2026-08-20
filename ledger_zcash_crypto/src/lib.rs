@@ -14,6 +14,8 @@ mod poseidon;
 mod poseidon_fp;
 pub mod redpallas;
 mod sinsemilla;
+pub mod transparent_address;
+pub mod transparent_script;
 
 pub use crate::hashtocurve::diversify_hash_ledger;
 use crate::sinsemilla::sinsemilla_short_commit;

@@ -239,6 +239,51 @@ def test_pczt_sign_tx_v5_simple(
     )
 
 
+def test_pczt_sign_tx_v5_p2sh_output(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    PCZT_GLOBAL = PcztGlobal()
+    PATH = "m/44'/133'/0'/0/2"
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    # P2SH (t3) output. script_pubkey decodes to address t3MciQaJ4pe9zHywiRjRHCnK2nibbtzPuiP.
+    TRANSPARENT_OUTPUT = PcztTransparentOutput(
+        value=81628565,
+        script_pubkey=bytes.fromhex("a914217e3298b6a963a8722b0e7c7d8f3aff1d9472bd87"),
+    )
+    TX_BYTES = pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], [TRANSPARENT_OUTPUT])
+
+    client = ZcashCommandSender(backend)
+
+    response = client.get_public_key(path=PATH).data
+    public_key, _, _ = unpack_get_public_key_response(response)
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=[TRANSPARENT_OUTPUT],
+    ):
+        _review_approve(scenario_navigator, "test_pczt_sign_tx_v5_p2sh_output")
+
+    resp = client.pczt_sign_transparent(input_index=0).data
+    signature = resp[:-1]
+
+    assert check_tx_v5_signature_validity(
+        public_key,
+        signature,
+        TX_BYTES,
+        input_index=0,
+        input_amounts=[TRANSPARENT_INPUT.value],
+    )
+
+
 def test_pczt_sign_tx_v5_old(
     backend,
     scenario_navigator: NavigateWithScenario,
