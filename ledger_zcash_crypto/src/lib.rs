@@ -82,9 +82,6 @@ pub enum Error {
     InvalidDiversifyHashPoint,
     UnsupportedSinsemillaDomain,
     OutOfMemory,
-    /// `bs58::encode(..).onto(..)` reported its destination buffer too small.
-    /// Distinct from `OutOfMemory`: this encoder never allocates, so this is a
-    /// fixed-size-buffer sizing bug, not an out-of-memory condition.
     Base58EncodeFailed,
 }
 
