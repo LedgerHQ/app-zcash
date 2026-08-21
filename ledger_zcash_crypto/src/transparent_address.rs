@@ -40,7 +40,7 @@ pub fn base58check_transparent_address(
     let mut out = [0u8; TRANSPARENT_ADDRESS_B58_LEN];
     let written = bs58::encode(&buf)
         .onto(&mut out[..])
-        .map_err(|_| Error::OutOfMemory)?;
+        .map_err(|_| Error::Base58EncodeFailed)?;
 
     // `bs58`'s alphabet is pure ASCII, and `written` is bounded by `out.len()`, the
     // `ArrayString`'s own capacity: neither conversion below can fail.

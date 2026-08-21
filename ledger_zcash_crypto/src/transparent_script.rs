@@ -81,8 +81,12 @@ pub fn check_output_displayable(
         return CheckDispOutput::Displayable;
     }
 
-    let script_len = script_pubkey.len();
-    if script_len < TRANSPARENT_ADDRESS_OFFSET + TRANSPARENT_ADDRESS_HASH_LEN {
+    // Only a standard P2PKH shape is displayable from here on. Without this, a
+    // script that is merely long enough to hold a hash at the P2PKH offset --
+    // but not actually P2PKH -- would be reported `Displayable` here and then
+    // rejected downstream by `output_script_to_transparent_payload`'s own
+    // `output_script_is_regular` check: correct end state, confusing path there.
+    if !output_script_is_regular(script_pubkey) {
         return CheckDispOutput::None;
     }
 
@@ -211,6 +215,22 @@ mod tests {
         name: "unrecognized_script_is_not_displayable",
         f: || {
             let script = [0x51u8; 5];
+
+            if check_output_displayable(&script, 1, None) != CheckDispOutput::None {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// Right length to hold a hash at the P2PKH offset, but the wrong prefix/postfix:
+    /// refused, not displayed as if it were a real P2PKH script.
+    #[test_case]
+    const WRONG_SHAPE_AT_P2PKH_LENGTH_IS_NOT_DISPLAYABLE: TestType = TestType {
+        modname: module_path!(),
+        name: "wrong_shape_at_p2pkh_length_is_not_displayable",
+        f: || {
+            let script = [0x51u8; REGULAR_OUTPUT_SCRIPT_LEN];
 
             if check_output_displayable(&script, 1, None) != CheckDispOutput::None {
                 return Err(());

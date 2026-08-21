@@ -251,7 +251,7 @@ def test_pczt_sign_tx_v5_p2sh_output(
         value=81630485,
         script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
         sequence=bytes.fromhex("00000000"),
-        signing_path="m/44'/133'/0'/0/2",
+        signing_path=PATH,
     )
     # P2SH (t3) output. script_pubkey decodes to address t3MciQaJ4pe9zHywiRjRHCnK2nibbtzPuiP.
     TRANSPARENT_OUTPUT = PcztTransparentOutput(
