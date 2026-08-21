@@ -81,11 +81,8 @@ pub fn check_output_displayable(
         return CheckDispOutput::Displayable;
     }
 
-    // Only a standard P2PKH shape is displayable from here on. Without this, a
-    // script that is merely long enough to hold a hash at the P2PKH offset --
-    // but not actually P2PKH -- would be reported `Displayable` here and then
-    // rejected downstream by `output_script_to_transparent_payload`'s own
-    // `output_script_is_regular` check: correct end state, confusing path there.
+    // Otherwise it's only displayable if it's actually P2PKH-shaped, not just
+    // long enough to look like one.
     if !output_script_is_regular(script_pubkey) {
         return CheckDispOutput::None;
     }
