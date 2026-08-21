@@ -2,6 +2,8 @@
 
 ## 3.9.2
 
+- Accept a P2SH (t3) `scriptPubKey` on a transparent output, displaying it for review instead of
+  refusing the transaction outright
 - Require a five-component BIP-44 path for a change output, so a ZIP-32 account path can no longer
   be accepted as change and remove an output from the review screen
 - Restrict the derivation paths accepted by public-key and viewing-key export to the app's own

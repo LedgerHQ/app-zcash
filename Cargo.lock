@@ -1710,6 +1710,8 @@ dependencies = [
 name = "ledger_zcash_crypto"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
+ "bs58",
  "chacha20",
  "chacha20poly1305",
  "ff",

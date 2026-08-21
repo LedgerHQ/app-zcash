@@ -118,6 +118,9 @@ Packet sequence:
      - if present, seed fingerprint `[u8; 32]`
      - if present, derivation path as `Bip32Path`
 
+Accepted `script_pubkey` forms are P2PKH and P2SH. OP_RETURN and any other
+form are refused.
+
 ## PCZT_ORCHARD_ACTION
 
 Packet sequence:
