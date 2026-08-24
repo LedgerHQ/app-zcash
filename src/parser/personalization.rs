@@ -37,3 +37,28 @@ pub const ZCASH_SAPLING_OUTPUTS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"Z
 pub const ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION: &[u8; 16] = b"Zcash___TxInHash";
 pub const ZCASH_TRANSPARENT_AMOUNTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrAmountsHash";
 pub const ZCASH_TRANSPARENT_SCRIPTS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxTrScriptsHash";
+
+// --- NU6.3 / V6 personalizations ---
+//
+// Every string below is byte-identical to the "Anchor commitment (version 6)" table of ZIP 229 and
+// to the vendored `orchard` (`src/bundle/commitments.rs`), checked one by one. They decide which
+// digest tree a signature commits to, and no test here compares a V6 sighash against an independent
+// implementation, so the ZIP is the reference and this note records that it was used.
+// The two auth-commitment strings are unused by the device (signer only, no bindingSig) and are
+// kept so the set is complete against that table.
+
+/// `sapling_spends_noncompact_digest_v6`, which omits the anchor. Every other Sapling node keeps its
+/// v5 personalization in a v6 transaction.
+pub const ZCASH_SAPLING_SPENDS_NONCOMPACT_HASH_PERSONALIZATION_V6: &[u8; 16] = b"ZTxIdSSpendNH_v6";
+
+pub const ZCASH_IRONWOOD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIronwd_H_v6";
+pub const ZCASH_IRONWOOD_ACTIONS_COMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActCH_v6";
+pub const ZCASH_IRONWOOD_ACTIONS_MEMOS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActMH_v6";
+pub const ZCASH_IRONWOOD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIrnActNH_v6";
+#[allow(dead_code)]
+pub const ZCASH_IRONWOOD_AUTH_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthIrnwdH_v6";
+
+/// Orchard V6 bundle-level personalizations per ZIP 229; action-level strings unchanged from V5.
+pub const ZCASH_ORCHARD_HASH_PERSONALIZATION_V6: &[u8; 16] = b"ZTxIdOrchardH_v6";
+#[allow(dead_code)]
+pub const ZCASH_ORCHARD_AUTH_HASH_PERSONALIZATION_V6: &[u8; 16] = b"ZTxAuthOrchaH_v6";

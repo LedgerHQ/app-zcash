@@ -99,7 +99,7 @@ def test_trusted_input_sapling_v5_multi(backend):
         + "ec224bd72791daed879010322da1614878dacca61370576f0d5a12566f23db806c6ee3e71bb929f9d217a26d692cc4f5a18c400d2de6ce7208190d50be41f5478d076ff42bfb0e4e7e8021f1618f8700966e1e73041683980bd46768647d5ca2a3c706cb470f77fcd1547f8d7e25234b77332220d523813900d562f7f5dbcbb4"  # noqa: E501
     )
 
-    trusted_input_idx = 1
+    trusted_input_idx = 0
 
     client = ZcashCommandSender(backend)
 
@@ -108,7 +108,7 @@ def test_trusted_input_sapling_v5_multi(backend):
 
     assert txid.hex() == "35f812ce32a94bbd7679a7f4a71c08b9fb263462352157a5c87fa569ad1d7814"
     assert idx == trusted_input_idx
-    assert amount == 0
+    assert amount == 1480000
 
 
 def test_trusted_input_orchard_v5_simple(backend):
@@ -194,6 +194,178 @@ def test_trusted_input_mixed_v5(backend):
     assert txid.hex() == "cf6f7dba13fc42b798bd325ea16206ecb8d9ff716e2d3ea057e235a71d584e49"
     assert idx == trusted_input_idx
     assert amount == 1900000
+
+
+def test_trusted_input_ironwood_v6(backend):
+    # Mainnet 1facde4c098e686a8945bdfbb609e4cc4ebed610194117e7dd7cf2a2d9979a2f, block 3429153:
+    # a v6 deshielding transaction whose Orchard bundle is empty and whose two shielded
+    # actions live in the Ironwood bundle (ZIP-229).
+    TX_BYTES = bytes.fromhex(
+        "0600008098b684d85b16a537" + "00000000" + "21533400" + "00"  # header + locktime + expiry + input count
+        "01"
+        + "a8a4b6290f0000001976a914cc0fdf3f5cd0cede1ccba1791d66cc0468051d2188ac"
+        + "00000002"  # sapling spends, sapling outputs, orchard actions, ironwood actions
+        # Ironwood actions: compact parts
+        + "d92a515947cbcb3cf119d477bb37abfd932e2a9aefa004ad0c1c2356faea22117880b146e5994d104b31b7c6257eb7f9a813e9dad8a2a94bbd2e804bbde51329fff223b7eb23de0f42920b835a8e84bd5cc2eee66ea287ab57ad9a4545a5bbab32c236ef922d6339ef672c2c461786a18de42906d3bef45080c2298fa76c291f"
+        + "9efa5fcb8cbe9ae72a321b6b2ef1a01e2a5ac27f"
+        + "adb488c25740c1d0a03987ab2a24e2c6c0dc69086680a7ced5c7ca01e7d8f811d85d74b28e8ade62931be3e4d914d2bb3cb1317d0022a23f9e724eedb7f6410677ecdf50be235e62c19e105f16eac083f1fa1a3dce3f08eeaea08771a96743106bc43e0781fec05a131f169ca36162507e85abcb054ebc8f2596fdefdda1eac3"
+        + "a8c31350558e9993cd57ff76f83015ebd26ffafd"
+        # Ironwood actions: memo ciphertexts
+        + "997f982ae59868017f483a3a3702a270a2f74c4d96656389111815a773facdae4adb5f72ad3effcb4c390c1b207f962a75205e859ccc2ede4d6497566e796a70524b8a879d6f35e859db832bb7d0709f6dd30890fb539fdee56d4aee3bc5464704d9cf4ed7a5a98e20298d881b66645651cd378748a3e41048341c6b4b319281"
+        + "f3e76daf3c7131b41d4c4d7ce93cece1206e6bfbda9da74a51b1235005f70af5a424ddf68f33b676790d79aef5b5c37e079757d47c97e4bc40ffcdbd022ce97624d05413d9eb5304423d75a4daf1b0990b014828a4aa3da5587f005bc27293904251a7216644b1f029f5906b6456b806b8dc0a3fa1a7775157afd6cbbd9465e0"
+        + "79bddf97c38c928cf4631761c08d243deb2fc60854027c7215172f22bbbcebb26b01aa2bb0c133bcc07eb06481e08a6a9b2817a9f96f422974c9b1f070d4dfe8d11f7ba5fb1128857ebfd07b6c981c49078af2f17d492dc436fecfe039de559aa9686ebee0ae10a2ff47fac0b735effec7b45e7c7ca4c00e5108581338cc14fc"
+        + "0c79401211b5b8899947812a1e652604e6ff25cfba67bbb6dc280f5906693d963b9862bc6b22be851642efc7332dcad7b3042aa26e54ac0d29e80467ece08cc76ffd2fdacef311deaa17928c7ad32b78de79fe0a70609b11cb9ad4a8f621e7af47dc5902c66836ce55e0a45966129e5b1c7b0fd402408806dfc31952ddc5c8da"
+        + "bf460ee2cc9b6959a40fc09c6fe4891a409bc1b69c77c923939d1b453140cc26446fcb28de1fccf5a9054b3926396e3c06f313bd7a033bd996f7e151ccbec76459175395dca78436757709acae39a0320754c59d15c205eb97546b1d0713a1d34d99abdf9f8a867462c9655a0aab533de7ed316558e6bc4c3cbb3c561cd8bab6"
+        + "6ae258e50407d56aae74e084cfa826d03b8617bfee02aba36bbdefd9489b6bfd484e83f1944c7595f8cd1093be4caca2c1b07d7779b89a9df2c4bcedbcdad9804e450f7400b3df9c7a36e6af1cc0e6cb9c128c0b850ff5d86a84ef2262c51e0f52fdbb57be7c1b11aafd80b14653222d63dda05acf7e33afea6f987ea84496be"
+        + "9c8a2ac712dd48ce3e3681918b24558cccd5e961a429a09244f1c59a6d69426daa8300bafd2c44f327c75d30cf3e3e71858c56a9f6426f9c2b97a89e8202a4b61671b70c2ec481cd02a20f95adf3c4f45026bc5d564b9e9cde3dcbc1377c038b5a8e3f605541f3ebfc859f3c825e4b74fa98a6db287dc8123e0ecb77cce3ae90"
+        + "66449ab80c10667371f18f5dc1588ffe775d4c821d1e9c63ee25ec3f03935cf3a36e864dd705ebe7a0d00c5008e1f37115c26b023a68bcd9f6684b2e4f9ba3ff99fc50f3647f446a0f5ae682441808533ae7b5aaea4261f44374c531a7bef2a31ae1cd5425703a2c340edb3db92f16f601650cb0e852ea98a19a04402c23e882"
+        # Ironwood actions: non-compact parts
+        + "9efd824ea07cc604d240f7c1fad292c9f60a7a90e8dd88aa77be026f89f2330df8833ace9b38f1cee5cbbecf3b95e46d73f5227e1c95384db2779a6400d8089fdd2b112910121ad0e902a4aa57036c4b443a29c29d0f4345924c85d8e5ce91fe1643aea979a4e63a95ae74bde59c4beb2810d3c33830fb30e608ec083e8596f3"
+        + "5d359d291fcbe85dde981a9b2172bcb35fd33ee27e34f05f7ff433a1019f330a"
+        + "6c774aa298e87dc46f8f5de3ff0e336b425240350c0bbb3f4f2da2208692ed9b30a80fb884c7604f06755dba3fbf1ac615a9a482f3d7aa9cebfac462e919ac3710261516632f89c311d92b40fad59c849d2485fabb6b8a3bc13512199a103c4ee1af946ff07331067217381bf504fdb52ae4e05141e3357bfad40713792f4302"
+        + "947c84b10f25628c32c486786ca745704b649929cc93f66b788c9030c14603a5"
+        # flags + valueBalance (a v6 anchor is not part of the txid digest)
+        + "0740dfb6290f000000"
+    )
+
+    trusted_input_idx = 0
+
+    client = ZcashCommandSender(backend)
+
+    resp = client.get_trusted_input(TX_BYTES, trusted_input_idx).data
+    txid, idx, amount, _, _ = unpack_trusted_input_response(resp)
+
+    assert txid.hex() == "2f9a97d9a2f27cdde717411910d6be4ecce409b6fbbd45896a688e094cdeac1f"
+    assert idx == trusted_input_idx
+    assert amount == 65_124_345_000
+
+
+# The three v6/v5 Sapling-spend fixtures below are synthetic: no v6 transaction with a
+# Sapling spend is known on chain. Their expected txids come from an independent Python
+# implementation of the ZIP-244 digest tree with the ZIP-229 v6 changes, written from the
+# specification text; that implementation is trusted only because it reproduces the real
+# mainnet txid asserted by test_trusted_input_ironwood_v6 above. Deriving them from this
+# app's own output would assert nothing.
+#
+# The Sapling anchor in these fixtures is 32 bytes of 0xA7, a value that appears nowhere
+# else, so a leak into a v6 stream or digest cannot pass unnoticed.
+
+
+def test_trusted_input_sapling_v6_spend_only(backend):
+    # v6 deshielding shape: one Sapling spend, no Sapling output, one transparent output.
+    # ZIP-229 makes the anchor authorizing data, so the spends non-compact digest hashes
+    # cv ‖ rk under ZTxIdSSpendNH_v6 and no anchor is streamed. Keeping the anchor in the
+    # digest, or keeping the v5 personalization, yields a different txid.
+    TX_BYTES = bytes.fromhex(
+        # header + version group id + consensus branch id, lock time, expiry height
+        "0600008098b684d85b16a537"
+        + "00000000"
+        + "50533400"
+        # transparent input count, transparent output count
+        + "00"
+        + "01"
+        + "15cd5b07000000001976a914303132333435363738393a3b3c3d3e3f4041424388ac"
+        # sapling spends, sapling outputs, orchard actions, ironwood actions
+        + "01000000"
+        # sapling valueBalance; a v6 anchor is authorizing data, so none is sent
+        + "eb32a4f8ffffffff"
+        # sapling spend: cv, nullifier, rk
+        + "7796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa19387e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f"
+        + "85a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae9082746"
+    )
+
+    trusted_input_idx = 0
+
+    client = ZcashCommandSender(backend)
+
+    resp = client.get_trusted_input(TX_BYTES, trusted_input_idx).data
+    txid, idx, amount, _, _ = unpack_trusted_input_response(resp)
+
+    assert txid.hex() == "0ddb71d54856404ba5d44b6ebdf281fce4cad49f91c30e9507c686f6378f6e5c"
+    assert idx == trusted_input_idx
+    assert amount == 123_456_789
+
+
+def test_trusted_input_sapling_v6_spend_and_output(backend):
+    # Same v6 anchor rule, with a Sapling output present so that the outputs subtree is
+    # exercised too. Every Sapling output node keeps its v5 personalization in v6.
+    TX_BYTES = bytes.fromhex(
+        # header + version group id + consensus branch id, lock time, expiry height
+        "0600008098b684d85b16a537"
+        + "00000000"
+        + "50533400"
+        # transparent input count, transparent output count
+        + "00"
+        + "01"
+        + "15cd5b07000000001976a914303132333435363738393a3b3c3d3e3f4041424388ac"
+        # sapling spends, sapling outputs, orchard actions, ironwood actions
+        + "01010000"
+        # sapling valueBalance; a v6 anchor is authorizing data, so none is sent
+        + "c0bdf0ffffffffff"
+        # sapling spend: cv, nullifier, rk
+        + "7796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa19387e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f"
+        + "85a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae9082746"
+        # sapling output: compact part
+        + "c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988ceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708f"
+        + "d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e302"
+        # sapling output: memo
+        + "21405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2"
+        + "e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382"
+        + "a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e5042342"
+        + "61809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e302"
+        + "21405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2"
+        + "e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382"
+        + "a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e5042342"
+        + "61809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e302"
+        # sapling output: non-compact part
+        + "c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e6052443628121405f7e9dbcdbfa1938577695b4d3f2dcfb1a39587796b5d4f31231506f8ead"
+        + "cceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d"
+    )
+
+    trusted_input_idx = 0
+
+    client = ZcashCommandSender(backend)
+
+    resp = client.get_trusted_input(TX_BYTES, trusted_input_idx).data
+    txid, idx, amount, _, _ = unpack_trusted_input_response(resp)
+
+    assert txid.hex() == "c003a2dcc024c685151fd06d979b9ac5177fbe4e900ce6169a52b32302644df1"
+    assert idx == trusted_input_idx
+    assert amount == 123_456_789
+
+
+def test_trusted_input_sapling_v5_spend_only(backend):
+    # The v5 counterpart of the first fixture, so that the unchanged v5 rules stay pinned:
+    # the anchor is streamed and hashed into every spend under ZTxIdSSpendNHash. It also
+    # covers the spends-without-outputs shape, which no other fixture has.
+    TX_BYTES = bytes.fromhex(
+        # header + version group id + consensus branch id, lock time, expiry height
+        "050000800a27a726b4d0d6c2"
+        + "00000000"
+        + "50533400"
+        # transparent input count, transparent output count
+        + "00"
+        + "01"
+        + "15cd5b07000000001976a914303132333435363738393a3b3c3d3e3f4041424388ac"
+        # sapling spends, sapling outputs, orchard actions
+        + "010000"
+        # sapling valueBalance + anchor
+        + "eb32a4f8ffffffffa7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
+        # sapling spend: cv, nullifier, rk
+        + "7796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa19387e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f"
+        + "85a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae9082746"
+    )
+
+    trusted_input_idx = 0
+
+    client = ZcashCommandSender(backend)
+
+    resp = client.get_trusted_input(TX_BYTES, trusted_input_idx).data
+    txid, idx, amount, _, _ = unpack_trusted_input_response(resp)
+
+    assert txid.hex() == "4b539042d6e3f9a0128e1c41b11d92dcf9d6058e3cdac6b9f901afdf4eae60d5"
+    assert idx == trusted_input_idx
+    assert amount == 123_456_789
 
 
 def test_trusted_input_v4_nu6(backend):
@@ -446,12 +618,12 @@ def test_trusted_input_sapling_v5_single_old_2(backend):
 def test_trusted_input_sapling_v5_multi_old(backend):
     # TXID == 14781dad69a57fc8a5572135623426fbb9081ca7f4a77976bd4ba932ce12f835
     TXID_LEN = 112
-    EXPECTED_TRUSTED_INPUT = "35f812ce32a94bbd7679a7f4a71c08b9fb263462352157a5c87fa569ad1d781401000000"
+    EXPECTED_TRUSTED_INPUT = "35f812ce32a94bbd7679a7f4a71c08b9fb263462352157a5c87fa569ad1d781400000000"
 
     transport = ZcashCommandSender(backend)
 
     # with sapling apdus
-    sw, _ = transport.exchange_raw("e04200001100000001050000800a27a7265510e7c800")
+    sw, _ = transport.exchange_raw("e04200001100000000050000800a27a7265510e7c800")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04280000101")
     assert sw == 0x9000

@@ -24,7 +24,7 @@ description = "A standalone implementation of the RedDSA signature scheme."
 features = ["nightly"]
 
 [dependencies]
-ledger_zcash_crypto = { path = "../../ledger_zcash_crypto" }
+ledger_zcash_crypto = { path = "../../ledger_zcash_crypto", optional = true }
 blake2b_simd = { version = "1", default-features = false }
 byteorder = { version = "1.4", default-features = false }
 group = { version = "0.13", default-features = false }
@@ -68,6 +68,7 @@ alloc = ["hex"]
 nightly = []
 frost = ["std", "frost-rerandomized"]
 default = ["std"]
+ledger = ["dep:ledger_zcash_crypto"]
 
 [[bench]]
 name = "bench"

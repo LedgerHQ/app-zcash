@@ -13,9 +13,10 @@ impl PcztParser {
         }
 
         let version = ok!(reader.read_u32_le());
-        if version != PCZT_VERSION_1 {
+        if version != PCZT_VERSION_1 && version != PCZT_VERSION_2 {
             return Err(ParserError::from_str("Unsupported PCZT version"));
         }
+        self.pczt_version = version;
 
         debug!("PCZT header: magic {:?}, version {}", magic, version);
 
@@ -27,16 +28,20 @@ impl PcztParser {
         ctx: &mut PcztParserCtx<'_>,
         reader: &mut ByteReader<'_>,
     ) -> Result<(), ParserError> {
-        let tx_version = ok!(reader.read_u32_le());
+        let tx_version_raw = ok!(reader.read_u32_le());
         let version_group_id = ok!(reader.read_u32_le());
+        let branch_id_raw = ok!(reader.read_u32_le());
 
-        if tx_version != V5_TX_VERSION || version_group_id != V5_VERSION_GROUP_ID {
+        let is_v5 = tx_version_raw == V5_TX_VERSION && version_group_id == V5_VERSION_GROUP_ID;
+        let is_v6 = tx_version_raw == V6_TX_VERSION && version_group_id == V6_VERSION_GROUP_ID;
+
+        if !is_v5 && !is_v6 {
             return Err(ParserError::from_str(
                 "Unsupported PCZT transaction version",
             ));
         }
 
-        let consensus_branch_id = ok!(BranchId::try_from(ok!(reader.read_u32_le())));
+        let consensus_branch_id = ok!(BranchId::try_from(branch_id_raw));
         let fallback_lock_time = self.read_optional_u32(reader)?;
         let expiry_height = ok!(reader.read_u32_le());
         let coin_type = ok!(reader.read_u32_le());
@@ -48,7 +53,7 @@ impl PcztParser {
 
         debug!(
             "PCZT global: version {}, version_group_id {:08x}, branch {:?}, fallback_lock_time {:?}, expiry_height {}, coin_type {}, tx_modifiable {:02x}",
-            tx_version,
+            tx_version_raw,
             version_group_id,
             consensus_branch_id,
             fallback_lock_time,
@@ -57,10 +62,27 @@ impl PcztParser {
             tx_modifiable
         );
 
-        ctx.tx_info.tx_version = Some(TxVersion::V5);
+        if is_v5 {
+            ctx.tx_info.tx_version = Some(TxVersion::V5);
+        }
         ctx.tx_info.branch_id = Some(consensus_branch_id);
+        ctx.tx_info.branch_id_raw = branch_id_raw;
         ctx.tx_info.locktime = fallback_lock_time.unwrap_or_default();
         ctx.tx_info.expiry_height = expiry_height;
+        {
+            ctx.tx_info.is_v6 = is_v6;
+        }
+
+        if is_v5 && self.pczt_version != PCZT_VERSION_1 {
+            return Err(ParserError::from_str(
+                "PCZT version 1 required for V5 transaction",
+            ));
+        }
+        if is_v6 && self.pczt_version != PCZT_VERSION_2 {
+            return Err(ParserError::from_str(
+                "PCZT version 2 required for V6 transaction",
+            ));
+        }
 
         Ok(())
     }
@@ -86,8 +108,10 @@ impl PcztParser {
             ));
         }
 
+        let ironwood_vb: i64 = self.ironwood_value_balance;
         let fees_i128 = i128::from(ctx.tx_info.total_amount)
             + i128::from(self.orchard_value_balance)
+            + i128::from(ironwood_vb)
             - i128::from(self.total_output_amount);
 
         if fees_i128 < 0 {
@@ -98,14 +122,20 @@ impl PcztParser {
             .map_err(|_| ParserError::from_str("PCZT fee value out of range"))?;
 
         debug!(
-            "PCZT fees: {}, transparent_input_total={}, transparent_output_total={}, orchard_value_balance={}",
-            fees, ctx.tx_info.total_amount, self.total_output_amount, self.orchard_value_balance
+            "PCZT fees: {}, transparent_input_total={}, transparent_output_total={}, orchard_value_balance={}, ironwood_value_balance={}",
+            fees,
+            ctx.tx_info.total_amount,
+            self.total_output_amount,
+            self.orchard_value_balance,
+            ironwood_vb
         );
 
         // In the case of internal transfers between pools (for example, transparent -> Orchard or Orchard -> transparent),
         // we have to display the internal outputs on the clear-sign screen.
+        // Not in swap mode: there is no screen to reveal anything on, and clearing `is_change`
+        // would make `check_swap_params` see several external outputs where the transaction has one.
         let has_external_output = ctx.tx_info.outputs.iter().any(|output| !output.is_change);
-        let reveal_self_outputs = !has_external_output;
+        let reveal_self_outputs = !has_external_output && ctx.swap_params.is_none();
         if reveal_self_outputs {
             debug!("PCZT has no external outputs; displaying self-transfer output");
             // PCZT does not read tx_info.outputs after review; this only affects UI filtering.
@@ -115,12 +145,23 @@ impl PcztParser {
         }
 
         let spent_from_public = self.transparent_input_count > 0;
-        let spent_from_orchard = self.orchard_spend_value_sum > 0;
+        let spent_from_private = self.orchard_spend_value_sum > 0;
+        // Ironwood is a shielded pool; any Ironwood spend must set the from_private flag.
+        let spent_from_private = spent_from_private || self.ironwood_spend_value_sum > 0;
         let transfer_type =
-            TransferType::classify(spent_from_public, spent_from_orchard, &ctx.tx_info.outputs);
-        let review_result = ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type);
-
-        if !ok!(review_result) {
+            TransferType::classify(spent_from_public, spent_from_private, &ctx.tx_info.outputs);
+        // Swap mode substitutes validation for review, exactly as the legacy path does: the user
+        // already approved the operation in the Exchange app, which drives this flow without
+        // interaction, so prompting here would both stall it and ask about something the user has
+        // already seen. The cross-check is what makes that safe — it refuses any transaction that
+        // does not match what Exchange asked for.
+        if let Some(swap_params) = ctx.swap_params {
+            ok!(crate::swap::check_swap_params(
+                swap_params,
+                &ctx.tx_info.outputs,
+                fees
+            ));
+        } else if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type)) {
             return Err(ParserError::user());
         }
 

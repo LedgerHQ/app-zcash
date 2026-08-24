@@ -27,7 +27,6 @@ mod handlers {
     pub mod get_version;
     pub mod get_vk;
     pub mod pczt;
-    pub mod sign_msg;
     pub mod sign_tx;
 }
 
@@ -66,13 +65,17 @@ use crate::consts::{
     P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
     P2_PCZT_CONTINUE, P2_PCZT_FINISHED, P2ShieldedAddrMode, P2VkMode,
 };
+use crate::consts::{
+    INS_PCZT_IRONWOOD_ACTION, INS_PCZT_SIGN_IRONWOOD, MAX_PCZT_IRONWOOD_ACTIONS_NUMBER,
+};
+use crate::handlers::pczt::{handler_pczt_ironwood_action, handler_pczt_sign_ironwood};
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
     consts::{
         INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_VK, INS_GET_WALLET_PUBLIC_KEY,
         INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN, INS_PCZT_HEADER,
         INS_PCZT_ORCHARD_ACTION, INS_PCZT_SIGN_ORCHARD, INS_PCZT_SIGN_TRANSPARENT,
-        INS_PCZT_TRANSPARENT_INPUT, INS_PCZT_TRANSPARENT_OUTPUT, INS_SIGN_MESSAGE, ZCASH_CLA,
+        INS_PCZT_TRANSPARENT_INPUT, INS_PCZT_TRANSPARENT_OUTPUT, ZCASH_CLA,
     },
     handlers::{
         get_trusted_input::handler_get_trusted_input,
@@ -81,7 +84,6 @@ use crate::{
             handler_pczt_sign_transparent, handler_pczt_transparent_input,
             handler_pczt_transparent_output,
         },
-        sign_msg::handler_sign_msg,
         sign_tx::{handler_hash_input_finalize_full, handler_hash_input_start, handler_hash_sign},
     },
     settings::Settings,
@@ -99,6 +101,8 @@ pub enum AppSW {
     ExecutionError = 0x6400,
     WrongApduLength = 0x6700, // Normally we should use StatusWord::BadLen(0x6e03)
     CommandIncompatibleFileStructure = 0x6981,
+    // Aliased on purpose: the legacy protocol this app must stay wire-compatible with reports
+    // both conditions with the same word.
     SecurityStatusNotSatisfied = StatusWords::NothingReceived as u16,
     IncorrectData = 0x6A80,
     NotEnoughMemorySpace = 0x6A84,
@@ -125,7 +129,9 @@ pub enum AppSW {
     Licensing = 0x6F42,
     Halted = 0x6FAA,
     Deny = StatusWords::UserCancelled as u16,
-    ConditionsOfUseNotSatisfied = 0x6986, // 0x6985
+    // 0x6986, not the 0x6985 an ISO reading would suggest: the legacy protocol uses 0x6985 for a
+    // user denial (see `Deny`), so this condition takes the adjacent word.
+    ConditionsOfUseNotSatisfied = 0x6986,
     //TxWrongLength = 0x6F00,
     TechnicalProblem = 0x6F00,
     VersionParsingFail = 0x6F01,
@@ -187,12 +193,16 @@ pub enum Instruction {
     PcztSignOrchard {
         action_index: usize,
     },
+    PcztIronwoodAction {
+        first: bool,
+        last: bool,
+        finished: bool,
+    },
+    PcztSignIronwood {
+        action_index: usize,
+    },
     PcztInvalid {
         sw: AppSW,
-    },
-    SignMessage {
-        first: bool,
-        next: bool,
     },
 }
 
@@ -230,10 +240,12 @@ impl TryFrom<ApduHeader> for Instruction {
                     display: (value.p1 & P1_GET_PUBLIC_KEY_DISPLAY) != 0,
                 })
             }
-            (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
-                first: p1 == P1_FIRST,
-                next: p1 == P1_NEXT,
-            }),
+            (INS_GET_TRUSTED_INPUT, p1, 0) if p1 == P1_FIRST || p1 == P1_NEXT => {
+                Ok(Instruction::GetTrustedInput {
+                    first: p1 == P1_FIRST,
+                    next: p1 == P1_NEXT,
+                })
+            }
             (
                 INS_HASH_INPUT_START,
                 P1_HASH_INPUT_START_FIRST | P1_HASH_INPUT_START_NEXT,
@@ -289,6 +301,20 @@ impl TryFrom<ApduHeader> for Instruction {
                     action_index: p2 as usize,
                 })
             }
+            (INS_PCZT_IRONWOOD_ACTION, p1, P2_PCZT_CONTINUE | P2_PCZT_FINISHED)
+                if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
+            {
+                Ok(Instruction::PcztIronwoodAction {
+                    first: value.p1 == P1_FIRST,
+                    last: value.p1 == P1_LAST,
+                    finished: value.p2 == P2_PCZT_FINISHED,
+                })
+            }
+            (INS_PCZT_SIGN_IRONWOOD, 0, p2) if (p2 as usize) < MAX_PCZT_IRONWOOD_ACTIONS_NUMBER => {
+                Ok(Instruction::PcztSignIronwood {
+                    action_index: p2 as usize,
+                })
+            }
             (
                 INS_PCZT_HEADER
                 | INS_PCZT_TRANSPARENT_INPUT
@@ -301,16 +327,26 @@ impl TryFrom<ApduHeader> for Instruction {
             ) => Ok(Instruction::PcztInvalid {
                 sw: AppSW::WrongP1P2,
             }),
-            (INS_SIGN_MESSAGE, p1, 0) => Ok(Instruction::SignMessage {
-                first: p1 == P1_FIRST,
-                next: p1 == P1_NEXT,
-            }),
-            (_, _, _) => {
-                if value.p1 != 0 || value.p2 != 0 {
-                    return Err(AppSW::WrongP1P2);
-                }
-                Err(AppSW::InsNotSupported)
+            (INS_PCZT_IRONWOOD_ACTION | INS_PCZT_SIGN_IRONWOOD, _, _) => {
+                Ok(Instruction::PcztInvalid {
+                    sw: AppSW::WrongP1P2,
+                })
             }
+            // A routed instruction lands here on an unmatched P1/P2; an unrouted one never had
+            // P1/P2 semantics, so its reply does not depend on them.
+            (
+                INS_GET_WALLET_PUBLIC_KEY
+                | INS_GET_TRUSTED_INPUT
+                | INS_HASH_INPUT_START
+                | INS_HASH_SIGN
+                | INS_HASH_INPUT_FINALIZE_FULL
+                | INS_GET_FIRMWARE_VERSION
+                | INS_GET_VK
+                | INS_GET_SHIELD_ADDR,
+                _,
+                _,
+            ) => Err(AppSW::WrongP1P2),
+            (_, _, _) => Err(AppSW::InsNotSupported),
         }
     }
 }
@@ -346,6 +382,12 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             Instruction::PcztSignTransparent { .. } | Instruction::PcztSignOrchard { .. },
             AppSW::Ok,
         ) if tx_ctx.is_finished() => (true, StatusType::Transaction),
+        (Instruction::PcztIronwoodAction { .. }, AppSW::Deny)
+        | (Instruction::PcztSignIronwood { .. }, AppSW::Ok)
+            if tx_ctx.is_finished() =>
+        {
+            (true, StatusType::Transaction)
+        }
         (_, _) => (false, StatusType::Transaction),
     };
 
@@ -463,6 +505,13 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
             | Instruction::PcztSignOrchard { .. }
             | Instruction::PcztInvalid { .. },
             true,
+        ) = (&ins, is_error)
+        {
+            tx_ctx.reset(Default::default());
+        }
+        if let (
+            Instruction::PcztIronwoodAction { .. } | Instruction::PcztSignIronwood { .. },
+            true,
         ) = (ins, is_error)
         {
             tx_ctx.reset(Default::default());
@@ -516,11 +565,18 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
         Instruction::PcztSignOrchard { action_index } => {
             handler_pczt_sign_orchard(comm, ctx, *action_index)
         }
+        Instruction::PcztIronwoodAction {
+            first,
+            last,
+            finished,
+        } => handler_pczt_ironwood_action(comm, ctx, *first, *last, *finished),
+        Instruction::PcztSignIronwood { action_index } => {
+            handler_pczt_sign_ironwood(comm, ctx, *action_index)
+        }
         Instruction::PcztInvalid { sw } => {
             ctx.pczt_parser.reset();
             Err(*sw)
         }
-        Instruction::SignMessage { first, next } => handler_sign_msg(comm, ctx, *first, *next),
     }
 }
 

@@ -75,11 +75,13 @@ pub fn handler_get_vk(
 
     let (path, transparent_path) = parse_vk_paths(data, mode)?;
 
+    // Both modes derive a viewing key from this path, which exposes the account's shielded history.
+    if !check_bip44_compliance(&path, Bip44CheckMode::Zip32Only) {
+        error!("Orchard VK path is not a valid ZIP32 path");
+        return Err(AppSW::IncorrectData);
+    }
+
     if let P2VkMode::Ufvk = mode {
-        if !check_bip44_compliance(&path, Bip44CheckMode::Zip32Only) {
-            error!("Orchard VK path is not a valid ZIP32 path");
-            return Err(AppSW::IncorrectData);
-        }
         let t_path = transparent_path.as_ref().ok_or(AppSW::WrongApduLength)?;
         if !check_transparent_vk_path(t_path) {
             error!("Transparent VK path is not a valid account-level BIP44 path");
@@ -125,7 +127,7 @@ pub fn handler_get_vk(
                 return Err(AppSW::Deny);
             }
 
-            encode_string_response(&ufvk_str)
+            encode_string_response(&ufvk_str)?
         }
     };
 

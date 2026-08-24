@@ -5,7 +5,12 @@ pub const ZCASH_TICKER: &str = "ZEC";
 pub const ZCASH_DECIMALS: u32 = 8;
 pub const ZCASH_DECIMALS_DIV: u64 = 10u64.pow(ZCASH_DECIMALS);
 
+// Legacy path only, and wide because a trusted input is computed by parsing a whole previous
+// transaction, whose outputs carry arbitrary on-chain scripts. One shared buffer, cleared per script.
 pub const MAX_SCRIPT_SIZE: usize = 1024 * 2;
+// PCZT path, where every transparent input's script is retained for the session. 252 is the host's
+// own limit, the single-byte CompactSize boundary.
+pub const MAX_PCZT_SCRIPT_SIZE: usize = 252;
 // Limit the number of transparent outputs in the legacy parser due to device memory constraints.
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
 pub const SIGHASH_ALL: u8 = 0x01;
@@ -23,6 +28,8 @@ pub const MAX_PCZT_TRANSPARENT_INPUTS_NUMBER: usize = 10;
 pub const MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER: usize = 10;
 // Limit the number of PCZT orchard actions due to device memory constraints.
 pub const MAX_PCZT_ORCHARD_ACTIONS_NUMBER: usize = 10;
+// Limit the number of PCZT ironwood actions due to device memory constraints.
+pub const MAX_PCZT_IRONWOOD_ACTIONS_NUMBER: usize = 10;
 
 pub const ZCASH_CLA: u8 = 0xE0;
 pub const INS_GET_WALLET_PUBLIC_KEY: u8 = 0x40;
@@ -30,7 +37,6 @@ pub const INS_GET_TRUSTED_INPUT: u8 = 0x42;
 pub const INS_HASH_INPUT_START: u8 = 0x44;
 pub const INS_HASH_SIGN: u8 = 0x48;
 pub const INS_HASH_INPUT_FINALIZE_FULL: u8 = 0x4A;
-pub const INS_SIGN_MESSAGE: u8 = 0x4E;
 pub const INS_GET_FIRMWARE_VERSION: u8 = 0xC4;
 pub const INS_GET_VK: u8 = 0x50;
 pub const INS_GET_SHIELD_ADDR: u8 = 0x51;
@@ -40,6 +46,8 @@ pub const INS_PCZT_TRANSPARENT_OUTPUT: u8 = 0x54;
 pub const INS_PCZT_SIGN_TRANSPARENT: u8 = 0x55;
 pub const INS_PCZT_ORCHARD_ACTION: u8 = 0x56;
 pub const INS_PCZT_SIGN_ORCHARD: u8 = 0x57;
+pub const INS_PCZT_IRONWOOD_ACTION: u8 = 0x58;
+pub const INS_PCZT_SIGN_IRONWOOD: u8 = 0x59;
 
 pub const P1_FIRST: u8 = 0x00;
 pub const P1_NEXT: u8 = 0x80;
@@ -102,3 +110,9 @@ impl TryFrom<u8> for P2ShieldedAddrMode {
         }
     }
 }
+
+// The overwintered flag (bit 31) is ORed into the transaction version in the header digest, per
+// ZIP-244 §T.1 and ZIP-229.
+pub const OVERWINTERED_FLAG: u32 = 0x8000_0000;
+pub const V6_TX_VERSION: u32 = 6;
+pub const V6_VERSION_GROUP_ID: u32 = 0xD884B698;

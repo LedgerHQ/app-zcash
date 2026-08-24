@@ -11,6 +11,7 @@ use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 
 use crate::parser::orchard_decipher::OrchardDecipherKeys;
+use crate::parser::personalization::ZCASH_IRONWOOD_HASH_PERSONALIZATION;
 use crate::parser::personalization::{
     ZCASH_OUTPUTS_HASH_PERSONALIZATION, ZCASH_PREVOUTS_HASH_PERSONALIZATION,
     ZCASH_SAPLING_HASH_PERSONALIZATION, ZCASH_SEQUENCE_HASH_PERSONALIZATION,
@@ -18,7 +19,7 @@ use crate::parser::personalization::{
 };
 use crate::parser::{LegacyOutputParser, LegacyParser, LegacyParserMode, PcztParser};
 use crate::utils::blake2b_256_pers::Blake2b256Personalization as _;
-use orchard::bundle::commitments::ZCASH_ORCHARD_HASH_PERSONALIZATION;
+use orchard::bundle::commitments::ZCASH_ORCHARD_V5_HASH_PERSONALIZATION;
 
 #[derive(Default)]
 pub struct Hashers {
@@ -38,6 +39,8 @@ pub struct Hashers {
 
     // Legacy V4 txid is SHA256d over the V4-encoded transaction bytes.
     pub v4_tx_hasher: Sha2_256,
+
+    pub ironwood_hasher: Blake2b_256,
 }
 
 impl Hashers {
@@ -55,7 +58,9 @@ impl Hashers {
         self.sapling_hasher
             .init_with_perso(ZCASH_SAPLING_HASH_PERSONALIZATION)?;
         self.orchard_hasher
-            .init_with_perso(ZCASH_ORCHARD_HASH_PERSONALIZATION)?;
+            .init_with_perso(ZCASH_ORCHARD_V5_HASH_PERSONALIZATION)?;
+        self.ironwood_hasher
+            .init_with_perso(ZCASH_IRONWOOD_HASH_PERSONALIZATION)?;
 
         Ok(())
     }
@@ -174,17 +179,26 @@ pub struct TxInfo {
     pub orchard_digest: [u8; 32],
     pub signature_digest: [u8; 32],
 
+    pub ironwood_digest: [u8; 32],
+    pub is_v6: bool,
+    pub has_ironwood_bundle: bool,
+    pub branch_id_raw: u32,
+
     pub orchard_decipher_keys: Option<OrchardDecipherKeys>,
 }
 
 pub enum SupportedTxVersion {
     V4,
     V5,
+    V6,
 }
 
 impl TxInfo {
     // Call only after header parsing is finished, otherwise it may panic if tx_version or branch_id is not set yet.
     pub fn tx_version(&self) -> SupportedTxVersion {
+        if self.is_v6 {
+            return SupportedTxVersion::V6;
+        }
         match self
             .tx_version
             .expect("TX version should be set at this point of the parsing")

@@ -70,6 +70,7 @@ pub use swap::get_check_address_params;
 use crate::swap::panic_handler::{set_swap_panic_handler, swap_panic_handler};
 use crate::tx::TxOutput;
 use crate::utils::bip32_path::BIP32_BYTES_PER_SEGMENT;
+use crate::utils::{Bip44CheckMode, check_bip44_compliance};
 use crate::{
     consts::{ZCASH_DECIMALS, ZCASH_TICKER},
     utils::{
@@ -80,56 +81,14 @@ use crate::{
 };
 use alloc::{format, string::ToString};
 
-/// Application-specific swap error codes.
-///
-/// This enum defines the lower byte of the 2-byte error code used in swap error responses.
-/// It provides additional context and refinement to the common error codes defined in
-/// [`ledger_device_sdk::libcall::swap::SwapErrorCommonCode`].
-///
-/// # Error Code Structure
-///
-/// The complete 2-byte error code is structured as:
-/// - **Upper byte**: Common error code from `SwapErrorCommonCode` (e.g., `ErrorWrongAmount`)
-/// - **Lower byte**: Application-specific code from this enum (for additional context)
-///
-/// # Usage
-///
-/// When returning a swap error, combine a common code with an app-specific code:
-///
-/// ```rust,ignore
-/// use ledger_device_sdk::libcall::swap::SwapErrorCommonCode;
-///
-/// // Example: Amount validation failed, no app-specific refinement needed
-/// comm.append(&[
-///     SwapErrorCommonCode::ErrorWrongAmount as u8,
-///     SwapAppErrorCode::Default as u8
-/// ]);
-/// comm.append(b"Amount mismatch: tx=1000, swap=2000");
-/// ```
-///
-/// # Template Note
-///
-/// This is a template/placeholder enum. In a production application, you may want to add
-/// specific error codes to provide more granular error information. For example:
-///
-/// ```rust,ignore
-/// pub enum SwapAppErrorCode {
-///     Default = 0x00,
-///     AmountOverflow = 0x01,
-///     AmountUnderflow = 0x02,
-///     InvalidAddressChecksum = 0x03,
-///     // ... add your application-specific codes
-/// }
-/// ```
-///
-/// Refer to the C SDK's `swap_error_code_helpers.h` for the specification.
+/// Lower byte of the 2-byte swap error code; the upper byte is a
+/// [`ledger_device_sdk::libcall::swap::SwapErrorCommonCode`]. Exchange maps every app error to
+/// `IncorrectData` on the wire, so these codes serve this app's logs rather than the host.
+/// Specification: the C SDK's `swap_error_code_helpers.h`.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SwapAppErrorCode {
-    /// Default application error code (no specific refinement).
-    ///
-    /// Use this when the common error code from `SwapErrorCommonCode` is sufficient
-    /// and no additional application-specific context is needed.
+    /// The common code carries the whole message.
     Default = 0x00,
     /// Other error codes, don't hesitate to add your own for more granularity.
     AmountCastFail = 0x01,
@@ -148,22 +107,9 @@ impl SwapAppErrorCodeTrait for SwapAppErrorCode {
     }
 }
 
-/// This function performs a strict validation of the transaction to be signed
-/// against the reference transaction parameters provided by the Exchange app.
-/// It checks that:
-/// 1. The transaction type matches the expected one (Only one type of Tx implemented so auto true).
-/// 2. The transaction amount matches the swap amount exactly.
-/// 3. The transaction fees matches the swap fees exactly. (fees are not implemented so auto true).
-/// 4. The destination address matches the swap destination address exactly.
-///
-/// # Errors
-///
-/// Returns error if:
-/// - Amount parsing fails (AmountCastFail)
-/// - Amount doesn't match between tx and swap params (ErrorWrongAmount)
-/// - Destination address has invalid UTF-8 (DestinationDecodeFail)
-/// - Destination address hex decode fails (DestinationDecodeFail)
-/// - Destination address doesn't match (ErrorWrongDestination)
+/// Validates the transaction to be signed against the Exchange's reference parameters: the amount and
+/// the fee must match exactly, and the single external output must pay the swap destination. Only one
+/// transaction type exists, so the type check is implicit.
 pub fn check_swap_params(
     params: &CreateTxParams,
     outputs: &[TxOutput],
@@ -267,16 +213,8 @@ pub fn check_swap_params(
 }
 
 // --8<-- [start:swap_main]
-/// Main entry point when app is called as a library by the Exchange app.
-///
-/// # Arguments
-///
-/// * `arg0` - Parameter passed by `os_lib_call` containing command and data pointers
-///
-/// The Exchange app calls this function with different commands during a swap:
-/// - `SwapCheckAddress`: Validate that an address belongs to this device
-/// - `SwapGetPrintableAmount`: Format amounts/fees for display
-/// - `SwapSignTransaction`: Sign the final transaction
+/// Library-mode entry point, called by the Exchange app through `os_lib_call` with one of
+/// `SwapCheckAddress`, `SwapGetPrintableAmount` or `SwapSignTransaction`.
 pub fn swap_main(arg0: u32) {
     debug!("swap_main called\n");
     let cmd = libcall::get_command(arg0);
@@ -315,7 +253,6 @@ pub fn swap_main(arg0: u32) {
 
             // Call normal_main with Swap parameter set to enter the special Swap flow
             let success = crate::normal_main(Some(&params));
-            // Return to Exchange, forwarding the result
             if success {
                 swap::swap_return(SwapResult::CreateTxResult(&mut params, 1));
             } else {
@@ -327,38 +264,13 @@ pub fn swap_main(arg0: u32) {
 // --8<-- [end:swap_main]
 
 // --8<-- [start:check_address]
-/// Verify that a given address belongs to this device.
+/// Verifies that the swap destination belongs to this device, so the Exchange app can rule out a
+/// destination the user does not own.
 ///
-/// The Exchange app calls this to ensure the user owns the destination address
-/// before proceeding with the swap. This prevents sending funds to wrong addresses.
-///
-/// # Flow
-///
-/// 1. Parse BIP32 derivation path from params
-/// 2. Derive public key from the path
-/// 3. Compute address from public key (Keccak256 hash)
-/// 4. Compare with reference address from Exchange
-///
-/// # Important Notes
-///
-/// - **No heap allocation**: Uses stack arrays only (BSS memory is shared with Exchange)
-/// - **Hex string comparison**: Exchange sends address as hex string via C API,
-///   so we convert our computed address to hex for comparison
-/// - **Address format**: This app uses Ethereum-style addresses (last 20 bytes of
-///   Keccak256 hash of pubkey). Adapt this for your blockchain's address format.
-///
-/// # Arguments
-///
-/// * `params` - Contains BIP32 path and reference address from Exchange
-///
-/// # Returns
-///
-/// * `true` if addresses match (valid)
-/// * `false` if addresses don't match or error occurred
+/// Stack arrays only: BSS is shared with the Exchange app. Exchange sends the reference address as a
+/// hex string over the C API, so the derived address is hex-encoded before comparison.
 fn check_address(params: &CheckAddressParams) -> Result<bool, SwapAppErrorCode> {
-    // Parse BIP32 derivation path
-    // Note: params.dpath_len is the NUMBER of u32 path components (e.g., 5 for m/44'/133'/0'/0/0),
-    // not the byte length. Each component is 4 bytes (big-endian u32).
+    // `dpath_len` counts path components, not bytes; each is a big-endian u32.
     debug!("ENTERED_CHECK_ADDRESS\n");
 
     let bip32_path = Bip32Path::from_dpath(
@@ -366,6 +278,14 @@ fn check_address(params: &CheckAddressParams) -> Result<bool, SwapAppErrorCode> 
         &params.dpath[..params.dpath_len * BIP32_BYTES_PER_SEGMENT],
     )
     .map_err(|_e| SwapAppErrorCode::FailedToDeriveAddress)?;
+
+    // Same prefix restriction the APDU key-export path applies. Exchange is a trusted caller, so
+    // this is defense in depth — but the path it forwards originates with the host, and refusing an
+    // out-of-prefix one here costs nothing.
+    if !check_bip44_compliance(&bip32_path, Bip44CheckMode::PrefixOnly) {
+        error!("Swap check_address path outside the app's derivation prefixes");
+        return Err(SwapAppErrorCode::FailedToDeriveAddress);
+    }
 
     let extended_public_key = ExtendedPublicKey::try_from(&bip32_path)
         .map_err(|_e| SwapAppErrorCode::FailedToDeriveAddress)?;
@@ -397,48 +317,15 @@ fn check_address(params: &CheckAddressParams) -> Result<bool, SwapAppErrorCode> 
 // --8<-- [end:check_address]
 
 // --8<-- [start:get_printable_amount]
-/// Format an amount for display in the Exchange app UI.
+/// Formats an amount as `"ZEC {value}"` for the Exchange app's display.
 ///
-/// The Exchange app calls this to get human-readable strings for amounts and fees.
-/// This is used during swap transactions to show the user what amounts they're
-/// exchanging.
-///
-/// # Amount Format
-///
-/// The amount is provided as big-endian bytes in `params.amount`:
-/// - Right-aligned in a 16-byte buffer (AMOUNT_BUF_SIZE)
-/// - Actual length is in `params.amount_len`
-/// - Padded to 32 bytes (uint256) for SDK formatting helpers
-///
-/// # Arguments
-///
-/// * `params` - Contains:
-///   - `amount`: Big-endian encoded amount bytes (right-aligned in 16-byte buffer)
-///   - `amount_len`: Actual number of significant bytes
-///   - `coin_config`: Coin configuration (unused - hardcoded to CRAB in this template)
-///   - `is_fee`: Whether this is a fee amount
-///
-/// # Returns
-///
-/// Stack-allocated string formatted as "CRAB {value}" (e.g., "CRAB 1.5")
-///
-/// # Memory Safety
-///
-/// Uses `ArrayString` (stack-allocated) to avoid heap allocation, as this function
-/// runs under BSS memory restrictions.
-///
-/// # Production Notes
-///
-/// For a production app, you should:
-/// - Parse `coin_config` to extract ticker and decimals dynamically
-/// - Handle different coin types
-/// - Support both u64 and u128 amounts
+/// `params.amount` is big-endian, right-aligned in a 16-byte buffer with the significant length in
+/// `params.amount_len`. The result is an `ArrayString`: this runs under the BSS restrictions of
+/// library mode, so no heap. `coin_config` is unused, the ticker being fixed.
 fn get_printable_amount(
     params: &PrintableAmountParams,
 ) -> Result<ArrayString<40>, SwapAppErrorCode> {
-    // Convert amount from 16-byte buffer to 32-byte buffer (uint256 format)
-    // The amount is right-aligned in params.amount, we need to copy it to a
-    // 32-byte buffer that's also right-aligned (big-endian)
+    // The SDK formatting helpers take a right-aligned uint256.
     let mut amount_u256: [u8; 32] = [0; 32];
     let src_start = params.amount.len() - params.amount_len;
     let dst_start = 32 - params.amount_len;

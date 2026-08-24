@@ -1,7 +1,7 @@
 use crate::consts::{UNHARDENED_MASK, ZCASH_BIP44_COIN_TYPE, ZIP32_PATH_LEN, ZIP32_PURPOSE};
 use crate::utils::bip32_path::Bip32Path;
 use alloc::vec::Vec;
-use ledger_device_sdk::log::{debug, error};
+use ledger_device_sdk::log::error;
 
 pub mod base58_address;
 pub mod bip32_path;
@@ -10,17 +10,21 @@ pub mod extended_public_key;
 pub mod hashers;
 use crate::AppSW;
 
-const OP_RETURN_OPCODE_INDEX: usize = 1;
-const OP_RETURN_OPCODE: u8 = 0x6A;
-const REGULAR_OUTPUT_SCRIPT_LEN: usize = 25;
-const REGULAR_OUTPUT_PREFIX: [u8; 3] = [0x76, 0xA9, 0x14];
-const REGULAR_OUTPUT_POSTFIX: [u8; 2] = [0x88, 0xAC];
-const P2SH_OUTPUT_SCRIPT_MIN_LEN: usize = 23;
-const P2SH_OUTPUT_PREFIX: [u8; 3] = [0xA9, 0x14, 0x00];
-const P2SH_OUTPUT_POSTFIX: [u8; 2] = [0x87, 0x00];
-const TRANSPARENT_ADDRESS_OFFSET: usize = 3;
-const TRANSPARENT_ADDRESS_HASH_LEN: usize = 20;
-const BIP44_ALLOWED_PURPOSES: [u32; 2] = [44, 32];
+pub use ledger_zcash_crypto::transparent_script::{
+    CheckDispOutput, check_output_displayable, output_script_is_op_return, output_script_is_p2sh,
+    output_script_is_regular,
+};
+
+// The two BIP32 prefixes this app is loaded with (`package.metadata.ledger.path`): BIP-44 for the
+// transparent tree, ZIP-32 for the shielded one. A path outside them is refused by the OS, and this
+// is what lets the app refuse it first, with a status word.
+const APP_DECLARED_PURPOSES: [u32; 2] = [44, 32];
+// Purpose of the transparent tree. A five-component path is a BIP-44 path, so 44 is the only
+// purpose it can carry — ZIP-32 defines no derivation at that depth. Accepting 32 here would let an
+// `m/32'/133'/a'/1/i` output pass the change check and be hidden from the review screen: the same
+// defect the mode-before-shape ordering below closes for the three-component form, reached through
+// a different shape.
+const BIP44_PURPOSE: u32 = 44;
 
 pub enum Endianness {
     Big,
@@ -72,99 +76,16 @@ pub fn secure_memcmp(buf1: &[u8], buf2: &[u8]) -> bool {
     error == 0
 }
 
-pub fn output_script_is_op_return(script_pubkey: &[u8]) -> bool {
-    if script_pubkey.len() <= OP_RETURN_OPCODE_INDEX {
-        return false;
-    }
-
-    script_pubkey[OP_RETURN_OPCODE_INDEX] == OP_RETURN_OPCODE
-}
-
-pub fn output_script_is_regular(script_pubkey: &[u8]) -> bool {
-    if script_pubkey.len() != REGULAR_OUTPUT_SCRIPT_LEN {
-        return false;
-    }
-
-    if script_pubkey[..REGULAR_OUTPUT_PREFIX.len()] != REGULAR_OUTPUT_PREFIX {
-        return false;
-    }
-
-    if script_pubkey[script_pubkey.len() - REGULAR_OUTPUT_POSTFIX.len()..] != REGULAR_OUTPUT_POSTFIX
-    {
-        return false;
-    }
-
-    true
-}
-
-pub fn output_script_is_p2sh(script_pubkey: &[u8]) -> bool {
-    if script_pubkey.is_empty() {
-        return false;
-    }
-
-    if script_pubkey.len() < P2SH_OUTPUT_SCRIPT_MIN_LEN {
-        return false;
-    }
-
-    if script_pubkey[..P2SH_OUTPUT_PREFIX.len()] != P2SH_OUTPUT_PREFIX {
-        return false;
-    }
-
-    if script_pubkey[script_pubkey.len() - 1] != P2SH_OUTPUT_POSTFIX[1] {
-        return false;
-    }
-
-    true
-}
-
-#[derive(PartialEq, Debug)]
-pub enum CheckDispOutput {
-    None,
-    Displayable,
-    Change,
-}
-
-pub fn check_output_displayable(
-    script_pubkey: &[u8],
-    amount: u64,
-    change_address: Option<&[u8; 20]>,
-) -> CheckDispOutput {
-    debug!("Check output displayable");
-    debug!("ScriptPubKey: {:02X?}", script_pubkey);
-
-    if script_pubkey.is_empty() {
-        return CheckDispOutput::None;
-    }
-
-    if amount == 0 {
-        return CheckDispOutput::None;
-    }
-
-    if output_script_is_op_return(script_pubkey) || output_script_is_p2sh(script_pubkey) {
-        return CheckDispOutput::None;
-    }
-
-    let script_len = script_pubkey.len();
-    if script_len < TRANSPARENT_ADDRESS_OFFSET + TRANSPARENT_ADDRESS_HASH_LEN {
-        return CheckDispOutput::None;
-    }
-
-    if change_address.is_some_and(|change_address| {
-        &script_pubkey[TRANSPARENT_ADDRESS_OFFSET..][..TRANSPARENT_ADDRESS_HASH_LEN]
-            == change_address
-    }) {
-        debug!("Change output detected");
-        return CheckDispOutput::Change;
-    }
-
-    debug!("Displayable output detected");
-    CheckDispOutput::Displayable
-}
-
 pub enum Bip44CheckMode {
-    Full { is_change_path: bool },
+    Full {
+        is_change_path: bool,
+    },
+    /// Purpose and coin type on a five-component BIP-44 path, or a ZIP-32 account path.
     OnlyCoinType,
     Zip32Only,
+    /// Purpose and coin type only, at any depth: key export accepts account-level and deeper paths,
+    /// so the app restricts its prefixes without dictating the shape.
+    PrefixOnly,
 }
 
 pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
@@ -179,15 +100,50 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const MAX_BIP44_ACCOUNT_RECOMMENDED: u32 = 100;
     const MAX_BIP44_ADDRESS_INDEX_RECOMMENDED: u32 = 50000;
 
+    const BIP44_PREFIX_LEN: usize = 2;
+
     let path = path.as_slice();
-    let is_zip32 = path.len() == ZIP32_PATH_LEN && (path[0] & UNHARDENED_MASK) == ZIP32_PURPOSE;
+    let is_zip32_shape =
+        path.len() == ZIP32_PATH_LEN && (path[0] & UNHARDENED_MASK) == ZIP32_PURPOSE;
 
-    if is_zip32 {
-        if path.len() != ZIP32_PATH_LEN {
-            error!("Bad ZIP32 path len");
-            return false;
+    // The mode decides which shape is acceptable, so it is consulted before the shape: a ZIP-32
+    // account path has no change, account or address-index component for `Full` to constrain.
+    match mode {
+        Bip44CheckMode::PrefixOnly => {
+            if path.len() < BIP44_PREFIX_LEN {
+                error!("Path too short to carry a prefix");
+                return false;
+            }
+
+            if !APP_DECLARED_PURPOSES.contains(&(path[PURPOSE_OFFSET] & UNHARDENED_MASK)) {
+                error!("Bad purpose");
+                return false;
+            }
+
+            if (path[BIP44_COIN_TYPE_OFFSET] & UNHARDENED_MASK) != ZCASH_BIP44_COIN_TYPE {
+                error!("Bad coin type");
+                return false;
+            }
+
+            return true;
         }
+        Bip44CheckMode::Zip32Only => {
+            if !is_zip32_shape {
+                error!("Path is not a ZIP32 path");
+                return false;
+            }
+        }
+        Bip44CheckMode::Full { .. } => {
+            if is_zip32_shape {
+                error!("ZIP32 path where a full BIP44 path is required");
+                return false;
+            }
+        }
+        // Shielded derivations arrive as ZIP-32 account paths, transparent ones as BIP-44.
+        Bip44CheckMode::OnlyCoinType => {}
+    }
 
+    if is_zip32_shape {
         if path[PURPOSE_OFFSET] != (ZIP32_PURPOSE | HARDENED) {
             error!("Bad ZIP32 purpose");
             return false;
@@ -204,28 +160,23 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
         }
 
         return true;
-    } else {
-        if let Bip44CheckMode::Zip32Only = mode {
-            error!("Path is not a ZIP32 path");
-            return false;
-        }
+    }
 
-        if path.len() != BIP44_PATH_LEN {
-            error!("Bad Bip44 path len");
-            return false;
-        }
+    if path.len() != BIP44_PATH_LEN {
+        error!("Bad Bip44 path len");
+        return false;
+    }
 
-        let purpose = path[PURPOSE_OFFSET] & UNHARDENED_MASK;
-        if !BIP44_ALLOWED_PURPOSES.contains(&purpose) {
-            error!("Bad Bip44 purpose");
-            return false;
-        }
+    let purpose = path[PURPOSE_OFFSET] & UNHARDENED_MASK;
+    if purpose != BIP44_PURPOSE {
+        error!("Bad Bip44 purpose");
+        return false;
+    }
 
-        let coin_type = path[BIP44_COIN_TYPE_OFFSET] & UNHARDENED_MASK;
-        if coin_type != ZCASH_BIP44_COIN_TYPE {
-            error!("Bad Bip44 coin type");
-            return false;
-        }
+    let coin_type = path[BIP44_COIN_TYPE_OFFSET] & UNHARDENED_MASK;
+    if coin_type != ZCASH_BIP44_COIN_TYPE {
+        error!("Bad Bip44 coin type");
+        return false;
     }
 
     if let Bip44CheckMode::Full { is_change_path } = mode {
@@ -251,17 +202,15 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     true
 }
 
-pub fn encode_string_response(value: &str) -> Vec<u8> {
+pub fn encode_string_response(value: &str) -> Result<Vec<u8>, AppSW> {
     let value_bytes = value.as_bytes();
 
-    if value_bytes.len() > u16::MAX as usize {
-        unreachable!("response length exceeds u16::MAX");
-    }
-
-    let len: u16 = value_bytes.len() as u16;
+    // The response length is a u16 on the wire. No caller passes anything near that, but a length
+    // that cannot be encoded is an error to report, not a reason to exit the app.
+    let len: u16 = u16::try_from(value_bytes.len()).map_err(|_| AppSW::TechnicalProblem)?;
 
     let mut response = Vec::with_capacity(2 + value_bytes.len());
     response.extend_from_slice(&len.to_be_bytes());
     response.extend_from_slice(value_bytes);
-    response
+    Ok(response)
 }

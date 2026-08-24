@@ -6,11 +6,13 @@ use ::orchard::bundle::commitments::{
 use alloc::{format, string::ToString, vec::Vec};
 use core::{cmp, mem};
 
+use crate::consts::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
+use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use ::orchard::keys::Scope as OrchardScope;
-use ::orchard::note::TransmittedNoteCiphertext;
-use ::orchard::primitives::redpallas::{SpendAuth, VerificationKey as RedpallasVerificationKey};
 use corez::io::Read;
+use ledger_device_sdk::ecc::Secret;
 use ledger_device_sdk::hash::HashInit as _;
+use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::log::{debug, info};
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
 use zcash_encoding::CompactSize;
@@ -23,9 +25,10 @@ use zcash_transparent::bundle::OutPoint;
 
 use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
+use crate::consts::MAX_PCZT_IRONWOOD_ACTIONS_NUMBER;
 use crate::consts::{
-    MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
-    MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
+    MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_SCRIPT_SIZE, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
+    MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
 };
 use crate::parser::ORCHARD_MEMO_SIZE;
 use crate::parser::compute::{
@@ -48,17 +51,24 @@ use crate::utils::{
     extended_public_key::ExtendedPublicKey,
     hashers::ToHash160,
 };
-use crate::zip32::{OrchardFvk, derive_orchard_ask, derive_orchard_fvk, orchard_network};
+use crate::zip32::{
+    OrchardAsk, OrchardFvk, derive_orchard_fvk_and_ask_from_sk, derive_orchard_fvk_from_sk,
+    derive_orchard_sk_bytes, orchard_network,
+};
 
 use super::reader::{ByteReader, ReadBytesExt};
 use super::{ParserError, finalize_and_log_hash, ok};
 
 mod common;
+mod ironwood;
 mod orchard;
 mod transparent;
 
 const MAGIC_BYTES: &[u8; 4] = b"PCZT";
 const PCZT_VERSION_1: u32 = 1;
+const PCZT_VERSION_2: u32 = 2;
+const NOTE_VERSION_ORCHARD: u8 = 0x02;
+const NOTE_VERSION_IRONWOOD: u8 = 0x03;
 const DEFAULT_SEQUENCE: u32 = 0xFFFF_FFFF;
 const PREVOUT_SIZE: usize = 32 + 4;
 const COMPRESSED_PUBKEY_SIZE: usize = 33;
@@ -100,6 +110,16 @@ enum PcztParserState {
     WaitOrchardOutputMetadata,
     WaitOrchardTrailer,
     OrchardActionsDone,
+    WaitIronwoodAction,
+    WaitIronwoodZip32Derivation,
+    WaitIronwoodOutput,
+    WaitIronwoodEncCiphertextLen,
+    ProcessIronwoodEncCiphertext,
+    WaitIronwoodOutCiphertextLen,
+    ProcessIronwoodOutCiphertext,
+    WaitIronwoodOutputMetadata,
+    WaitIronwoodTrailer,
+    IronwoodActionsDone,
 }
 
 impl PcztParserState {
@@ -118,6 +138,22 @@ impl PcztParserState {
                 | PcztParserState::OrchardActionsDone
         )
     }
+
+    fn is_ironwood_state(self) -> bool {
+        matches!(
+            self,
+            PcztParserState::WaitIronwoodAction
+                | PcztParserState::WaitIronwoodZip32Derivation
+                | PcztParserState::WaitIronwoodOutput
+                | PcztParserState::WaitIronwoodEncCiphertextLen
+                | PcztParserState::ProcessIronwoodEncCiphertext
+                | PcztParserState::WaitIronwoodOutCiphertextLen
+                | PcztParserState::ProcessIronwoodOutCiphertext
+                | PcztParserState::WaitIronwoodOutputMetadata
+                | PcztParserState::WaitIronwoodTrailer
+                | PcztParserState::IronwoodActionsDone
+        )
+    }
 }
 
 struct PcztTransparentInputRecord {
@@ -132,6 +168,14 @@ struct PcztTransparentInputRecord {
 struct PcztOrchardActionSigningRecord {
     alpha: [u8; 32],
     path: Bip32Path,
+    // Whether the action carries a real spend (spend value != 0) rather than a
+    // dummy padding spend. Dummy actions are deliberately parsed *without* the
+    // rk and nullifier checks (their rk derives from the host's throwaway key,
+    // so those checks cannot pass), which is only sound as long as the device
+    // never signs them: signing authorizes an action whose spend side it did
+    // not verify. The signing path therefore refuses a dummy index instead of
+    // trusting the host to skip it.
+    is_real_spend: bool,
     signed: bool,
 }
 
@@ -139,6 +183,73 @@ pub struct PcztParserCtx<'ctx> {
     pub tx_state: &'ctx mut TxSigningState,
     pub tx_info: &'ctx mut TxInfo,
     pub hashers: &'ctx mut Hashers,
+    /// Present only when the Exchange app drove this app into swap mode, in which case the
+    /// transaction is validated against the Exchange's request instead of being shown to the user.
+    pub swap_params: Option<&'ctx CreateTxParams>,
+}
+
+/// Ironwood signing records share the same layout as Orchard — alias for correct naming.
+type PcztIronwoodActionSigningRecord = PcztOrchardActionSigningRecord;
+
+/// Scratch state for the single action being parsed, shared by the Orchard and
+/// Ironwood bundles.
+///
+/// Sharing is safe because a bundle is parsed to completion before the next one
+/// starts and every field is rewritten when an action begins; nothing an action
+/// leaves behind is read once it is finished, since what outlives it is copied
+/// into the bundle's signing records. Giving each pool its own copy costs about a
+/// kilobyte of static RAM, which on Nano X is taken straight out of the stack the
+/// action-finalisation path needs.
+struct PcztCurrentActionState {
+    flags: u8,
+    value_sum_magnitude: u64,
+    cv_net: [u8; 32],
+    nullifier: [u8; 32],
+    rk: [u8; 32],
+    spend_value: u64,
+    spend_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
+    spend_rho: [u8; 32],
+    spend_rseed: [u8; 32],
+    rcv: Option<[u8; 32]>,
+    output_rseed: Option<[u8; 32]>,
+    cmx: [u8; 32],
+    ephemeral_key: [u8; 32],
+    out_ciphertext: Option<[u8; ORCHARD_OUT_CIPHERTEXT_SIZE]>,
+    output_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
+    output_value: u64,
+    enc_ciphertext: Vec<u8>,
+    alpha: Option<[u8; 32]>,
+    path: Option<Bip32Path>,
+    fvk: Option<OrchardFvk>,
+    note_plaintext_version: u8,
+}
+
+impl PcztCurrentActionState {
+    const fn new() -> Self {
+        Self {
+            flags: 0,
+            value_sum_magnitude: 0,
+            cv_net: [0; 32],
+            nullifier: [0; 32],
+            rk: [0; 32],
+            spend_value: 0,
+            spend_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
+            spend_rho: [0; 32],
+            spend_rseed: [0; 32],
+            rcv: None,
+            output_rseed: None,
+            cmx: [0; 32],
+            ephemeral_key: [0; 32],
+            out_ciphertext: None,
+            output_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
+            output_value: 0,
+            enc_ciphertext: Vec::new(),
+            alpha: None,
+            path: None,
+            fvk: None,
+            note_plaintext_version: NOTE_VERSION_ORCHARD,
+        }
+    }
 }
 
 pub struct PcztParser {
@@ -150,6 +261,7 @@ pub struct PcztParser {
     transparent_output_parsed_count: usize,
     outputs_reviewed: bool,
     pczt_finished: bool,
+    pczt_version: u32,
     current_input_prevout: [u8; PREVOUT_SIZE],
     current_input_sequence: u32,
     current_input_amount: [u8; 8],
@@ -160,157 +272,52 @@ pub struct PcztParser {
     orchard_action_parsed_count: usize,
     orchard_signing_records: Vec<PcztOrchardActionSigningRecord>,
     orchard_signed_action_count: usize,
+    // Number of Orchard actions the device must sign: real spends (spend value
+    // != 0) only. Dummy padding spends (value 0) are self-signed host-side by
+    // the PCZT IoFinalizer and are never sent to the device for signing, so the
+    // signing loop completes when the real spends are signed — not when every
+    // action is. Using the total action count here would leave a transparent→
+    // shielded transaction (0 real spends) forever "unfinished", stranding the
+    // device on the signing screen.
+    orchard_real_spend_count: usize,
     orchard_signature_digest: Option<[u8; 32]>,
     orchard_value_balance: i64,
     orchard_spend_value_sum: u64,
     orchard_output_value_sum: u64,
-    current_orchard_flags: u8,
-    current_orchard_value_sum_magnitude: u64,
-    current_orchard_cv_net: [u8; 32],
-    current_orchard_nullifier: [u8; 32],
-    current_orchard_rk: [u8; 32],
-    current_orchard_spend_value: u64,
-    current_orchard_spend_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
-    current_orchard_spend_rho: [u8; 32],
-    current_orchard_spend_rseed: [u8; 32],
-    current_orchard_rcv: Option<[u8; 32]>,
-    current_orchard_output_rseed: Option<[u8; 32]>,
-    current_orchard_cmx: [u8; 32],
-    current_orchard_ephemeral_key: [u8; 32],
-    current_orchard_out_ciphertext: Option<[u8; ORCHARD_OUT_CIPHERTEXT_SIZE]>,
-    current_orchard_output_recipient: [u8; ORCHARD_RAW_ADDRESS_SIZE],
-    current_orchard_output_value: u64,
-    current_orchard_enc_ciphertext: Vec<u8>,
-    current_orchard_alpha: Option<[u8; 32]>,
-    current_orchard_path: Option<Bip32Path>,
-    current_orchard_fvk: Option<OrchardFvk>,
+    current_action: PcztCurrentActionState,
+    // Account Orchard spending key, derived once per PCZT session and reused for
+    // every action's FVK/ASK derivation and spend-auth signature. `zip32_orchard_derive`
+    // (the SE key-derivation syscall) does not reclaim its resources between calls,
+    // so a few consecutive derivations exhaust them and the next fails with 6f00;
+    // caching keeps the session to a single derivation. A PCZT is signed by one
+    // account (one UFVK), so every Orchard action derives from the same path — the
+    // key is cached under the first action's path and any divergent path is
+    // rejected. Zeroized on `reset` and once the last Orchard action has been
+    // signed (or once the parse shows none will be).
+    orchard_spending_key: Option<Secret<32>>,
+    // Derivation path the cached spending key belongs to, used to reject a
+    // second Orchard action declaring a different path.
+    orchard_spending_key_path: Option<Bip32Path>,
+    is_v6_tx: bool,
+    has_orchard_bundle: bool,
+    has_ironwood_bundle: bool,
+    ironwood_action_count: usize,
+    ironwood_action_parsed_count: usize,
+    // Ironwood actions carrying a real spend, i.e. the ones the device will sign.
+    ironwood_real_spend_count: usize,
+    ironwood_signing_records: Vec<PcztIronwoodActionSigningRecord>,
+    ironwood_signed_action_count: usize,
+    ironwood_signature_digest: Option<[u8; 32]>,
+    ironwood_value_balance: i64,
+    ironwood_spend_value_sum: u64,
+    ironwood_output_value_sum: u64,
     script_bytes: Vec<u8>,
-    orchard_field_bytes: Vec<u8>,
+    pool_field_bytes: Vec<u8>,
 }
 
 impl PcztParser {
-    // APDU payload formats for this PCZT parser.
-    //
-    // This is a compact Ledger APDU subset, not the canonical `pczt::Pczt`
-    // postcard encoding. Its field order mirrors the pczt crate structs where
-    // useful. The APDU order is fixed: `Pczt` header and `common::Global`,
-    // transparent inputs, transparent outputs, then Orchard actions. `Pczt`
-    // header and `common::Global` are sent exactly once in `PCZT_HEADER`;
-    // following bundle commands start from their own bundle fields.
-    // `PCZT_TRANSPARENT_INPUT`, `PCZT_TRANSPARENT_OUTPUT`, and
-    // `PCZT_ORCHARD_ACTION` are still sent with count 0 when the corresponding
-    // section is empty.
-    //
-    // Primitive encoding:
-    //   u8/u32/u64        little-endian, except u8
-    //   bool              0x00 for false, 0x01 for true
-    //   Option<T>         0x00 for None, 0x01 followed by T for Some
-    //   Vec<u8>           CompactSize byte count, followed by bytes
-    //   Bip32Path         u8 component count, followed by BE u32 path segments
-    //
-    // PCZT header fields:
-    //   magic                  "PCZT"
-    //   version                u32, must be 1
-    //
-    // common::Global fields, in order:
-    //   tx_version             u32
-    //   version_group_id       u32
-    //   consensus_branch_id    u32
-    //   fallback_lock_time     Option<u32>
-    //   expiry_height          u32
-    //   coin_type              u32
-    //   tx_modifiable          u8
-    //   proprietary            SKIPPED
-    //
-    // transparent::Bundle subset:
-    //   inputs                 Vec<Input> as CompactSize count, followed by inputs
-    //   outputs                Vec<Output> as CompactSize count, followed by outputs
-    //
-    // transparent::Input fields, in order:
-    //   prevout_txid           [u8; 32]
-    //   prevout_index          u32
-    //   sequence               Option<u32>
-    //   required_time_lock_time SKIPPED
-    //   required_height_lock_time SKIPPED
-    //   script_sig             SKIPPED
-    //   value                  u64
-    //   script_pubkey          Vec<u8>
-    //   redeem_script          SKIPPED
-    //   partial_signatures     SKIPPED
-    //   sighash_type           u8, must be SIGHASH_ALL
-    //   bip32_derivation       BTreeMap<[u8; 33], Zip32Derivation> as:
-    //                            CompactSize entry count, followed by entries:
-    //                              key compressed_pubkey [u8; 33]
-    //                              seed_fingerprint [u8; 32]
-    //                              derivation_path as Bip32Path
-    //                            exactly one entry is currently used
-    //   ripemd160_preimages    SKIPPED
-    //   sha256_preimages       SKIPPED
-    //   hash160_preimages      SKIPPED
-    //   hash256_preimages      SKIPPED
-    //   proprietary            SKIPPED
-    //
-    // transparent::Output fields, in order:
-    //   value                  u64
-    //   script_pubkey          Vec<u8>
-    //   redeem_script          SKIPPED
-    //   bip32_derivation       BTreeMap<[u8; 33], Zip32Derivation> as:
-    //                            CompactSize entry count, followed by entries:
-    //                              key compressed_pubkey [u8; 33]
-    //                              seed_fingerprint [u8; 32]
-    //                              derivation_path as Bip32Path
-    //                            at most one entry is currently used for change
-    //   user_address           SKIPPED
-    //   proprietary            SKIPPED
-    //
-    // orchard::Bundle subset:
-    //   actions                Vec<Action> as CompactSize count, followed by actions
-    //   flags                  u8
-    //   value_sum              (u64, bool) as magnitude followed by negative-sign flag
-    //   anchor                 [u8; 32]
-    //   zkproof                SKIPPED
-    //   bsk                    SKIPPED
-    //
-    // orchard::Action fields, in order:
-    //   cv_net                 [u8; 32]
-    //   spend                  Spend subset
-    //   output                 Output subset
-    //   rcv                    Required [u8; 32], appended after output `rseed`.
-    //
-    // orchard::Spend fields, in order:
-    //   nullifier              [u8; 32]
-    //   rk                     [u8; 32]
-    //   spend_auth_sig         SKIPPED
-    //   recipient              [u8; 43], raw Orchard payment address
-    //   value                  u64
-    //   rho                    [u8; 32]
-    //   rseed                  [u8; 32]
-    //   fvk                    SKIPPED
-    //   witness                SKIPPED
-    //   alpha                  [u8; 32]
-    //                            REQUIRED by this parser for every action; unlike
-    //                            the pczt crate Option field, no option tag is sent.
-    //   zip32_derivation       Zip32Derivation as:
-    //                            REQUIRED by this parser for every action; unlike
-    //                            the pczt crate Option field, no option tag is sent.
-    //                            seed_fingerprint [u8; 32]
-    //                            derivation_path as Bip32Path
-    //   dummy_sk               SKIPPED
-    //   proprietary            SKIPPED
-    //
-    // orchard::Output fields, in order:
-    //   cmx                    [u8; 32]
-    //   ephemeral_key          [u8; 32]
-    //   enc_ciphertext         Vec<u8>, currently must be 580 bytes
-    //   out_ciphertext         Vec<u8>, currently must be 80 bytes
-    //   recipient              [u8; 43], raw Orchard payment address
-    //   value                  u64
-    //   rseed                  Required [u8; 32]
-    //   ock                    SKIPPED
-    //   zip32_derivation       SKIPPED
-    //   user_address           SKIPPED
-    //   proprietary            SKIPPED
-    //
+    // The APDU field layout, the per-bundle order and the version rules are specified in
+    // docs/PCZT_APDU.md, which is the contract the host is written against.
     pub fn new() -> Self {
         Self {
             state: PcztParserState::WaitHeaderAndGlobal,
@@ -321,6 +328,7 @@ impl PcztParser {
             transparent_output_parsed_count: 0,
             outputs_reviewed: false,
             pczt_finished: false,
+            pczt_version: 0,
             current_input_prevout: [0; PREVOUT_SIZE],
             current_input_sequence: 0,
             current_input_amount: [0; 8],
@@ -328,6 +336,7 @@ impl PcztParser {
             current_output_amount: 0,
             total_output_amount: 0,
             orchard_action_count: 0,
+            orchard_real_spend_count: 0,
             orchard_action_parsed_count: 0,
             orchard_signing_records: Vec::new(),
             orchard_signed_action_count: 0,
@@ -335,33 +344,73 @@ impl PcztParser {
             orchard_value_balance: 0,
             orchard_spend_value_sum: 0,
             orchard_output_value_sum: 0,
-            current_orchard_flags: 0,
-            current_orchard_value_sum_magnitude: 0,
-            current_orchard_cv_net: [0; 32],
-            current_orchard_nullifier: [0; 32],
-            current_orchard_rk: [0; 32],
-            current_orchard_spend_value: 0,
-            current_orchard_spend_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
-            current_orchard_spend_rho: [0; 32],
-            current_orchard_spend_rseed: [0; 32],
-            current_orchard_rcv: None,
-            current_orchard_output_rseed: None,
-            current_orchard_cmx: [0; 32],
-            current_orchard_ephemeral_key: [0; 32],
-            current_orchard_out_ciphertext: None,
-            current_orchard_output_recipient: [0; ORCHARD_RAW_ADDRESS_SIZE],
-            current_orchard_output_value: 0,
-            current_orchard_enc_ciphertext: Vec::new(),
-            current_orchard_alpha: None,
-            current_orchard_path: None,
-            current_orchard_fvk: None,
+            current_action: PcztCurrentActionState::new(),
+            orchard_spending_key: None,
+            orchard_spending_key_path: None,
+            is_v6_tx: false,
+            has_orchard_bundle: false,
+            has_ironwood_bundle: false,
+            ironwood_action_count: 0,
+            ironwood_action_parsed_count: 0,
+            ironwood_real_spend_count: 0,
+            ironwood_signing_records: Vec::new(),
+            ironwood_signed_action_count: 0,
+            ironwood_signature_digest: None,
+            ironwood_value_balance: 0,
+            ironwood_spend_value_sum: 0,
+            ironwood_output_value_sum: 0,
             script_bytes: Vec::new(),
-            orchard_field_bytes: Vec::new(),
+            pool_field_bytes: Vec::new(),
         }
     }
 
     pub fn reset(&mut self) {
         *self = Self::new();
+    }
+
+    /// Whether a PCZT session owns the transaction state, which the legacy path shares.
+    pub fn is_session_active(&self) -> bool {
+        self.state != PcztParserState::WaitHeaderAndGlobal || self.pczt_finished
+    }
+
+    // Returns the account Orchard spending key, deriving it via
+    // `zip32_orchard_derive` exactly once per PCZT session and caching it for
+    // reuse. Reusing the cached key is mandatory, not an optimization: the
+    // syscall's SE resources are not reclaimed between successive calls, so
+    // re-deriving per action exhausts them and the derivation eventually fails
+    // with 6f00.
+    //
+    // All Orchard actions of a PCZT share one account key (one UFVK), so the
+    // first action's `path` fixes the key for the whole transaction. A later
+    // action declaring a different path is rejected rather than served the
+    // cached key: the caller would otherwise derive an FVK from one path while
+    // deciding the network (`orchard_network`) from another, and sign with a key
+    // the declared path does not produce.
+    pub fn orchard_spending_key(&mut self, path: &Bip32Path) -> Result<&Secret<32>, AppSW> {
+        match self.orchard_spending_key_path {
+            Some(cached_path) if cached_path != *path => return Err(AppSW::BadState),
+            Some(_) => {}
+            None => {
+                self.orchard_spending_key = Some(derive_orchard_sk_bytes(path)?);
+                self.orchard_spending_key_path = Some(*path);
+            }
+        }
+
+        self.orchard_spending_key
+            .as_ref()
+            .ok_or(AppSW::TechnicalProblem)
+    }
+
+    // Zeroizes the cached account spending key (dropping the `Secret`) once it
+    // is no longer needed: after the last Orchard action is signed, or as soon
+    // as the parse establishes that no action will be signed at all.
+    //
+    // The path is cleared with the key so a later action cannot be compared
+    // against a path whose key no longer exists; a fresh derivation for that
+    // path is then the correct behaviour.
+    fn clear_orchard_spending_key(&mut self) {
+        self.orchard_spending_key = None;
+        self.orchard_spending_key_path = None;
     }
 
     fn reset_on_error<T>(&mut self, result: Result<T, ParserError>) -> Result<T, ParserError> {
@@ -382,19 +431,34 @@ impl PcztParser {
                 | PcztParserState::WaitTransparentOutputBip32Derivation
                 | PcztParserState::TransparentOutputsDone
         ) || self.state.is_orchard_state()
+            || self.state.is_ironwood_state()
     }
 
     pub fn is_transparent_outputs_finished(&self) -> bool {
         matches!(self.state, PcztParserState::TransparentOutputsDone)
             || self.state.is_orchard_state()
+            || self.state.is_ironwood_state()
     }
 
     pub fn is_orchard_actions_finished(&self) -> bool {
-        matches!(self.state, PcztParserState::OrchardActionsDone)
+        if matches!(self.state, PcztParserState::OrchardActionsDone) {
+            return true;
+        }
+        if self.state.is_ironwood_state() {
+            return true;
+        }
+        false
+    }
+
+    pub fn is_ironwood_actions_finished(&self) -> bool {
+        matches!(self.state, PcztParserState::IronwoodActionsDone)
     }
 
     pub fn is_ready_to_sign(&self) -> bool {
-        self.is_orchard_actions_finished() && self.outputs_reviewed
+        let orchard_done = !self.has_orchard_bundle || self.is_orchard_actions_finished();
+        let ironwood_done =
+            !self.is_v6_tx || !self.has_ironwood_bundle || self.is_ironwood_actions_finished();
+        orchard_done && ironwood_done && self.outputs_reviewed
     }
 
     pub fn is_finished(&self) -> bool {
@@ -586,6 +650,67 @@ impl PcztParser {
                     }
                     PcztParserState::WaitOrchardTrailer => {
                         self.parse_orchard_trailer(ctx, &mut reader)?
+                    }
+                    _ => {
+                        return Err(ParserError::from_sw(AppSW::BadState));
+                    }
+                }
+
+                if self.state != prev_state {
+                    info!(
+                        "PCZT parser state changed: {:?} -> {:?}",
+                        prev_state, self.state
+                    );
+                }
+            }
+
+            Ok(())
+        })();
+
+        self.reset_on_error(result)
+    }
+
+    pub fn parse_ironwood_actions(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        data: &[u8],
+    ) -> Result<(), ParserError> {
+        let result = (|| {
+            let mut reader = ByteReader::new(data);
+
+            while reader.remaining_len() > 0 {
+                let prev_state = self.state;
+
+                match self.state {
+                    PcztParserState::OrchardActionsDone => {
+                        self.parse_ironwood_actions_start(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitIronwoodAction => {
+                        self.parse_ironwood_action(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitIronwoodZip32Derivation => {
+                        self.parse_ironwood_zip32_derivation(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitIronwoodOutput => {
+                        self.parse_ironwood_output(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitIronwoodEncCiphertextLen => {
+                        self.parse_ironwood_enc_ciphertext_len(ctx, &mut reader)?
+                    }
+                    PcztParserState::ProcessIronwoodEncCiphertext => {
+                        self.parse_ironwood_enc_ciphertext(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitIronwoodOutCiphertextLen => {
+                        self.parse_ironwood_out_ciphertext_len(ctx, &mut reader)?
+                    }
+                    PcztParserState::ProcessIronwoodOutCiphertext => {
+                        self.parse_ironwood_out_ciphertext(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitIronwoodOutputMetadata => {
+                        self.parse_ironwood_output_metadata(ctx, &mut reader)?
+                    }
+                    PcztParserState::WaitIronwoodTrailer => {
+                        self.parse_ironwood_trailer(ctx, &mut reader)?
                     }
                     _ => {
                         return Err(ParserError::from_sw(AppSW::BadState));

@@ -16,19 +16,28 @@ components.
 
 - The bundle command order is fixed:
   `PCZT_HEADER`, then `PCZT_TRANSPARENT_INPUT`, then
-  `PCZT_TRANSPARENT_OUTPUT`, then `PCZT_ORCHARD_ACTION`.
+  `PCZT_TRANSPARENT_OUTPUT`, then `PCZT_ORCHARD_ACTION`, and for V6
+  transactions `PCZT_IRONWOOD_ACTION`.
 - `PCZT_HEADER` is sent exactly once and contains only the `Pczt` header and
   `common::Global` fields.
 - `PCZT_TRANSPARENT_INPUT` and `PCZT_TRANSPARENT_OUTPUT` are always sent. Use
   count `0` when either transparent section is empty.
 - `PCZT_ORCHARD_ACTION` is always sent. Use Orchard action count `0` when the
   transaction has no Orchard actions.
+- `PCZT_IRONWOOD_ACTION` is always sent for a V6 transaction, and only for one.
+  Use Ironwood action count `0` when the transaction has no Ironwood actions;
+  omitting the command leaves a V6 transaction unsignable, because V6 defers the
+  user review to Ironwood finalization. See "Empty Ironwood bundle" below.
 - `P1_FIRST`, `P1_NEXT`, and `P1_LAST` frame the APDU packet sequence for one
   `PCZT_*` command.
 - A one-packet command uses `P1_FIRST`.
 - `P2_PCZT_CONTINUE` means more PCZT bundle commands may still follow.
-- `P2_PCZT_FINISHED` is valid only on the last APDU packet of
-  `PCZT_ORCHARD_ACTION`. Signing commands are accepted only after this marker.
+- `P2_PCZT_FINISHED` is set on the last APDU packet of the **last bundle
+  command**. For V5 transactions this is the last packet of
+  `PCZT_ORCHARD_ACTION`. For V6 transactions this is the last packet of
+  `PCZT_IRONWOOD_ACTION`; the last `PCZT_ORCHARD_ACTION` packet must use
+  `P2_PCZT_CONTINUE` instead. Signing commands are accepted only after this
+  marker.
 - Small neighboring fields may be grouped into one APDU packet.
 - Large `Vec<u8>` fields are sent as their own APDU packet sequence. The first
   packet contains the CompactSize byte length followed by field bytes. If the
@@ -37,7 +46,12 @@ components.
 - `bip32_derivation` and `zip32_derivation` fields MUST each fit in, and be sent
   as, one APDU packet.
 - The current app limits are: at most 10 transparent inputs, at most 10
-  transparent outputs, and at most 10 Orchard actions.
+  transparent outputs, at most 10 Orchard actions, and at most 10 Ironwood
+  actions.
+- A transparent `script_pubkey` is at most 252 bytes. Every transparent input's
+  script is retained for the whole session, so the bound is what keeps ten of
+  them inside the device heap. 252 is also the largest value a one-byte
+  CompactSize encodes, which is the limit the host applies on its own side.
 
 ## PCZT_HEADER
 
@@ -53,6 +67,13 @@ Single packet:
   - `expiry_height u32`
   - `coin_type u32`
   - `tx_modifiable u8`
+
+The PCZT version field encodes the PCZT wire-format revision:
+
+- Version `1` is required for V5 (Orchard) transactions.
+- Version `2` is required for V6 (Ironwood) transactions.
+
+The app rejects a mismatch between the PCZT version and the transaction version.
 
 ## PCZT_TRANSPARENT_INPUT
 
@@ -96,6 +117,9 @@ Packet sequence:
      - if present, compressed public key `[u8; 33]`
      - if present, seed fingerprint `[u8; 32]`
      - if present, derivation path as `Bip32Path`
+
+Accepted `script_pubkey` forms are P2PKH and P2SH. OP_RETURN and any other
+form are refused.
 
 ## PCZT_ORCHARD_ACTION
 
@@ -160,3 +184,81 @@ action is accepted:
 - Non-zero undecryptable outputs are rejected.
 
 Dummy spends are not represented by this compact APDU subset.
+
+## PCZT_IRONWOOD_ACTION
+
+Sent only for V6 transactions. The per-action wire layout is identical to
+`PCZT_ORCHARD_ACTION` — the same packet types in the same order.
+
+Packet sequence:
+
+1. Count packet:
+   - Ironwood action count as CompactSize. Count `0` is valid and carries no
+     per-action or trailer packet — see "Empty Ironwood bundle" below.
+
+2. For each Ironwood action, in order: same packet sequence as
+   `PCZT_ORCHARD_ACTION` per-action (spend small fields, `zip32_derivation`,
+   output small fields, `enc_ciphertext`, `out_ciphertext`, output metadata).
+
+3. Bundle trailer packet:
+   - `flags u8`
+   - `value_balance` magnitude `u64`
+   - `value_balance` negative-sign flag `u8`
+   - `anchor [u8; 32]` — committed to the Ironwood authorizing-data digest;
+     not included in the txid sighash
+
+The last APDU packet of the bundle trailer carries `P2_PCZT_FINISHED`,
+triggering the device review screen and enabling signing commands. An empty
+bundle has no trailer, so its count packet carries the marker instead.
+
+### Empty Ironwood bundle
+
+A V6 transaction that neither spends nor creates an Ironwood note — an
+Orchard-only spend after NU6.3 — sends this command with action count `0` and
+nothing else. The count packet is then the whole command, so it carries
+`P1_FIRST` and, being also the last packet of the last bundle command,
+`P2_PCZT_FINISHED`. It is what triggers the review screen.
+
+Count `0` is accepted rather than rejected for two independent reasons:
+
+- ZIP 229 makes `ironwood_digest_v6` a child of `txid_digest_v6` for **every** V6
+  transaction, taking its empty-input value when the bundle has no actions. The
+  node is part of the signed digest tree either way, exactly as the Orchard node
+  is, so an empty bundle is not a transaction without an Ironwood commitment.
+- A V6 transaction defers its user review to Ironwood finalization, so this
+  command is where the review happens. Omitting it leaves the transaction
+  reviewed by nothing and therefore unsignable — the device fails closed, but the
+  host gets no diagnostic naming the missing section.
+
+An Ironwood bundle on a transaction that declared V5 is rejected, whatever its
+action count.
+
+### Ironwood validation requirements
+
+Ironwood action validation applies the same cryptographic checks as Orchard
+(see above): `rk` recomputation, `cv_net` verification, recipient derivation,
+`nullifier` recomputation, and output note-commitment check for dummy outputs.
+
+**The Ironwood value pool carries V3 note plaintexts only.** One note plaintext version is valid
+per value pool — Orchard holds V2, Ironwood holds V3 (`BundleVersion::note_version` upstream) — so a
+plaintext belonging to the other pool is not a compatibility case to accommodate but a note this
+bundle cannot hold.
+
+When the output metadata packet is 116 bytes, the final byte is `notePlaintextVersion` and it **must
+be `0x03`**. Any other value is rejected with "Bad PCZT ironwood notePlaintextVersion". The 115-byte
+form (no `notePlaintextVersion` byte) is still valid and means `0x03`: the parser's per-action reset
+leaves the field at that value, so the two encodings agree.
+
+- Non-zero-value outputs: the device deciphers `enc_ciphertext` via the standard IVK/OVK
+  trial-decryption path, which accepts a decrypted plaintext only if its lead byte is `0x03`. After
+  successful decryption the device verifies `cmx` using the ZIP 2005 quantum-recoverable commitment
+  formula (`note_commitment_v3`), whose BLAKE2b-512 rcm derivation additionally binds `g_d`, `pk_d`,
+  `value`, `rho` and `psi`. This ties the displayed recipient and value to the exact `cmx` that
+  enters the signature digest.
+- Zero-value (dummy) outputs: the device recomputes `cmx` with the same V3 formula and verifies it
+  against the wire value. Dummy outputs carry no displayed value or recipient; their value
+  contribution is independently constrained via `cv_net`.
+
+A V2-format ciphertext therefore does not decrypt in this pool. The output is then only accepted on
+the dummy path, which requires a zero value **and** a `cmx` that matches the V3 recomputation — so a
+genuine V2 note is refused rather than accepted under the V2 formula.

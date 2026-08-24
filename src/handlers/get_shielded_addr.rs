@@ -123,7 +123,7 @@ pub fn handler_get_shielded_addr(
                 }
             }
 
-            encode_string_response(&orchard_address_str)
+            encode_string_response(&orchard_address_str)?
         }
     };
 

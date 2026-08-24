@@ -1,4 +1,8 @@
 #![no_std]
+#![feature(custom_test_frameworks)]
+#![cfg_attr(test, no_main)]
+#![cfg_attr(test, test_runner(ledger_device_sdk::testing::sdk_test_runner))]
+#![cfg_attr(test, reexport_test_harness_main = "test_main")]
 
 extern crate alloc;
 
@@ -10,6 +14,8 @@ mod poseidon;
 mod poseidon_fp;
 pub mod redpallas;
 mod sinsemilla;
+pub mod transparent_address;
+pub mod transparent_script;
 
 pub use crate::hashtocurve::diversify_hash_ledger;
 use crate::sinsemilla::sinsemilla_short_commit;
@@ -46,6 +52,11 @@ const ORCHARD_RIVK_INTERNAL_DOMAIN_SEPARATOR: u8 = 0x83;
 const ORCHARD_ESK_DOMAIN_SEPARATOR: u8 = 0x04;
 const ORCHARD_RCM_DOMAIN_SEPARATOR: u8 = 0x05;
 const ORCHARD_PSI_DOMAIN_SEPARATOR: u8 = 0x09;
+// ZIP 2005 §3.2.1 (Ironwood): V3 note plaintext version byte (lead byte of the enc_ciphertext
+// plaintext) and quantum-recoverable rcm domain separator. Callers name the version they expect,
+// so this one only selects the V3 commitment formula once a plaintext is in hand.
+pub(crate) const NOTE_VERSION_IRONWOOD: u8 = 0x03;
+const ORCHARD_QR_RCM_DOMAIN_SEPARATOR: u8 = 0x0B;
 const PRF_EXPAND_BYTES: usize = 64;
 const ORCHARD_VALUE_COMMITMENT_VALUE_BASEPOINT_BYTES: [u8; 32] = [
     0x67, 0x43, 0xf9, 0x3a, 0x6e, 0xbd, 0xa7, 0x2a, 0x8c, 0x7c, 0x5a, 0x2b, 0x7f, 0xa3, 0x04, 0xfe,
@@ -71,6 +82,7 @@ pub enum Error {
     InvalidDiversifyHashPoint,
     UnsupportedSinsemillaDomain,
     OutOfMemory,
+    Base58EncodeFailed,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -218,6 +230,21 @@ pub fn orchard_spend_nullifier_bytes(
     orchard::spend_nullifier_bytes(nk, raw_address, value, rho, rseed)
 }
 
+/// V3 (ZIP 2005 / Ironwood) variant of [`orchard_spend_nullifier_bytes`].
+///
+/// Use this when recomputing the nullifier of a V3 spend note inside a PCZT;
+/// V2 and V3 notes share the same Sinsemilla message structure but derive the
+/// commitment trapdoor (rcm) differently.
+pub fn orchard_spend_nullifier_bytes_v3(
+    nk: &[u8; 32],
+    raw_address: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    rho: &[u8; 32],
+    rseed: &[u8; 32],
+) -> Result<[u8; 32], Error> {
+    orchard::spend_nullifier_bytes_v3(nk, raw_address, value, rho, rseed)
+}
+
 pub fn orchard_note_commitment_bytes(
     raw_address: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
     value: u64,
@@ -225,6 +252,20 @@ pub fn orchard_note_commitment_bytes(
     rseed: &[u8; 32],
 ) -> Result<[u8; 32], Error> {
     orchard::note_commitment_bytes(raw_address, value, rho, rseed)
+}
+
+/// Computes the V3 (ZIP 2005 / Ironwood) note commitment for a dummy output.
+///
+/// Identical Sinsemilla message as V2 (`g_d ‖ pk_d ‖ value ‖ rho ‖ psi`) but the
+/// trapdoor uses the quantum-recoverable rcm derivation (domain separator 0x0B,
+/// fields g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi hashed alongside rseed).
+pub fn orchard_note_commitment_v3_bytes(
+    recipient: &[u8; orchard::ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    nullifier: &[u8; 32],
+    rseed: &[u8; 32],
+) -> Result<[u8; 32], Error> {
+    orchard::orchard_note_commitment_v3(recipient, value, nullifier, rseed)
 }
 
 /// Parses a compressed Pallas point encoding and rejects the identity.
@@ -286,6 +327,9 @@ pub fn orchard_ivk(ak: &[u8; 32], nk: &[u8; 32], rivk: &[u8; 32]) -> Result<[u8;
     Ok(ivk.to_repr())
 }
 
+// Isolated from its caller: `message` alone is 510 bytes and the builder below holds ~1020,
+// which must not coalesce into a frame that already carries note or ciphertext buffers.
+#[inline(never)]
 fn orchard_commit_ivk(
     ak: &pallas::Base,
     nk: &pallas::Base,
@@ -295,6 +339,7 @@ fn orchard_commit_ivk(
     sinsemilla_short_commit(ORCHARD_COMMIT_IVK_PERSONALIZATION, &message, rivk)
 }
 
+#[inline(never)]
 fn orchard_commit_ivk_message(
     ak: &pallas::Base,
     nk: &pallas::Base,
@@ -549,4 +594,18 @@ fn encode_pallas_point_bytes(x_be: &[u8; 32], sign: u32) -> [u8; 32] {
     bytes::reverse_copy(&mut x_le, x_be);
     x_le[31] |= ((sign & 1) as u8) << 7;
     x_le
+}
+
+// On-device unit-test entry point. The C runtime provided by the Ledger SDK
+// calls `sample_main`, which here simply runs the generated test harness.
+#[cfg(test)]
+#[unsafe(no_mangle)]
+fn sample_main() {
+    test_main();
+}
+
+#[cfg(test)]
+#[panic_handler]
+fn test_panic_handler(info: &core::panic::PanicInfo) -> ! {
+    ledger_device_sdk::testing::test_panic(info)
 }

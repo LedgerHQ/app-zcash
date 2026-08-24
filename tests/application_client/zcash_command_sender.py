@@ -17,6 +17,7 @@ from ragger.bip import (
 from application_client.pczt import (
     PCZT_DEFAULT_SEED_FINGERPRINT,
     PcztGlobal,
+    PcztIronwoodBundle,
     PcztOrchardBundle,
     PcztTransparentInput,
     PcztTransparentOutput,
@@ -33,6 +34,11 @@ MAGIC_TRUSTED_INPUT: int = 0x32
 MAX_APDU_LEN: int = 255
 
 CLA: int = 0xE0
+
+# P2PKH script of the UTXO that `forge_and_get_trusted_input` pays to, and therefore the script
+# `forge_tx_v5` spends. Exported so a test crafting the same spend on another signing path can
+# reuse it instead of restating the bytes.
+FORGED_UTXO_SCRIPT_PUBKEY: bytes = bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
 
 
 class P1(IntEnum):
@@ -97,6 +103,8 @@ class InsType(IntEnum):
     PCZT_SIGN_TRANSPARENT = 0x55
     PCZT_ORCHARD_ACTION = 0x56
     PCZT_SIGN_ORCHARD = 0x57
+    PCZT_IRONWOOD_ACTION = 0x58
+    PCZT_SIGN_IRONWOOD = 0x59
 
 
 class GetVkMode(IntEnum):
@@ -111,6 +119,7 @@ class GetShieldedAddressMode(IntEnum):
 
 class Errors(IntEnum):
     SW_DENY = 0x6985
+    SW_CONDITIONS_OF_USE_NOT_SATISFIED = 0x6986
     SW_WRONG_P1P2 = 0x6B00
     SW_INS_NOT_SUPPORTED = 0x6D00
     SW_CLA_NOT_SUPPORTED = 0x6E00
@@ -435,9 +444,12 @@ class ZcashCommandSender:
     def _build_pczt_header_and_global_payload(
         self,
         pczt_global: PcztGlobal,
+        pczt_version: int | None = None,
     ) -> bytes:
+        if pczt_version is None:
+            pczt_version = 2 if pczt_global.tx_version == 6 else 1
         payload = bytearray(b"PCZT")
-        payload.extend((1).to_bytes(4, byteorder="little"))
+        payload.extend(pczt_version.to_bytes(4, byteorder="little"))
         payload.extend(pczt_global.tx_version.to_bytes(4, byteorder="little"))
         payload.extend(pczt_global.version_group_id.to_bytes(4, byteorder="little"))
         payload.extend(pczt_global.consensus_branch_id.to_bytes(4, byteorder="little"))
@@ -623,6 +635,88 @@ class ZcashCommandSender:
 
         return packets
 
+    def _build_pczt_ironwood_action_packets(
+        self,
+        ironwood_bundle: PcztIronwoodBundle,
+        include_rcv: bool = True,
+    ) -> list[bytes]:
+        # pylint: disable=too-many-branches
+        packets = [
+            self._checked_pczt_packet(
+                write_varint(len(ironwood_bundle.actions)),
+                "ironwood actions header",
+            )
+        ]
+
+        if not ironwood_bundle.actions:
+            return packets
+
+        for action in ironwood_bundle.actions:
+            if len(action.alpha) != 32:
+                raise ValueError("Ironwood alpha must be 32 bytes")
+            if len(action.spend_recipient) != 43:
+                raise ValueError("Ironwood spend recipient must be 43 bytes")
+            if len(action.spend_rho) != 32:
+                raise ValueError("Ironwood spend rho must be 32 bytes")
+            if len(action.spend_rseed) != 32:
+                raise ValueError("Ironwood spend rseed must be 32 bytes")
+            if len(action.recipient) != 43:
+                raise ValueError("Ironwood recipient must be 43 bytes")
+            if include_rcv and action.rcv is None:
+                raise ValueError("Ironwood rcv is required")
+            if action.rcv is not None and len(action.rcv) != 32:
+                raise ValueError("Ironwood rcv must be 32 bytes")
+            if len(action.rseed) != 32:
+                raise ValueError("Ironwood output rseed must be 32 bytes")
+            if not 0 <= action.spend_value <= 0x7FFF_FFFF_FFFF_FFFF:
+                raise ValueError("Ironwood spend value out of range")
+            if not 0 <= action.value <= 0x7FFF_FFFF_FFFF_FFFF:
+                raise ValueError("Ironwood output value out of range")
+
+            packets.append(
+                self._checked_pczt_packet(
+                    action.cv_net
+                    + action.nullifier
+                    + action.rk
+                    + action.spend_recipient
+                    + action.spend_value.to_bytes(8, byteorder="little")
+                    + action.spend_rho
+                    + action.spend_rseed
+                    + action.alpha,
+                    "ironwood action spend small fields",
+                )
+            )
+            packets.append(self._build_pczt_zip32_derivation_packet(action.signing_path))
+            packets.append(
+                self._checked_pczt_packet(
+                    action.cmx + action.ephemeral_key,
+                    "ironwood action output small fields",
+                )
+            )
+            packets.extend(self._split_pczt_field_packet(write_varint(len(action.enc_ciphertext)) + action.enc_ciphertext))
+            packets.extend(self._split_pczt_field_packet(write_varint(len(action.out_ciphertext)) + action.out_ciphertext))
+            output_metadata = action.recipient + action.value.to_bytes(8, byteorder="little") + action.rseed
+            if include_rcv:
+                output_metadata += action.rcv
+            if action.note_plaintext_version is not None:
+                output_metadata += bytes([action.note_plaintext_version])
+            packets.append(
+                self._checked_pczt_packet(
+                    output_metadata,
+                    "ironwood action output metadata",
+                )
+            )
+
+        trailer = bytearray()
+        value_balance = ironwood_bundle.value_balance
+        trailer.extend(ironwood_bundle.flags.to_bytes(1, byteorder="little"))
+        trailer.extend(abs(value_balance).to_bytes(8, byteorder="little"))
+        trailer.extend((1 if value_balance < 0 else 0).to_bytes(1, byteorder="little"))
+        trailer.extend(ironwood_bundle.anchor)
+        packets.append(self._checked_pczt_packet(bytes(trailer), "ironwood bundle trailer"))
+
+        return packets
+
     def _pczt_chunk_p1(self, idx: int, total_chunks: int) -> P1:
         if idx == 0:
             return P1.P1_FIRST
@@ -638,13 +732,14 @@ class ZcashCommandSender:
     def _send_pczt_header(
         self,
         pczt_global: PcztGlobal,
+        pczt_version: int | None = None,
     ) -> None:
         self.backend.exchange(
             cla=CLA,
             ins=InsType.PCZT_HEADER,
             p1=P1.P1_FIRST,
             p2=P2.P2_NONE,
-            data=self._build_pczt_header_and_global_payload(pczt_global),
+            data=self._build_pczt_header_and_global_payload(pczt_global, pczt_version),
         )
 
     def _send_pczt_transparent_inputs(
@@ -708,6 +803,25 @@ class ZcashCommandSender:
                 data=packet,
             )
 
+    def _send_pczt_orchard_actions_sync(
+        self,
+        orchard_bundle: PcztOrchardBundle,
+        include_rcv: bool = True,
+    ) -> None:
+        packets = self._build_pczt_orchard_action_packets(
+            orchard_bundle,
+            include_rcv=include_rcv,
+        )
+
+        for idx, packet in enumerate(packets):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_ORCHARD_ACTION,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=P2.P2_NONE,
+                data=packet,
+            )
+
     @contextmanager
     def _send_pczt_orchard_actions(
         self,
@@ -732,6 +846,36 @@ class ZcashCommandSender:
         with self.backend.exchange_async(
             cla=CLA,
             ins=InsType.PCZT_ORCHARD_ACTION,
+            p1=self._pczt_chunk_p1(len(packets) - 1, len(packets)),
+            p2=self._pczt_chunk_p2(len(packets) - 1, len(packets), pczt_finished),
+            data=packets[-1],
+        ) as response:
+            yield response
+
+    @contextmanager
+    def _send_pczt_ironwood_actions(
+        self,
+        ironwood_bundle: PcztIronwoodBundle,
+        pczt_finished: bool = False,
+        include_rcv: bool = True,
+    ) -> Generator[None, None, None]:
+        packets = self._build_pczt_ironwood_action_packets(
+            ironwood_bundle,
+            include_rcv=include_rcv,
+        )
+
+        for idx, packet in enumerate(packets[:-1]):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_IRONWOOD_ACTION,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                data=packet,
+            )
+
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.PCZT_IRONWOOD_ACTION,
             p1=self._pczt_chunk_p1(len(packets) - 1, len(packets)),
             p2=self._pczt_chunk_p2(len(packets) - 1, len(packets), pczt_finished),
             data=packets[-1],
@@ -779,6 +923,18 @@ class ZcashCommandSender:
             data=b"",
         )
 
+    def pczt_sign_ironwood(
+        self,
+        action_index: int = 0,
+    ) -> RAPDU:
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_SIGN_IRONWOOD,
+            p1=P1.P1_FIRST,
+            p2=action_index,
+            data=b"",
+        )
+
     @contextmanager
     def send_pczt(
         self,
@@ -786,30 +942,47 @@ class ZcashCommandSender:
         transparent_inputs: list[PcztTransparentInput],
         transparent_outputs: list[PcztTransparentOutput],
         orchard_bundle: PcztOrchardBundle | None = None,
+        ironwood_bundle: PcztIronwoodBundle | None = None,
+        pczt_version: int | None = None,
     ) -> Generator[None, None, None]:
         self.trusted_inputs = []
         self.pczt_transparent_inputs = transparent_inputs
         self.pczt_transparent_outputs = transparent_outputs
 
-        self._send_pczt_header(pczt_global)
+        self._send_pczt_header(pczt_global, pczt_version)
         self._send_pczt_transparent_inputs(transparent_inputs)
         self._send_pczt_transparent_outputs_sync(
             self.pczt_transparent_outputs,
         )
 
-        if orchard_bundle is None:
-            orchard_bundle = PcztOrchardBundle(
-                actions=[],
-                flags=0,
-                value_balance=0,
-                anchor=bytes(32),
-            )
-
-        with self._send_pczt_orchard_actions(
-            orchard_bundle,
-            pczt_finished=True,
-        ) as response:
-            yield response
+        if ironwood_bundle is None:
+            if orchard_bundle is None:
+                orchard_bundle = PcztOrchardBundle(
+                    actions=[],
+                    flags=0,
+                    value_balance=0,
+                    anchor=bytes(32),
+                )
+            with self._send_pczt_orchard_actions(
+                orchard_bundle,
+                pczt_finished=True,
+            ) as response:
+                yield response
+        else:
+            if orchard_bundle is None:
+                # V6 Ironwood: advance the state machine through OrchardActionsDone.
+                orchard_bundle = PcztOrchardBundle(
+                    actions=[],
+                    flags=0,
+                    value_balance=0,
+                    anchor=bytes(32),
+                )
+            self._send_pczt_orchard_actions_sync(orchard_bundle)
+            with self._send_pczt_ironwood_actions(
+                ironwood_bundle,
+                pczt_finished=True,
+            ) as response:
+                yield response
 
     def hash_sign(self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01) -> RAPDU:
         # Send extra header data
@@ -865,7 +1038,7 @@ class ZcashCommandSender:
         locktime = params.locktime
         expiry = params.expiry
 
-        script_pubkey_in = bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
+        script_pubkey_in = FORGED_UTXO_SCRIPT_PUBKEY
         sequence = bytes.fromhex("00000000")
 
         script_pubkey_out = bytes.fromhex("76a914") + bytes.fromhex(params.recipient_publickey) + bytes.fromhex("88ac")

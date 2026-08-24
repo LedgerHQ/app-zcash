@@ -1,17 +1,23 @@
+use crate::consts::{OVERWINTERED_FLAG, V6_TX_VERSION, V6_VERSION_GROUP_ID};
 use crate::parser::personalization::{
     ZCASH_HEADERS_HASH_PERSONALIZATION, ZCASH_SAPLING_HASH_PERSONALIZATION,
     ZCASH_TRANSPARENT_HASH_PERSONALIZATION, ZCASH_TRANSPARENT_INPUT_HASH_PERSONALIZATION,
     ZCASH_TX_PERSONALIZATION_PREFIX,
 };
+use crate::parser::personalization::{
+    ZCASH_IRONWOOD_HASH_PERSONALIZATION, ZCASH_ORCHARD_HASH_PERSONALIZATION_V6,
+};
 use corez::io::Write;
 use ledger_device_sdk::hash::{HashInit as _, blake2::Blake2b_256, sha2::Sha2_256};
 use ledger_device_sdk::log::{debug, info};
 use zcash_encoding::CompactSize;
+use zcash_protocol::consensus::BranchId;
 
 use crate::{
     consts::SIGHASH_ALL,
     parser::{
-        LegacyParserCtx, ParserError, ZCASH_ORCHARD_HASH_PERSONALIZATION, finalize_and_log_hash, ok,
+        LegacyParserCtx, ParserError, ZCASH_ORCHARD_V5_HASH_PERSONALIZATION, finalize_and_log_hash,
+        ok,
     },
     tx::{SupportedTxVersion, TxInfo},
     utils::{
@@ -20,85 +26,116 @@ use crate::{
     },
 };
 
-pub fn tx_id(ctx: &mut LegacyParserCtx<'_>) -> Result<(), ParserError> {
-    let tx_version = ctx
-        .tx_info
+/// Writes the version prefix that `header_digest` commits to. A v6 header encodes the
+/// overwintered flag and the version group id separately from the version number
+/// (ZIP-244 §T.1 + ZIP-229); v5 uses the `TxVersion` encoding.
+fn write_header_version(
+    tx_info: &TxInfo,
+    hasher: &mut Blake2b_256,
+    is_v6: bool,
+) -> Result<(), ParserError> {
+    if is_v6 {
+        ok!(hasher.update(&(V6_TX_VERSION | OVERWINTERED_FLAG).to_le_bytes()));
+        ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
+        return Ok(());
+    }
+
+    let _ = is_v6;
+    let tx_version = tx_info
         .tx_version
         .expect("tx_version should be set at this point");
+    ok!(tx_version.write(&mut hasher.as_writer()));
 
+    Ok(())
+}
+
+/// The shared v5 txid digest tree. A v6 transaction reuses it verbatim and only appends
+/// the Ironwood bundle digest (ZIP-229).
+fn tx_id_v5_v6(
+    ctx: &mut LegacyParserCtx<'_>,
+    branch_id: BranchId,
+    is_v6: bool,
+) -> Result<(), ParserError> {
+    let prevouts_hash = finalize_and_log_hash(&mut ctx.hashers.prevouts_hasher, "Prevouts hash")?;
+
+    let sequence_hash = finalize_and_log_hash(&mut ctx.hashers.sequence_hasher, "Sequence hash")?;
+
+    let outputs_hash = finalize_and_log_hash(&mut ctx.hashers.outputs_hasher, "Outputs hash")?;
+
+    let header_hash = {
+        let mut hash = [0u8; 32];
+
+        let mut hasher = Blake2b_256::default();
+        ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
+
+        write_header_version(ctx.tx_info, &mut hasher, is_v6)?;
+
+        ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+
+        ok!(hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
+        ok!(hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
+
+        ok!(hasher.finalize(&mut hash));
+        hash
+    };
+    debug!("Header hash: {}", HexSlice(&header_hash));
+
+    let transparent_hash = {
+        let mut hash = [0u8; 32];
+
+        let mut hasher = Blake2b_256::default();
+        ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
+
+        ok!(hasher.update(&prevouts_hash));
+        ok!(hasher.update(&sequence_hash));
+        ok!(hasher.update(&outputs_hash));
+
+        ok!(hasher.finalize(&mut hash));
+        hash
+    };
+    debug!("Transparent hash: {}", HexSlice(&transparent_hash));
+
+    let sapling_hash = finalize_and_log_hash(&mut ctx.hashers.sapling_hasher, "Sapling hash")?;
+
+    let orchard_hash = finalize_and_log_hash(&mut ctx.hashers.orchard_hasher, "Orchard hash")?;
+
+    let mut personalization = [0u8; 16];
+    personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
+    personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
+
+    let mut hasher = Blake2b_256::default();
+    ok!(hasher.init_with_perso(&personalization));
+
+    ok!(hasher.update(&header_hash));
+    ok!(hasher.update(&transparent_hash));
+    ok!(hasher.update(&sapling_hash));
+    ok!(hasher.update(&orchard_hash));
+
+    if is_v6 {
+        let ironwood_hash =
+            finalize_and_log_hash(&mut ctx.hashers.ironwood_hasher, "Ironwood hash")?;
+        ok!(hasher.update(&ironwood_hash));
+    }
+
+    ok!(hasher.finalize(&mut ctx.trusted_input_info.tx_id));
+
+    debug!(
+        "Transaction ID hash: {}",
+        HexSlice(&ctx.trusted_input_info.tx_id)
+    );
+
+    Ok(())
+}
+
+pub fn tx_id(ctx: &mut LegacyParserCtx<'_>) -> Result<(), ParserError> {
     let branch_id = ctx
         .tx_info
         .branch_id
         .expect("branch_id should be set at this point");
 
     match ctx.tx_info.tx_version() {
-        SupportedTxVersion::V5 => {
-            let prevouts_hash =
-                finalize_and_log_hash(&mut ctx.hashers.prevouts_hasher, "Prevouts hash")?;
-
-            let sequence_hash =
-                finalize_and_log_hash(&mut ctx.hashers.sequence_hasher, "Sequence hash")?;
-
-            let outputs_hash =
-                finalize_and_log_hash(&mut ctx.hashers.outputs_hasher, "Outputs hash")?;
-
-            let header_hash = {
-                let mut hash = [0u8; 32];
-
-                let mut hasher = Blake2b_256::default();
-                ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-
-                ok!(tx_version.write(&mut hasher.as_writer()));
-
-                ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
-
-                ok!(hasher.update(&ctx.tx_info.locktime.to_le_bytes()));
-                ok!(hasher.update(&ctx.tx_info.expiry_height.to_le_bytes()));
-
-                ok!(hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Header hash: {}", HexSlice(&header_hash));
-
-            let transparent_hash = {
-                let mut hash = [0u8; 32];
-
-                let mut hasher = Blake2b_256::default();
-                ok!(hasher.init_with_perso(ZCASH_TRANSPARENT_HASH_PERSONALIZATION));
-
-                ok!(hasher.update(&prevouts_hash));
-                ok!(hasher.update(&sequence_hash));
-                ok!(hasher.update(&outputs_hash));
-
-                ok!(hasher.finalize(&mut hash));
-                hash
-            };
-            debug!("Transparent hash: {}", HexSlice(&transparent_hash));
-
-            let sapling_hash =
-                finalize_and_log_hash(&mut ctx.hashers.sapling_hasher, "Sapling hash")?;
-
-            let orchard_hash =
-                finalize_and_log_hash(&mut ctx.hashers.orchard_hasher, "Orchard hash")?;
-
-            let mut personalization = [0u8; 16];
-            personalization[..12].copy_from_slice(ZCASH_TX_PERSONALIZATION_PREFIX);
-            personalization[12..].copy_from_slice(&u32::from(branch_id).to_le_bytes());
-
-            let mut hasher = Blake2b_256::default();
-            ok!(hasher.init_with_perso(&personalization));
-
-            ok!(hasher.update(&header_hash));
-            ok!(hasher.update(&transparent_hash));
-            ok!(hasher.update(&sapling_hash));
-            ok!(hasher.update(&orchard_hash));
-
-            ok!(hasher.finalize(&mut ctx.trusted_input_info.tx_id));
-
-            debug!(
-                "Transaction ID hash: {}",
-                HexSlice(&ctx.trusted_input_info.tx_id)
-            );
+        version @ (SupportedTxVersion::V5 | SupportedTxVersion::V6) => {
+            tx_id_v5_v6(ctx, branch_id, matches!(version, SupportedTxVersion::V6))?
         }
         SupportedTxVersion::V4 => {
             let mut first_round_hash = [0u8; 32];
@@ -258,8 +295,14 @@ fn compute_header_digest(tx_info: &mut TxInfo) -> Result<(), ParserError> {
 
     let mut hasher = Blake2b_256::default();
     ok!(hasher.init_with_perso(ZCASH_HEADERS_HASH_PERSONALIZATION));
-    ok!(tx_version.write(&mut hasher.as_writer()));
-    ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    if tx_info.is_v6 {
+        ok!(hasher.update(&(V6_TX_VERSION | OVERWINTERED_FLAG).to_le_bytes()));
+        ok!(hasher.update(&V6_VERSION_GROUP_ID.to_le_bytes()));
+        ok!(hasher.update(&tx_info.branch_id_raw.to_le_bytes()));
+    } else {
+        ok!(tx_version.write(&mut hasher.as_writer()));
+        ok!(hasher.update(&u32::from(branch_id).to_le_bytes()));
+    }
     ok!(hasher.update(&tx_info.locktime.to_le_bytes()));
     ok!(hasher.update(&tx_info.expiry_height.to_le_bytes()));
     ok!(hasher.finalize(&mut tx_info.header_digest));
@@ -311,7 +354,12 @@ fn finalize_signature_hash_from_transparent_digest(
 
     let sapling_digest = empty_digest(ZCASH_SAPLING_HASH_PERSONALIZATION)?;
     let orchard_digest = if tx_info.orchard_digest == [0; 32] {
-        empty_digest(ZCASH_ORCHARD_HASH_PERSONALIZATION)?
+        let perso = if tx_info.is_v6 {
+            ZCASH_ORCHARD_HASH_PERSONALIZATION_V6
+        } else {
+            ZCASH_ORCHARD_V5_HASH_PERSONALIZATION
+        };
+        empty_digest(perso)?
     } else {
         tx_info.orchard_digest
     };
@@ -327,6 +375,20 @@ fn finalize_signature_hash_from_transparent_digest(
     ok!(hasher.update(transparent_digest));
     ok!(hasher.update(&sapling_digest));
     ok!(hasher.update(&orchard_digest));
+    // ZIP 229: `ironwood_digest_v6` is a child of `txid_digest_v6` for every V6 transaction, taking
+    // the empty-input value when the bundle has no actions.
+    if tx_info.is_v6 {
+        // The bundle flag says whether a digest was computed; a zero digest would say it by
+        // coincidence. Signing is gated on the parser being finished, so a set flag here means
+        // `finish_ironwood_anchor` has already finalized the digest.
+        let ironwood_digest = if tx_info.has_ironwood_bundle {
+            tx_info.ironwood_digest
+        } else {
+            empty_digest(ZCASH_IRONWOOD_HASH_PERSONALIZATION)?
+        };
+        debug!("Ironwood hash: {}", HexSlice(&ironwood_digest));
+        ok!(hasher.update(&ironwood_digest));
+    }
     ok!(hasher.finalize(&mut tx_info.signature_digest));
 
     debug!("Signature hash: {}", HexSlice(&tx_info.signature_digest));

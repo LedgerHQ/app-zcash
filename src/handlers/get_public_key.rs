@@ -17,6 +17,7 @@
 
 use crate::utils::HexSlice;
 use crate::utils::bip32_path::Bip32Path;
+use crate::utils::{Bip44CheckMode, check_bip44_compliance};
 use crate::{
     app_ui::address::ui_display_pk,
     utils::{
@@ -27,7 +28,7 @@ use crate::{
 
 use crate::AppSW;
 use ledger_device_sdk::io::Comm;
-use ledger_device_sdk::log::debug;
+use ledger_device_sdk::log::{debug, error};
 
 /// Handler for GET_PUBLIC_KEY APDU command.
 ///
@@ -53,6 +54,13 @@ pub fn handler_get_public_key(comm: &mut Comm, display: bool) -> Result<(), AppS
         .map_err(|_| AppSW::WrongApduLength)?
         .try_into()?;
     debug!("path {:?}", bip32_path);
+
+    // Answers with no screen when `display` is false, so the app restricts its own prefixes and
+    // reports an out-of-prefix request as a status word.
+    if !check_bip44_compliance(&bip32_path, Bip44CheckMode::PrefixOnly) {
+        error!("Public key path outside the app's derivation prefixes");
+        return Err(AppSW::IncorrectData);
+    }
 
     let extended_public_key = ExtendedPublicKey::try_from(&bip32_path)?;
 

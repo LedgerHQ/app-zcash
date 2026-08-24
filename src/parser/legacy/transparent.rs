@@ -2,6 +2,26 @@ use crate::tx::SupportedTxVersion;
 
 use super::*;
 
+/// Ceiling on a host-declared shielded component count in the legacy parser.
+///
+/// This parser digests an arbitrary previous transaction to compute a trusted input, so it has to
+/// tolerate what the chain actually carries — far more than any wallet builds. A Zcash block cannot
+/// hold anywhere near this many shielded components, so the bound refuses only counts whose purpose
+/// is to make the parser loop, and keeps `count * ORCHARD_MEMO_SIZE` inside a 32-bit `usize`.
+const MAX_LEGACY_SHIELDED_COUNT: usize = 10_000;
+
+fn read_bounded_shielded_count(
+    reader: &mut ByteReader<'_>,
+    what: &'static str,
+) -> Result<usize, ParserError> {
+    let count: usize = ok!(CompactSize::read_t(&mut *reader));
+    if count > MAX_LEGACY_SHIELDED_COUNT {
+        error!("Too many {} components: {}", what, count);
+        return Err(ParserError::from_str("Too many shielded components"));
+    }
+    Ok(count)
+}
+
 impl LegacyParser {
     pub fn parse_input(
         &mut self,
@@ -12,6 +32,9 @@ impl LegacyParser {
 
         match ctx.tx_info.tx_version() {
             SupportedTxVersion::V5 => {
+                ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
+            }
+            SupportedTxVersion::V6 => {
                 ok!(prevout.write(ctx.hashers.prevouts_hasher.as_writer()));
             }
             SupportedTxVersion::V4 => {
@@ -181,6 +204,9 @@ impl LegacyParser {
             SupportedTxVersion::V5 => {
                 ok!(script_sig.write(ctx.hashers.scripts_hasher.as_writer()));
             }
+            SupportedTxVersion::V6 => {
+                ok!(script_sig.write(ctx.hashers.scripts_hasher.as_writer()));
+            }
             SupportedTxVersion::V4 => {
                 ok!(script_sig.write(ctx.hashers.v4_tx_hasher.as_writer()));
             }
@@ -197,6 +223,9 @@ impl LegacyParser {
 
         match ctx.tx_info.tx_version() {
             SupportedTxVersion::V5 => {
+                ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
+            }
+            SupportedTxVersion::V6 => {
                 ok!(ctx.hashers.sequence_hasher.update(&sequence.to_le_bytes()));
             }
             SupportedTxVersion::V4 => {
@@ -281,13 +310,18 @@ impl LegacyParser {
             Zatoshis::from_nonnegative_i64_le_bytes(tmp)
         });
 
-        if ctx
-            .trusted_input_info
-            .input_idx
-            .expect("should be set at this point")
-            == self.output_parsed_count as u32
-        {
+        // Set by the first packet of the trusted-input flow; absent means this state was reached
+        // without one.
+        let requested_idx = ok!(
+            ctx.trusted_input_info.input_idx.ok_or(()),
+            "Trusted input index not set"
+        );
+
+        if requested_idx == self.output_parsed_count as u32 {
             ctx.trusted_input_info.amount = amount.into_u64();
+            // Only a matched index marks the input processed: the handler refuses an index the
+            // transaction does not have rather than sealing a zero amount under the HMAC.
+            ctx.trusted_input_info.is_input_processed = true;
             info!(
                 "Found amount for trusted input: {}",
                 ctx.trusted_input_info.amount
@@ -296,6 +330,9 @@ impl LegacyParser {
 
         match ctx.tx_info.tx_version() {
             SupportedTxVersion::V5 => {
+                ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
+            }
+            SupportedTxVersion::V6 => {
                 ok!(ctx.hashers.outputs_hasher.update(&amount.to_i64_le_bytes()));
             }
             SupportedTxVersion::V4 => {
@@ -356,14 +393,16 @@ impl LegacyParser {
         // NOTE: take/deallocate self.script_bytes here
         script_pubkey.0.0 = mem::take(&mut self.script_bytes);
 
-        match ctx.tx_info.tx_version.expect("should be set at this point") {
-            TxVersion::V5 => {
+        match ctx.tx_info.tx_version() {
+            SupportedTxVersion::V5 => {
                 ok!(script_pubkey.write(&mut ctx.hashers.outputs_hasher.as_writer()));
             }
-            TxVersion::V4 => {
+            SupportedTxVersion::V6 => {
+                ok!(script_pubkey.write(&mut ctx.hashers.outputs_hasher.as_writer()));
+            }
+            SupportedTxVersion::V4 => {
                 ok!(script_pubkey.write(&mut ctx.hashers.v4_tx_hasher.as_writer()));
             }
-            _ => unreachable!("we should only support V4 and V5 at this point"),
         }
 
         info!("Output script pubkey: {:?}", script_pubkey);
@@ -387,26 +426,37 @@ impl LegacyParser {
     ) -> Result<(), ParserError> {
         info!("Output hashing done");
 
-        self.sapling_spend_count = ok!(CompactSize::read_t(&mut *reader));
-        self.sapling_output_count = ok!(CompactSize::read_t(&mut *reader));
-        self.orchard_action_count = ok!(CompactSize::read_t(&mut *reader));
+        self.sapling_spend_count = read_bounded_shielded_count(reader, "sapling spend")?;
+        self.sapling_output_count = read_bounded_shielded_count(reader, "sapling output")?;
+        self.orchard_action_count = read_bounded_shielded_count(reader, "orchard action")?;
+        // ZIP-229 adds a fourth pool: a v6 transaction announces its Ironwood action count
+        // even when the Orchard one is zero.
+        if let SupportedTxVersion::V6 = ctx.tx_info.tx_version() {
+            self.ironwood_action_count = read_bounded_shielded_count(reader, "ironwood action")?;
+        }
 
         info!("Sapling spend remaining: {}", self.sapling_spend_count);
         info!("Sapling output count: {}", self.sapling_output_count);
         info!("Orchard action count: {}", self.orchard_action_count);
+        info!("Ironwood action count: {}", self.ironwood_action_count);
 
-        self.state = if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {
-            LegacyParserState::ProcessSapling
-        } else if self.orchard_action_count > 0 {
-            ok!(ctx
-                .hashers
-                .tx_compact_hasher
-                .init_with_perso(ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION));
-            LegacyParserState::ProcessOrchardCompact
-        } else {
-            LegacyParserState::ProcessExtra
-        };
+        // A V4 txid is SHA-256d over the whole V4 serialisation, shielded fields included, yet only
+        // the transparent part reaches `v4_tx_hasher`.
+        if let SupportedTxVersion::V4 = ctx.tx_info.tx_version()
+            && (self.sapling_spend_count > 0
+                || self.sapling_output_count > 0
+                || self.orchard_action_count > 0)
+        {
+            return Err(ParserError::from_str(
+                "V4 transaction with shielded components is not supported",
+            ));
+        }
 
-        Ok(())
+        if self.sapling_spend_count > 0 || self.sapling_output_count > 0 {
+            self.state = LegacyParserState::ProcessSapling;
+            return Ok(());
+        }
+
+        self.enter_next_action_bundle(ctx, None)
     }
 }

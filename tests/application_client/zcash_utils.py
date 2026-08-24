@@ -8,6 +8,10 @@ UINT64_MAX: int = 2**64 - 1
 UINT32_MAX: int = 2**32 - 1
 UINT16_MAX: int = 2**16 - 1
 
+# Version prefix of a mainnet transparent P2PKH ("t1...") address.
+T_ADDRESS_VERSION_BYTES: bytes = b"\x1c\xb8"
+PUBKEY_HASH_SIZE: int = 20
+
 try:
 
     def _ripemd160():
@@ -105,8 +109,7 @@ def t_address_from_pubkey(pub_key: bytes) -> str:
     ripemd160_hash = ripemd160(sha256_hash)
 
     # Prepend the network byte (0x1C, 0xB8 for mainnet)
-    network_bytes = b"\x1c\xb8"  # for t-addresses
-    addr_payload = network_bytes + ripemd160_hash
+    addr_payload = T_ADDRESS_VERSION_BYTES + ripemd160_hash
     # Calculate the checksum
     checksum = hashlib.sha256(hashlib.sha256(addr_payload).digest()).digest()[:4]
     # Construct the final address bytes
@@ -115,3 +118,20 @@ def t_address_from_pubkey(pub_key: bytes) -> str:
     addr = base58.b58encode(addr)
 
     return addr.decode("ascii")
+
+
+def pubkey_hash_from_t_address(address: str) -> bytes:
+    """Inverse of `t_address_from_pubkey`: recover the 20-byte public key hash a t-address pays to.
+
+    Lets a test derive the P2PKH script of an arbitrary destination instead of carrying a
+    hardcoded address-to-hash table that has to be kept in sync by hand.
+    """
+    payload = base58.b58decode_check(address)
+
+    version, pubkey_hash = payload[: len(T_ADDRESS_VERSION_BYTES)], payload[len(T_ADDRESS_VERSION_BYTES) :]
+    if version != T_ADDRESS_VERSION_BYTES:
+        raise ValueError(f"{address} is not a mainnet transparent P2PKH address (version {version.hex()})")
+    if len(pubkey_hash) != PUBKEY_HASH_SIZE:
+        raise ValueError(f"{address} does not carry a {PUBKEY_HASH_SIZE}-byte public key hash")
+
+    return pubkey_hash

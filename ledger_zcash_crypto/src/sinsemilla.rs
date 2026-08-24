@@ -1,7 +1,12 @@
 use ff::PrimeField;
 use ledger_device_sdk::ecc::{CurvesId, math::EcPoint};
-use pasta_curves::pallas;
+use pasta_curves::{
+    arithmetic::CurveAffine,
+    group::{Curve, Group},
+    pallas,
+};
 
+use crate::redpallas::{point_from_sdk_point, projective_point};
 use crate::{Error, bytes::reverse_copy};
 
 /// Number of bits of each message piece in `SinsemillaHashToPoint`.
@@ -14417,36 +14422,50 @@ pub fn sinsemilla_short_commit(
     debug_assert!(message.len() <= K * C);
 
     let commitment = sinsemilla_commit(domain, message, randomness)?;
-    extract_p_bottom(commitment)
+    Ok(extract_x_from_pallas_point(commitment))
 }
 
 pub(crate) fn sinsemilla_short_commit_point(
     domain: &str,
     message: &[bool],
     randomness: &pallas::Scalar,
-) -> Result<Option<EcPoint>, Error> {
+) -> Result<Option<pallas::Point>, Error> {
     debug_assert!(message.len() <= K * C);
 
     sinsemilla_commit(domain, message, randomness)
 }
 
+#[inline(never)]
 fn sinsemilla_commit(
     domain: &str,
     message: &[bool],
     randomness: &pallas::Scalar,
-) -> Result<Option<EcPoint>, Error> {
+) -> Result<Option<pallas::Point>, Error> {
     let (q_generator, r_generator) = commit_domain_generators(domain)?;
-    let q = point_from_affine_coordinates(&q_generator)?;
-    let hash = hash_to_point(&q, message)?;
+
+    // Convert q to a pure-Rust pallas::Point immediately after creation so that
+    // the EcPoint (2 Bn slots) is freed before the hash loop begins. The loop
+    // accumulator then uses zero Bn slots for all its additions.
+    let q: pallas::Point = {
+        let q_ec = point_from_affine_coordinates(&q_generator)?;
+        point_from_sdk_point(&q_ec)?
+    };
+
+    let hash = hash_to_point(q, message);
 
     let Some(hash) = hash else {
         return Ok(None);
     };
 
-    let mut blinding = point_from_affine_coordinates(&r_generator)?;
-    blinding.rnd_scalarmul(&scalar_bytes_be(randomness))?;
+    // The blinding EcPoint is the only SDK allocation active after the loop.
+    // It is converted and dropped before the final addition, keeping peak usage at 2 slots.
+    let blinding: pallas::Point = {
+        let mut blinding_ec = point_from_affine_coordinates(&r_generator)?;
+        blinding_ec.rnd_scalarmul(&scalar_bytes_be(randomness))?;
+        point_from_sdk_point(&blinding_ec)?
+    };
 
-    Ok(Some(point_add(&hash, &blinding)?))
+    Ok(Some(hash + blinding))
 }
 
 fn commit_domain_generators(domain: &str) -> Result<(AffineCoordinates, AffineCoordinates), Error> {
@@ -14461,20 +14480,48 @@ fn commit_domain_generators(domain: &str) -> Result<(AffineCoordinates, AffineCo
     }
 }
 
-fn hash_to_point(q: &EcPoint, message: &[bool]) -> Result<Option<EcPoint>, Error> {
-    let mut acc = Some(clone_point(q)?);
+// The pure-Rust point helpers below are each `#[inline(never)]`. Inlined, their
+// `pallas::Point` and `pallas::Base` temporaries all live in this one frame at
+// once — enough to overflow the Nano X stack on the longest message. Kept as
+// separate frames, the depth is the largest of them rather than their sum.
+#[inline(never)]
+fn hash_to_point(q: pallas::Point, message: &[bool]) -> Option<pallas::Point> {
+    // All additions use pure-Rust pallas::Point arithmetic: zero Bn slots in the loop.
+    let mut acc: Option<pallas::Point> = Some(q);
     let chunks = message.len().saturating_add(K - 1) / K;
 
     for chunk_index in 0..chunks {
         let start = chunk_index * K;
         let end = core::cmp::min(start + K, message.len());
-        let s_chunk = point_from_s_index(chunk_to_index(&message[start..end]))?;
 
-        let step = incomplete_add(acc.as_ref(), Some(&s_chunk))?;
-        acc = incomplete_add(step.as_ref(), acc.as_ref())?;
+        let acc_val = acc?;
+        let s = pasta_point_from_s_index(chunk_to_index(&message[start..end]));
+        let step = pallas_incomplete_add(acc_val, s)?;
+        acc = pallas_incomplete_add(step, acc_val);
     }
 
-    Ok(acc)
+    acc
+}
+
+// Converts a SINSEMILLA_S table entry (already a pallas::Base affine coordinate pair)
+// into a projective pallas::Point. Uses zero Bn slots — pure Rust only.
+#[inline(never)]
+fn pasta_point_from_s_index(index: usize) -> pallas::Point {
+    let (x, y) = SINSEMILLA_S[index];
+    projective_point(x, y, pallas::Base::one())
+}
+
+// Sinsemilla incomplete addition: returns None for the identity or exceptional cases
+// (equal or negated inputs), which signal a hash collision as required by the spec.
+#[inline(never)]
+fn pallas_incomplete_add(lhs: pallas::Point, rhs: pallas::Point) -> Option<pallas::Point> {
+    if bool::from(lhs.is_identity()) || bool::from(rhs.is_identity()) {
+        return None;
+    }
+    if lhs == rhs || lhs == -rhs {
+        return None;
+    }
+    Some(lhs + rhs)
 }
 
 fn chunk_to_index(chunk: &[bool]) -> usize {
@@ -14489,47 +14536,27 @@ fn lebs2ip_k(bits: &[bool; K]) -> u32 {
         .fold(0u32, |acc, (i, bit)| acc + if *bit { 1 << i } else { 0 })
 }
 
-fn incomplete_add(lhs: Option<&EcPoint>, rhs: Option<&EcPoint>) -> Result<Option<EcPoint>, Error> {
-    let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
-        return Ok(None);
-    };
-
-    if lhs.is_at_infinity()? || rhs.is_at_infinity()? {
-        return Ok(None);
+// Extracts the x-coordinate (ExtractP) from an optional pallas::Point.
+// Returns Some(Base::zero()) for the identity point, None when the input is None.
+// `to_affine` inverts a field element — an addition chain with many temporaries.
+// Out of line, that depth is not added to the caller's own frame.
+#[inline(never)]
+fn extract_x_from_pallas_point(point: Option<pallas::Point>) -> Option<pallas::Base> {
+    let point = point?;
+    if bool::from(point.is_identity()) {
+        return Some(pallas::Base::zero());
     }
-
-    if lhs.cmp(rhs)? {
-        return Ok(None);
-    }
-
-    let mut neg_rhs = clone_point(rhs)?;
-    neg_rhs.neg()?;
-    if lhs.cmp(&neg_rhs)? {
-        return Ok(None);
-    }
-
-    Ok(Some(point_add(lhs, rhs)?))
+    let affine = point.to_affine();
+    Option::from(affine.coordinates().map(|c| *c.x()))
 }
 
-fn extract_p_bottom(point: Option<EcPoint>) -> Result<Option<pallas::Base>, Error> {
-    let Some(point) = point else {
-        return Ok(None);
-    };
-
-    extract_p(&point).map(Some)
-}
-
-pub(crate) fn extract_p(point: &EcPoint) -> Result<pallas::Base, Error> {
-    if point.is_at_infinity()? {
-        return Ok(pallas::Base::zero());
+#[inline(never)]
+pub(crate) fn extract_p_pallas(point: &pallas::Point) -> pallas::Base {
+    if bool::from(point.is_identity()) {
+        return pallas::Base::zero();
     }
-
-    point_x(point)
-}
-
-fn point_from_s_index(index: usize) -> Result<EcPoint, Error> {
-    let (x, y) = &SINSEMILLA_S[index];
-    point_from_affine_repr(&x.to_repr(), &y.to_repr())
+    let affine = point.to_affine();
+    Option::from(affine.coordinates().map(|c| *c.x())).unwrap_or_else(pallas::Base::zero)
 }
 
 fn point_from_affine_coordinates(coords: &AffineCoordinates) -> Result<EcPoint, Error> {
@@ -14547,35 +14574,120 @@ fn point_from_affine_repr(x_le: &[u8; 32], y_le: &[u8; 32]) -> Result<EcPoint, E
     Ok(point)
 }
 
-fn clone_point(point: &EcPoint) -> Result<EcPoint, Error> {
-    let mut x_be = [0u8; 32];
-    let mut y_be = [0u8; 32];
-    point.export(&mut x_be, &mut y_be)?;
-
-    let mut clone = EcPoint::new(CurvesId::Pallas)?;
-    clone.init(&x_be, &y_be)?;
-    Ok(clone)
-}
-
-fn point_add(lhs: &EcPoint, rhs: &EcPoint) -> Result<EcPoint, Error> {
-    let mut sum = EcPoint::new(CurvesId::Pallas)?;
-    sum.add(lhs, rhs)?;
-    Ok(sum)
-}
-
-fn point_x(point: &EcPoint) -> Result<pallas::Base, Error> {
-    let mut x_be = [0u8; 32];
-    let mut y_be = [0u8; 32];
-    point.export(&mut x_be, &mut y_be)?;
-
-    let mut x_le = [0u8; 32];
-    reverse_copy(&mut x_le, &x_be);
-    crate::pallas_base_from_repr(x_le)
-}
-
 fn scalar_bytes_be(scalar: &pallas::Scalar) -> [u8; 32] {
     let repr_le = scalar.to_repr();
     let mut repr_be = [0u8; 32];
     reverse_copy(&mut repr_be, &repr_le);
     repr_be
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ledger_device_sdk::testing::TestType;
+
+    /// Longest message `sinsemilla_short_commit` accepts, so `hash_to_point`
+    /// runs its maximum number of incomplete additions. Kept in rodata: a
+    /// `[bool; K * C]` local would dominate the test's own stack frame.
+    const LONGEST_MESSAGE: [bool; K * C] = {
+        let mut message = [false; K * C];
+        let mut i = 0;
+        while i < K * C {
+            message[i] = i % 3 == 0 || i % 7 == 0;
+            i += 1;
+        }
+        message
+    };
+
+    fn commit_longest_message() -> Result<Option<pallas::Base>, Error> {
+        sinsemilla_short_commit(
+            ORCHARD_COMMIT_IVK_PERSONALIZATION,
+            &LONGEST_MESSAGE,
+            &pallas::Scalar::from(0x5a5a_5a5au64),
+        )
+    }
+
+    /// Sinsemilla must commit identically whether or not the caller already holds
+    /// SDK points — true only while the hash loop stays pure Rust and allocates
+    /// no `cx_bn` slot of its own. Rewriting the loop with `EcPoint` arithmetic
+    /// also has a cost this test cannot see: it still passes under Speculos,
+    /// whose `cx_` calls are in-process, while on hardware every one of the
+    /// loop's incomplete additions (up to `C`, over several commitments per
+    /// Orchard action) turns into a chain of secure-element calls, and the
+    /// action then runs past the host's APDU timeout — surfacing as a device
+    /// disconnection rather than a status word.
+    #[test_case]
+    const COMMIT_IS_STABLE_UNDER_BN_PRESSURE: TestType = TestType {
+        modname: module_path!(),
+        name: "commit_is_stable_under_bn_pressure",
+        f: || {
+            let expected = commit_longest_message().map_err(|_| ())?.ok_or(())?;
+
+            // Mirrors a caller that reaches Sinsemilla with points of its own alive,
+            // as the nullifier and cv_net derivations do.
+            let _held = [
+                point_from_affine_coordinates(&Q_COMMIT_IVK_M_GENERATOR).map_err(|_| ())?,
+                point_from_affine_coordinates(&R_COMMIT_IVK_GENERATOR).map_err(|_| ())?,
+            ];
+
+            let under_pressure = commit_longest_message().map_err(|_| ())?.ok_or(())?;
+            if under_pressure != expected {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// `sinsemilla_short_commit` must return exactly the x-coordinate of the point
+    /// `sinsemilla_short_commit_point` returns for the same inputs, since the
+    /// Orchard note commitment (`cmx`) and nullifier derivations read the same
+    /// commitment through these two entry points.
+    #[test_case]
+    const SHORT_COMMIT_MATCHES_COMMIT_POINT: TestType = TestType {
+        modname: module_path!(),
+        name: "short_commit_matches_commit_point",
+        f: || {
+            let randomness = pallas::Scalar::from(0x0123_4567u64);
+            let message = &LONGEST_MESSAGE[..2 * 255];
+
+            let short = sinsemilla_short_commit(
+                ORCHARD_NOTE_COMMITMENT_PERSONALIZATION,
+                message,
+                &randomness,
+            )
+            .map_err(|_| ())?
+            .ok_or(())?;
+            let point = sinsemilla_short_commit_point(
+                ORCHARD_NOTE_COMMITMENT_PERSONALIZATION,
+                message,
+                &randomness,
+            )
+            .map_err(|_| ())?
+            .ok_or(())?;
+
+            if short != extract_p_pallas(&point) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// An unknown domain must be refused rather than silently committed under a
+    /// default generator pair.
+    #[test_case]
+    const UNKNOWN_DOMAIN_IS_REJECTED: TestType = TestType {
+        modname: module_path!(),
+        name: "unknown_domain_is_rejected",
+        f: || {
+            let result = sinsemilla_short_commit(
+                "z.cash:not-a-sinsemilla-domain",
+                &LONGEST_MESSAGE[..K],
+                &pallas::Scalar::from(1u64),
+            );
+            if result != Err(Error::UnsupportedSinsemillaDomain) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 }

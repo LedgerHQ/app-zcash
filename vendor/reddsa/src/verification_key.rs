@@ -78,6 +78,7 @@ pub struct VerificationKey<T: SigType> {
     pub(crate) bytes: VerificationKeyBytes<T>,
 }
 
+#[cfg(feature = "ledger")]
 impl VerificationKey<crate::orchard::SpendAuth> {
     /// Creates a RedPallas spend authorization verification key from the given bytes.
     pub fn from_ledger_verification_key(

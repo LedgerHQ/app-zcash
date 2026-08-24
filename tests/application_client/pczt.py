@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from application_client.zcash_utils import read_compactsize
+from application_client.zcash_utils import read_compactsize, write_varint
 
 PCZT_DEFAULT_SEED_FINGERPRINT: bytes = bytes(32)
 
@@ -76,6 +76,94 @@ class PcztOrchardBundle:
     flags: int
     value_balance: int
     anchor: bytes
+
+
+@dataclass
+class PcztIronwoodAction:  # pylint: disable=too-many-instance-attributes
+    cv_net: bytes
+    nullifier: bytes
+    spend_recipient: bytes
+    spend_rho: bytes
+    spend_rseed: bytes
+    rk: bytes
+    alpha: bytes
+    signing_path: str
+    cmx: bytes
+    ephemeral_key: bytes
+    enc_ciphertext: bytes
+    out_ciphertext: bytes
+    rcv: bytes
+    rseed: bytes = bytes(ORCHARD_FIELD_SIZE)
+    spend_value: int = 0
+    value: int = 0
+    recipient: bytes = bytes(ORCHARD_RAW_ADDRESS_SIZE)
+    note_plaintext_version: int | None = None
+
+
+@dataclass
+class PcztIronwoodBundle:
+    actions: list[PcztIronwoodAction]
+    flags: int
+    value_balance: int
+    anchor: bytes
+
+
+def pczt_transaction_bytes(
+    pczt_global: PcztGlobal,
+    transparent_inputs: list[PcztTransparentInput],
+    transparent_outputs: list[PcztTransparentOutput],
+    orchard_bundle: PcztOrchardBundle | None = None,
+) -> bytes:
+    """Serialize the PCZT parts into the canonical v5 transaction the device signs over.
+
+    Both the standalone suite and the swap suite need these bytes to verify a returned
+    signature, so the serializer lives next to the dataclasses it walks.
+    """
+    tx = bytearray(pczt_global.tx_header_bytes())
+    tx.extend(write_varint(len(transparent_inputs)))
+
+    for txin in transparent_inputs:
+        tx.extend(txin.prevout_txid)
+        tx.extend(txin.prevout_index.to_bytes(4, byteorder="little"))
+        tx.extend(write_varint(len(txin.script_pubkey)))
+        tx.extend(txin.script_pubkey)
+        tx.extend(txin.sequence)
+
+    tx.extend(write_varint(len(transparent_outputs)))
+    for txout in transparent_outputs:
+        tx.extend(txout.value.to_bytes(8, byteorder="little"))
+        tx.extend(write_varint(len(txout.script_pubkey)))
+        tx.extend(txout.script_pubkey)
+
+    tx.extend(write_varint(0))
+    tx.extend(write_varint(0))
+
+    if orchard_bundle is None:
+        tx.extend(write_varint(0))
+        return bytes(tx)
+
+    tx.extend(write_varint(len(orchard_bundle.actions)))
+
+    for action in orchard_bundle.actions:
+        tx.extend(action.nullifier)
+        tx.extend(action.cmx)
+        tx.extend(action.ephemeral_key)
+        tx.extend(action.enc_ciphertext[:52])
+
+    for action in orchard_bundle.actions:
+        tx.extend(action.enc_ciphertext[52:564])
+
+    for action in orchard_bundle.actions:
+        tx.extend(action.cv_net)
+        tx.extend(action.rk)
+        tx.extend(action.enc_ciphertext[564:])
+        tx.extend(action.out_ciphertext)
+
+    tx.extend(orchard_bundle.flags.to_bytes(1, byteorder="little"))
+    tx.extend(orchard_bundle.value_balance.to_bytes(8, byteorder="little", signed=True))
+    tx.extend(orchard_bundle.anchor)
+
+    return bytes(tx)
 
 
 def pczt_orchard_bundle_from_raw_tx(

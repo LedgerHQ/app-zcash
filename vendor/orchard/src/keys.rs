@@ -1,5 +1,6 @@
 //! Key structures for Orchard.
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use corez::io::{self, Read, Write};
 
@@ -12,6 +13,7 @@ use group::{
     prime::PrimeCurveAffine,
     Curve, GroupEncoding,
 };
+use pasta_curves::glv::{Decomposed, Table};
 use pasta_curves::pallas;
 use rand::RngCore;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
@@ -86,26 +88,22 @@ impl SpendingKey {
         )
     }
 
+    /// Returns the raw bytes of the spending key.
+    pub fn to_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
     /// Derives the spend authorizing key corresponding to this spending key.
+    #[cfg(feature = "ledger")]
     pub fn ledger_from_bytes(sk: [u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
         let sk = SpendingKey(sk);
-        // If ask = 0, discard this key. We call `derive_inner` rather than
-        // `SpendAuthorizingKey::from` here because we only need to know
-        // whether ask = 0; the adjustment to potentially negate ask is not
-        // needed. Also, `from` would panic on ask = 0.
         let ask = SpendAuthorizingKey::ledger_derive_inner(&sk)?;
 
-        // TODO: add external internal ivk checks
         if ask.is_zero().into() {
             return Err(ledger_zcash_crypto::Error::InvalidKeyDiscarded);
         }
 
         Ok(sk)
-    }
-
-    /// Returns the raw bytes of the spending key.
-    pub fn to_bytes(&self) -> &[u8; 32] {
-        &self.0
     }
 
     /// Derives the Orchard spending key for the given seed, coin type, and account.
@@ -145,8 +143,8 @@ impl SpendAuthorizingKey {
     }
 
     /// Derives ask from sk, using the same logic as `derive_inner` but with additional checks to ensure that the resulting ask is valid.
+    #[cfg(feature = "ledger")]
     fn ledger_derive_inner(sk: &SpendingKey) -> Result<pallas::Scalar, ledger_zcash_crypto::Error> {
-        // Original impl: to_scalar(PrfExpand::ORCHARD_ASK.with(&sk.0))
         let ask = ledger_zcash_crypto::orchard_ask(&sk.0)?;
         ledger_zcash_crypto::pallas_scalar_from_repr(ask)
     }
@@ -162,6 +160,7 @@ impl SpendAuthorizingKey {
     /// the randomized verification key using Ledger SDK Pallas primitives.
     ///
     /// The resulting key can be used to actually sign a spend.
+    #[cfg(feature = "ledger")]
     pub fn randomize_ledger(
         &self,
         randomizer: &pallas::Scalar,
@@ -169,20 +168,47 @@ impl SpendAuthorizingKey {
         self.0.randomize_ledger(randomizer)
     }
 
+    /// Computes only the bytes of the randomized spend-auth verification key
+    /// (`rk = [(ask + randomizer) mod q]·G`) for this key, without constructing
+    /// the intermediate curve point. Used to verify a PCZT action's `rk` with a
+    /// smaller BN/point footprint than `randomize_ledger` + key conversion.
+    #[cfg(feature = "ledger")]
+    pub fn randomized_verification_key_bytes(
+        &self,
+        randomizer: &pallas::Scalar,
+    ) -> Result<[u8; 32], ledger_zcash_crypto::Error> {
+        let scalar_bytes: [u8; 32] = (&self.0).into();
+        let randomizer_bytes: [u8; 32] = randomizer.to_repr();
+        Ok(
+            ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
+                scalar_bytes,
+                randomizer_bytes,
+            )?,
+        )
+    }
+
     /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
+    #[cfg(feature = "ledger")]
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let ask = Self::ledger_derive_inner(sk)?;
-        // SpendingKey cannot be constructed such that this assertion would fail.
-        assert!(!bool::from(ask.is_zero()));
+        // `SpendingKey::ledger_from_bytes` already rejects a key deriving ask == 0, so this is
+        // unreachable — but it is returned rather than asserted: a panic here aborts through the
+        // device panic handler and freezes the app mid-signing, which is exactly what the
+        // `.expect()` removal below avoids.
+        if bool::from(ask.is_zero()) {
+            return Err(ledger_zcash_crypto::Error::InvalidKeyDiscarded);
+        }
         let ask_bytes = ask.to_repr();
-        let signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(ask_bytes)
-            .expect("ledger_zcash_crypto spend-auth signing key derivation should succeed");
+        // ask != 0 rules out a malformed-scalar failure, but derivation can still
+        // fail on BN-pool exhaustion (CxError): propagate it instead of
+        // `.expect()`-panicking, since a panic aborts through the device panic
+        // handler and freezes the app mid-signing, whereas a returned error lets
+        // the caller fail closed with a proper status word.
+        let signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(ask_bytes)?;
 
-        // If the last bit of repr_P(ak) is 1, negate ask.
         let signing_key = if (signing_key.verification_key_bytes()[31] >> 7) == 1 {
             let neg_ask_bytes = (-ask).to_repr();
-            ledger_zcash_crypto::redpallas::spendauth_signing_key(neg_ask_bytes)
-                .expect("ledger_zcash_crypto spend-auth signing key derivation should succeed")
+            ledger_zcash_crypto::redpallas::spendauth_signing_key(neg_ask_bytes)?
         } else {
             signing_key
         };
@@ -305,6 +331,7 @@ impl From<&SpendingKey> for NullifierDerivingKey {
 
 impl NullifierDerivingKey {
     /// Derives a nullifier deriving key from the given spending key, using the same logic as `From<&SpendingKey> for NullifierDerivingKey`.
+    #[cfg(feature = "ledger")]
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let nk = ledger_zcash_crypto::orchard_nk(&sk.0)?;
         Ok(NullifierDerivingKey(
@@ -349,6 +376,7 @@ impl From<&SpendingKey> for CommitIvkRandomness {
 
 impl CommitIvkRandomness {
     /// Derives a nullifier deriving key from the given spending key, using the same logic as `From<&SpendingKey> for CommitIvkRandomness`.
+    #[cfg(feature = "ledger")]
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let rivk = ledger_zcash_crypto::orchard_rivk(&sk.0)?;
         Ok(CommitIvkRandomness(
@@ -417,6 +445,7 @@ impl From<FullViewingKey> for SpendValidatingKey {
 
 impl FullViewingKey {
     /// Derives the internal full viewing key corresponding to this full viewing key.
+    #[cfg(feature = "ledger")]
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let ask = SpendAuthorizingKey::ledger_try_from(sk)?;
         Ok(FullViewingKey {
@@ -448,26 +477,6 @@ impl FullViewingKey {
         }
     }
 
-    /// Ledger-SDK equivalent of [`Self::rivk`].
-    pub(crate) fn rivk_ledger(
-        &self,
-        scope: Scope,
-    ) -> Result<CommitIvkRandomness, ledger_zcash_crypto::Error> {
-        match scope {
-            Scope::External => Ok(self.rivk),
-            Scope::Internal => {
-                let rivk = self.rivk.to_bytes();
-                let ak = self.ak.to_bytes();
-                let nk = self.nk.to_bytes();
-                let rivk_internal = ledger_zcash_crypto::orchard_rivk_internal(&rivk, &ak, &nk)?;
-
-                Ok(CommitIvkRandomness(
-                    ledger_zcash_crypto::pallas_scalar_from_repr(rivk_internal)?,
-                ))
-            }
-        }
-    }
-
     /// Defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
     ///
     /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
@@ -482,6 +491,7 @@ impl FullViewingKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::derive_dk_ovk`].
+    #[cfg(feature = "ledger")]
     fn derive_dk_ovk_ledger(
         &self,
     ) -> Result<(DiversifierKey, OutgoingViewingKey), ledger_zcash_crypto::Error> {
@@ -582,15 +592,6 @@ impl FullViewingKey {
         }
     }
 
-    /// Ledger-SDK equivalent of [`Self::derive_internal`].
-    fn derive_internal_ledger(&self) -> Result<Self, ledger_zcash_crypto::Error> {
-        Ok(FullViewingKey {
-            ak: self.ak.clone(),
-            nk: self.nk,
-            rivk: self.rivk_ledger(Scope::Internal)?,
-        })
-    }
-
     /// Derives an `IncomingViewingKey` for this full viewing key.
     pub fn to_ivk(&self, scope: Scope) -> IncomingViewingKey {
         match scope {
@@ -599,7 +600,47 @@ impl FullViewingKey {
         }
     }
 
+    /// Derives an `OutgoingViewingKey` for this full viewing key.
+    pub fn to_ovk(&self, scope: Scope) -> OutgoingViewingKey {
+        match scope {
+            Scope::External => OutgoingViewingKey::from_fvk(self),
+            Scope::Internal => OutgoingViewingKey::from_fvk(&self.derive_internal()),
+        }
+    }
+
+    /// Ledger-SDK equivalent of [`Self::rivk`].
+    #[cfg(feature = "ledger")]
+    pub(crate) fn rivk_ledger(
+        &self,
+        scope: Scope,
+    ) -> Result<CommitIvkRandomness, ledger_zcash_crypto::Error> {
+        match scope {
+            Scope::External => Ok(self.rivk),
+            Scope::Internal => {
+                let rivk = self.rivk.to_bytes();
+                let ak = self.ak.to_bytes();
+                let nk = self.nk.to_bytes();
+                let rivk_internal = ledger_zcash_crypto::orchard_rivk_internal(&rivk, &ak, &nk)?;
+
+                Ok(CommitIvkRandomness(
+                    ledger_zcash_crypto::pallas_scalar_from_repr(rivk_internal)?,
+                ))
+            }
+        }
+    }
+
+    /// Ledger-SDK equivalent of [`Self::derive_internal`].
+    #[cfg(feature = "ledger")]
+    fn derive_internal_ledger(&self) -> Result<Self, ledger_zcash_crypto::Error> {
+        Ok(FullViewingKey {
+            ak: self.ak.clone(),
+            nk: self.nk,
+            rivk: self.rivk_ledger(Scope::Internal)?,
+        })
+    }
+
     /// Ledger-SDK equivalent of [`Self::to_ivk`].
+    #[cfg(feature = "ledger")]
     pub fn to_ivk_ledger(
         &self,
         scope: Scope,
@@ -612,15 +653,8 @@ impl FullViewingKey {
         })
     }
 
-    /// Derives an `OutgoingViewingKey` for this full viewing key.
-    pub fn to_ovk(&self, scope: Scope) -> OutgoingViewingKey {
-        match scope {
-            Scope::External => OutgoingViewingKey::from_fvk(self),
-            Scope::Internal => OutgoingViewingKey::from_fvk(&self.derive_internal()),
-        }
-    }
-
     /// Ledger-SDK equivalent of [`Self::to_ovk`].
+    #[cfg(feature = "ledger")]
     pub fn to_ovk_ledger(
         &self,
         scope: Scope,
@@ -730,6 +764,7 @@ impl KeyAgreementPrivateKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::from_fvk`].
+    #[cfg(feature = "ledger")]
     fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let ak = fvk.ak.to_bytes();
         let nk = fvk.nk.to_bytes();
@@ -782,6 +817,7 @@ impl KeyAgreementPrivateKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::address`].
+    #[cfg(feature = "ledger")]
     fn address_ledger(&self, d: Diversifier) -> Result<Address, ledger_zcash_crypto::Error> {
         let ivk = self.0.to_repr();
         let g_d = ledger_zcash_crypto::diversify_hash_ledger(d.as_array())?;
@@ -822,6 +858,7 @@ impl IncomingViewingKey {
     }
 
     /// Helper method.
+    #[cfg(feature = "ledger")]
     fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         Ok(IncomingViewingKey {
             dk: fvk.derive_dk_ovk_ledger()?.0,
@@ -869,6 +906,7 @@ impl IncomingViewingKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::address_at`].
+    #[cfg(feature = "ledger")]
     pub fn address_at_ledger(
         &self,
         j: impl Into<DiversifierIndex>,
@@ -913,6 +951,12 @@ impl PreparedIncomingViewingKey {
     fn new_inner(ivk: &KeyAgreementPrivateKey) -> Self {
         Self(PreparedNonZeroScalar::new(&ivk.0))
     }
+
+    /// The raw ivk scalar, for the GLV ladder in `pasta_curves::glv` (which
+    /// decomposes the scalar rather than consuming the prepared wNAF form).
+    pub(crate) fn raw_scalar(&self) -> pallas::Scalar {
+        self.0.raw_scalar()
+    }
 }
 
 /// A key that provides the capability to recover outgoing transaction information from
@@ -934,6 +978,7 @@ impl OutgoingViewingKey {
     }
 
     /// Ledger-SDK equivalent of [`Self::from_fvk`].
+    #[cfg(feature = "ledger")]
     fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         Ok(fvk.derive_dk_ovk_ledger()?.1)
     }
@@ -981,6 +1026,7 @@ impl DiversifiedTransmissionKey {
         NonIdentityPallasPoint::from_bytes(bytes).map(DiversifiedTransmissionKey)
     }
 
+    #[cfg(feature = "ledger")]
     pub(crate) fn from_bytes_ledger(bytes: &[u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
         Ok(DiversifiedTransmissionKey(
             NonIdentityPallasPoint::from_bytes_ledger(bytes)?,
@@ -1062,17 +1108,81 @@ impl EphemeralPublicKey {
     }
 }
 
+/// What a prepared ephemeral key carries.
+///
+/// Individually-prepared keys carry a `group::Wnaf` window table, consumed by
+/// the per-item multiplication. Batch-prepared keys carry a GLV odd-multiples
+/// window instead (see `pasta_curves::glv`), which is cheaper to build across a
+/// batch (one shared normalization) and cheaper to multiply against (a
+/// shared-doubling ladder over the endomorphism split). Both produce
+/// identical shared secrets.
+#[derive(Clone, Debug)]
+enum PreparedEpkInner {
+    /// A `group::Wnaf` window table.
+    Wnaf(PreparedNonIdentityBase),
+    /// A GLV odd-multiples window, boxed to keep the enum small (512 bytes,
+    /// the same heap-allocation shape as the wNAF table it replaces).
+    Tabled(Box<Table<pallas::Point>>),
+}
+
 /// An Orchard ephemeral public key that has been precomputed for trial decryption.
 #[derive(Clone, Debug)]
-pub struct PreparedEphemeralPublicKey(PreparedNonIdentityBase);
+pub struct PreparedEphemeralPublicKey(PreparedEpkInner);
 
 impl PreparedEphemeralPublicKey {
     pub(crate) fn new(epk: EphemeralPublicKey) -> Self {
-        PreparedEphemeralPublicKey(PreparedNonIdentityBase::new(epk.0))
+        PreparedEphemeralPublicKey(PreparedEpkInner::Wnaf(PreparedNonIdentityBase::new(epk.0)))
+    }
+
+    /// Prepares every ephemeral key in a batch by building its GLV window,
+    /// sharing one batch normalization (a single field inversion) across the
+    /// whole set, where individual preparation pays one inversion per key.
+    /// `None` lanes (ephemeral keys that failed to decode) pass through as
+    /// `None`.
+    pub(crate) fn batch_tabled(
+        epks: Vec<Option<EphemeralPublicKey>>,
+    ) -> Vec<Option<PreparedEphemeralPublicKey>> {
+        let live: Vec<pallas::Point> = epks
+            .iter()
+            .filter_map(|e| e.as_ref().map(|e| *e.0))
+            .collect();
+        let mut tables = Table::<pallas::Point>::batch(&live).into_iter();
+        epks.into_iter()
+            .map(|e| {
+                e.map(|_| {
+                    PreparedEphemeralPublicKey(PreparedEpkInner::Tabled(Box::new(
+                        tables.next().expect("one table per live epk"),
+                    )))
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn agree(&self, ivk: &PreparedIncomingViewingKey) -> SharedSecret {
-        SharedSecret(ka_orchard_prepared(&ivk.0, &self.0))
+        match &self.0 {
+            PreparedEpkInner::Wnaf(base) => SharedSecret(ka_orchard_prepared(&ivk.0, base)),
+            // The product of a non-zero scalar and a non-identity point in the
+            // prime-order Pallas group is non-identity.
+            PreparedEpkInner::Tabled(table) => SharedSecret(
+                NonIdentityPallasPoint::expect_non_identity(table.mul(&ivk.raw_scalar())),
+            ),
+        }
+    }
+
+    /// Like `agree`, but with the viewing key's GLV decomposition
+    /// precomputed. Used by the batched agreement path, which hoists the
+    /// decomposition and digit recoding out of the per-output loop.
+    pub(crate) fn agree_with(
+        &self,
+        ivk: &PreparedIncomingViewingKey,
+        decomposed: &Decomposed<pallas::Point>,
+    ) -> SharedSecret {
+        match &self.0 {
+            PreparedEpkInner::Wnaf(base) => SharedSecret(ka_orchard_prepared(&ivk.0, base)),
+            PreparedEpkInner::Tabled(table) => SharedSecret(
+                NonIdentityPallasPoint::expect_non_identity(table.mul_decomposed(decomposed)),
+            ),
+        }
     }
 }
 
@@ -1199,7 +1309,7 @@ mod tests {
         *,
     };
     use crate::{
-        note::{ExtractedNoteCommitment, RandomSeed, Rho},
+        note::{ExtractedNoteCommitment, NoteVersion, RandomSeed, Rho},
         value::NoteValue,
         Note,
     };
@@ -1280,18 +1390,19 @@ mod tests {
             assert_eq!(&addr.pk_d().to_bytes(), &tv.default_pk_d);
 
             let rho = Rho::from_bytes(&tv.note_rho).unwrap();
-            let note = Note::from_parts(
+            let orchard_note = Note::from_parts(
                 addr,
                 NoteValue::from_raw(tv.note_v),
                 rho,
                 RandomSeed::from_bytes(tv.note_rseed, &rho).unwrap(),
+                NoteVersion::V2,
             )
             .unwrap();
 
-            let cmx: ExtractedNoteCommitment = note.commitment().into();
+            let cmx: ExtractedNoteCommitment = orchard_note.commitment().into();
             assert_eq!(cmx.to_bytes(), tv.note_cmx);
 
-            assert_eq!(note.nullifier(&fvk).to_bytes(), tv.note_nf);
+            assert_eq!(orchard_note.nullifier(&fvk).to_bytes(), tv.note_nf);
 
             let internal_rivk = fvk.rivk(Scope::Internal);
             assert_eq!(internal_rivk.0.to_repr(), tv.internal_rivk);

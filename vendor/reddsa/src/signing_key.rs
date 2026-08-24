@@ -10,6 +10,7 @@
 
 use core::{
     convert::{TryFrom, TryInto},
+    fmt,
     marker::PhantomData,
 };
 
@@ -21,7 +22,7 @@ use group::{ff::PrimeField, GroupEncoding};
 use rand_core::{CryptoRng, RngCore};
 
 /// A RedDSA signing key.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(try_from = "SerdeHelper"))]
 #[cfg_attr(feature = "serde", serde(into = "SerdeHelper"))]
@@ -31,6 +32,16 @@ pub struct SigningKey<T: SigType> {
     pk: VerificationKey<T>,
 }
 
+impl<T: SigType> fmt::Debug for SigningKey<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SigningKey")
+            .field("sk", &"<redacted>")
+            .field("pk", &self.pk)
+            .finish()
+    }
+}
+
+#[cfg(feature = "ledger")]
 impl SigningKey<crate::orchard::SpendAuth> {
     /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
     pub fn try_from_ledger_signing_key(

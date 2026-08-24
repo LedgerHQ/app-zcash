@@ -45,22 +45,24 @@ const PALLAS_SCALAR_R2_U64X4: [u64; 4] = [
 // Montgomery -n^{-1} mod 2^64 derived from the low limb of the scalar modulus.
 const PALLAS_SCALAR_INV: u64 = 0x8c46eb20ffffffff;
 
-#[cfg(feature = "montgomery_fallback")]
+// Converts a canonical little-endian field/scalar encoding into the Montgomery
+// limb form `pasta_curves` stores internally.
+//
+// This is done in software rather than through the SDK's `MontCtx`: the hardware
+// path holds a `MontCtx` plus three `Bn` handles at once, and the callers run
+// inside Orchard parsing where the `cx_bn` pool is already close to capacity.
 pub(crate) fn repr_to_montgomery_u64x4(
     repr: &[u8; 32],
     modulus_param: CurveDomainParam,
     malformed_error: Error,
 ) -> Result<[u64; 4], Error> {
-    repr_to_montgomery_u64x4_pasta(repr, modulus_param, malformed_error)
-}
+    canonical_pallas_element_bytes_be(repr, modulus_param, malformed_error)?;
 
-#[cfg(not(feature = "montgomery_fallback"))]
-pub(crate) fn repr_to_montgomery_u64x4(
-    repr: &[u8; 32],
-    modulus_param: CurveDomainParam,
-    malformed_error: Error,
-) -> Result<[u64; 4], Error> {
-    repr_to_montgomery_u64x4_ledger_sdk(repr, modulus_param, malformed_error)
+    let repr_u64x4 = repr_to_u64x4(repr);
+    let (modulus, r2, inv) = pallas_montgomery_params(modulus_param);
+    let wide = mul_u64x4(&repr_u64x4, &r2);
+
+    Ok(montgomery_reduce_u64x8(wide, modulus, inv))
 }
 
 pub(crate) fn byte_to_fp(bytes: &[u64; 4]) -> Fp {
@@ -174,53 +176,6 @@ pub(crate) fn montgomery_reduce_u64x8(limbs: [u64; 8], modulus: [u64; 4], inv: u
     subtract_modulus_if_needed([r4, r5, r6, r7], modulus)
 }
 
-#[cfg(not(feature = "montgomery_fallback"))]
-fn repr_to_montgomery_u64x4_ledger_sdk(
-    repr: &[u8; 32],
-    modulus_param: CurveDomainParam,
-    malformed_error: Error,
-) -> Result<[u64; 4], Error> {
-    use ledger_device_sdk::{
-        bn::{Bn, MontCtx},
-        ecc::math::Pallas,
-    };
-
-    let repr_be = canonical_pallas_element_bytes_be(repr, modulus_param, malformed_error)?;
-
-    let value = Bn::alloc_init(&repr_be)?;
-    let mut modulus = Bn::alloc(PALLAS_BYTES)?;
-    Pallas::domain_parameter_bn(modulus_param, &mut modulus)?;
-
-    let mut mont = MontCtx::alloc(PALLAS_BYTES)?;
-    mont.init(&modulus)?;
-
-    let mont_value = Bn::alloc(PALLAS_BYTES)?;
-    mont.to_montgomery(&mont_value, &value)?;
-
-    let mut mont_be = [0u8; PALLAS_BYTES];
-    mont_value.export(&mut mont_be)?;
-
-    let mut mont_le = [0u8; PALLAS_BYTES];
-    crate::bytes::reverse_copy(&mut mont_le, &mont_be);
-
-    Ok(repr_to_u64x4(&mont_le))
-}
-
-#[cfg(feature = "montgomery_fallback")]
-fn repr_to_montgomery_u64x4_pasta(
-    repr: &[u8; 32],
-    modulus_param: CurveDomainParam,
-    malformed_error: Error,
-) -> Result<[u64; 4], Error> {
-    canonical_pallas_element_bytes_be(repr, modulus_param, malformed_error)?;
-
-    let repr_u64x4 = repr_to_u64x4(repr);
-    let (modulus, r2, inv) = pallas_montgomery_params(modulus_param);
-    let wide = mul_u64x4(&repr_u64x4, &r2);
-
-    Ok(montgomery_reduce_u64x8(wide, modulus, inv))
-}
-
 fn subtract_modulus_if_needed(limbs: [u64; 4], modulus: [u64; 4]) -> [u64; 4] {
     let (d0, borrow) = sbb_u64(limbs[0], modulus[0], 0);
     let (d1, borrow) = sbb_u64(limbs[1], modulus[1], borrow);
@@ -250,74 +205,58 @@ fn mac_u64(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
     (ret as u64, (ret >> 64) as u64)
 }
 
-// NOTE: These tests can only be run manually by calling test functions from device code.
 #[cfg(test)]
 mod tests {
-    use super::{repr_to_montgomery_u64x4_ledger_sdk, repr_to_montgomery_u64x4_pasta};
+    use super::repr_to_montgomery_u64x4;
     use crate::Error;
     use ledger_device_sdk::ecc::math::CurveDomainParam;
+    use ledger_device_sdk::testing::TestType;
 
-    #[test]
-    fn test_repr_to_montgomery_u64x4() {
-        let mut repr = [0u8; 32];
-        repr[0] = 42;
-
-        let actual_base = repr_to_montgomery_u64x4_ledger_sdk(
-            &repr,
-            CurveDomainParam::Field,
-            Error::MalformedPallasBase,
-        )
-        .unwrap();
-        assert_ne!(actual_base, [0u64; 4]);
-
-        let actual_scalar = repr_to_montgomery_u64x4_ledger_sdk(
-            &repr,
-            CurveDomainParam::Order,
-            Error::MalformedPallasScalar,
-        )
-        .unwrap();
-        assert_ne!(actual_scalar, [0u64; 4]);
-
-        let mut res_actual_scalar = [0u8; 32];
+    fn scalar_limbs_to_le_bytes(limbs: [u64; 4]) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
         for i in 0..4 {
-            res_actual_scalar[i * 8..(i + 1) * 8].copy_from_slice(&actual_scalar[i].to_le_bytes());
+            bytes[i * 8..(i + 1) * 8].copy_from_slice(&limbs[i].to_le_bytes());
         }
-
-        assert_eq!(
-            res_actual_scalar,
-            *b"\x59\xff\xff\xff\x78\x9d\xbc\x7d\x79\xd7\x05\xc0\x95\x33\xf2\xa3\xe9\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x3f"
-        );
+        bytes
     }
 
-    #[test]
-    fn test_repr_to_montgomery_u64x4_pasta() {
-        let mut repr = [0u8; 32];
-        repr[0] = 42;
+    /// Known-answer test for the software Montgomery conversion: `42` in the
+    /// Pallas scalar field must produce this exact limb encoding. The expected
+    /// value comes from the SDK's hardware `MontCtx` conversion, which this
+    /// implementation replaced — it pins the software path to the hardware
+    /// result it must reproduce.
+    #[test_case]
+    const REPR_TO_MONTGOMERY_KNOWN_ANSWER: TestType = TestType {
+        modname: module_path!(),
+        name: "repr_to_montgomery_known_answer",
+        f: || {
+            let mut repr = [0u8; 32];
+            repr[0] = 42;
 
-        let actual_base = repr_to_montgomery_u64x4_pasta(
-            &repr,
-            CurveDomainParam::Field,
-            Error::MalformedPallasBase,
-        )
-        .unwrap();
-        assert_ne!(actual_base, [0u64; 4]);
+            let base = repr_to_montgomery_u64x4(
+                &repr,
+                CurveDomainParam::Field,
+                Error::MalformedPallasBase,
+            )
+            .map_err(|_| ())?;
+            if base == [0u64; 4] {
+                return Err(());
+            }
 
-        let actual_scalar = repr_to_montgomery_u64x4_pasta(
-            &repr,
-            CurveDomainParam::Order,
-            Error::MalformedPallasScalar,
-        )
-        .unwrap();
-        assert_ne!(actual_scalar, [0u64; 4]);
+            let scalar = repr_to_montgomery_u64x4(
+                &repr,
+                CurveDomainParam::Order,
+                Error::MalformedPallasScalar,
+            )
+            .map_err(|_| ())?;
 
-        let mut res_actual_scalar = [0u8; 32];
-        for i in 0..4 {
-            res_actual_scalar[i * 8..(i + 1) * 8].copy_from_slice(&actual_scalar[i].to_le_bytes());
-        }
+            if scalar_limbs_to_le_bytes(scalar)
+                != *b"\x59\xff\xff\xff\x78\x9d\xbc\x7d\x79\xd7\x05\xc0\x95\x33\xf2\xa3\xe9\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x3f"
+            {
+                return Err(());
+            }
 
-        assert_eq!(
-            res_actual_scalar,
-            *b"\x59\xff\xff\xff\x78\x9d\xbc\x7d\x79\xd7\x05\xc0\x95\x33\xf2\xa3\xe9\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x3f"
-        );
-    }
+            Ok(())
+        },
+    };
 }
