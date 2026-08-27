@@ -78,7 +78,7 @@ pub fn handler_hash_input_start(
             .set_transparent_output_count(ctx.legacy_output_parser.transparent_output_count());
     } else if first {
         info!("Reset TX context");
-        ctx.reset(LegacyParserMode::Signature);
+        ctx.reset_for_new_transaction(LegacyParserMode::Signature)?;
     }
 
     // Try to get data from comm
@@ -279,6 +279,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         ctx.tx_info.sighash_type,
         true,
     )?;
+    ctx.note_signature_released();
 
     ctx.tx_signing_state.already_signed_input_count = ctx
         .tx_signing_state

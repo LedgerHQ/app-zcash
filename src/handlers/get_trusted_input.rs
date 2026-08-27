@@ -33,7 +33,7 @@ pub fn handler_get_trusted_input(
 
     if first {
         info!("Reset TX context");
-        ctx.reset(LegacyParserMode::TrustedInput);
+        ctx.reset_for_new_transaction(LegacyParserMode::TrustedInput)?;
 
         let transaction_trusted_input_idx = read_u32(data, Endianness::Big, false)?;
         data = &data[4..];

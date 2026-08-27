@@ -10,6 +10,9 @@ use ledger_device_sdk::nbgl::NbglHomeAndSettings;
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 
+use ledger_device_sdk::log::error;
+
+use crate::AppSW;
 use crate::parser::orchard_decipher::OrchardDecipherKeys;
 use crate::parser::personalization::ZCASH_IRONWOOD_HASH_PERSONALIZATION;
 use crate::parser::personalization::{
@@ -253,6 +256,11 @@ pub struct TxContext<'a> {
     /// Swap parameters if running in swap mode.
     /// Used to validate the transaction against the Exchange's request.
     pub swap_params: Option<&'a CreateTxParams>,
+    /// Whether a signature has already left the device during this run of the app.
+    ///
+    /// Deliberately outside the scope of [`TxContext::reset`]: a signature cannot be recalled, so
+    /// this has to outlive the transaction state a host can reset at will.
+    has_released_signature: bool,
 }
 
 impl<'s> TxContext<'s> {
@@ -283,12 +291,13 @@ impl<'s> TxContext<'s> {
             addr_of_mut!((*ptr).vk_response).write(None);
             addr_of_mut!((*ptr).is_vk_display_finished).write(false);
             addr_of_mut!((*ptr).swap_params).write(swap_params);
+            addr_of_mut!((*ptr).has_released_signature).write(false);
         }
     }
 
     #[inline(never)]
     pub fn reset(&mut self, mode: LegacyParserMode) {
-        // Don't reset home and swap params, they're not part of TX state
+        // Don't reset home, swap params and has_released_signature, they're not part of TX state
         self.is_extra_header_data_set = false;
         self.is_finished = false;
         self.tx_signing_state = TxSigningState::default();
@@ -300,6 +309,30 @@ impl<'s> TxContext<'s> {
         self.legacy_output_parser = LegacyOutputParser::new();
         self.vk_response = None;
         self.is_vk_display_finished = false;
+    }
+
+    /// Resets the context to start a new transaction, refusing when that would reuse an approval
+    /// already spent on a signature.
+    ///
+    /// Outside swap mode every transaction carries its own on-device review, so signing several in
+    /// a row is legitimate. Under swap, the single Exchange approval covers one transaction: the
+    /// app validates against `swap_params` instead of displaying anything, and `reset` keeps those
+    /// params. A host that stops mid-way through a multi-input transaction, once it holds a
+    /// signature, could otherwise start a second transaction against the same approval and have
+    /// the user pay twice.
+    pub fn reset_for_new_transaction(&mut self, mode: LegacyParserMode) -> Result<(), AppSW> {
+        if self.swap_params.is_some() && self.has_released_signature {
+            error!("New transaction after a signature was released under a swap approval");
+            return Err(AppSW::BadState);
+        }
+
+        self.reset(mode);
+        Ok(())
+    }
+
+    /// Records that a signature has been returned to the host.
+    pub fn note_signature_released(&mut self) {
+        self.has_released_signature = true;
     }
 
     pub fn set_transaction_trusted_input_idx(&mut self, idx: u32) {

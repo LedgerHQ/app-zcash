@@ -71,7 +71,7 @@ fn finish_pczt_if_requested(ctx: &mut TxContext, requested: bool) -> Result<(), 
 
 pub fn handler_pczt_header(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
     info!("Reset TX context for PCZT header parsing");
-    ctx.reset(LegacyParserMode::Signature);
+    ctx.reset_for_new_transaction(LegacyParserMode::Signature)?;
 
     let data = match comm.get_data() {
         Ok(data) => data,
@@ -307,6 +307,7 @@ pub fn handler_pczt_sign_transparent(
     ) {
         return Err(reset_pczt_parser_with_sw(ctx, sw));
     }
+    ctx.note_signature_released();
 
     ctx.tx_signing_state.already_signed_input_count = ctx
         .tx_signing_state
@@ -383,6 +384,7 @@ pub fn handler_pczt_sign_orchard(
             Err(sw) => return Err(reset_pczt_parser_with_sw(ctx, sw)),
         };
     comm.append(&auth_sig);
+    ctx.note_signature_released();
 
     let signed_orchard_count = match ctx.pczt_parser.mark_orchard_action_signed(action_index) {
         Ok(signed_orchard_count) => signed_orchard_count,
@@ -462,6 +464,7 @@ pub fn handler_pczt_sign_ironwood(
             Err(sw) => return Err(reset_pczt_parser_with_sw(ctx, sw)),
         };
     comm.append(&auth_sig);
+    ctx.note_signature_released();
 
     let signed_ironwood_count = match ctx.pczt_parser.mark_ironwood_action_signed(action_index) {
         Ok(signed_ironwood_count) => signed_ironwood_count,
