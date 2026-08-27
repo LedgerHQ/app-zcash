@@ -2,6 +2,7 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::fmt;
 use corez::io::{self, Read, Write};
 
 use ::zip32::{AccountId, ChildIndex};
@@ -18,6 +19,7 @@ use pasta_curves::pallas;
 use rand::RngCore;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 use zcash_note_encryption::EphemeralKeyBytes;
+use zeroize::Zeroize as _;
 
 use crate::{
     address::Address,
@@ -40,8 +42,23 @@ const ZIP32_PURPOSE: u32 = 32;
 /// $\mathsf{sk}$ as defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
 ///
 /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
-#[derive(Debug, Copy, Clone)]
+/// Deliberately not `Copy`: this is the master Orchard spending key, and an implicit copy would
+/// leave a duplicate behind that the `Drop` below cannot reach. `Debug` is implemented by hand so
+/// that no `{:?}` can print the key material.
+#[derive(Clone)]
 pub struct SpendingKey([u8; 32]);
+
+impl fmt::Debug for SpendingKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("SpendingKey").field(&"<redacted>").finish()
+    }
+}
+
+impl Drop for SpendingKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 impl ConstantTimeEq for SpendingKey {
     fn ct_eq(&self, other: &Self) -> Choice {

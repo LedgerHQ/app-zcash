@@ -2,7 +2,7 @@ use orchard::keys::SpendingKey as OrchardSk;
 use zcash_protocol::consensus::NetworkType;
 
 use ledger_device_sdk::ecc::Pallas;
-use ledger_device_sdk::ecc::{ChainCode, Secret};
+use ledger_device_sdk::ecc::Secret;
 use ledger_device_sdk::info;
 
 use crate::utils::HexSlice;
@@ -63,9 +63,12 @@ pub fn derive_transparent_account_pubkey(path: &Bip32Path) -> Result<[u8; 65], A
 // the single derivation site; do not call it per action.
 pub fn derive_orchard_sk_bytes(path: &Bip32Path) -> Result<Secret<32>, AppSW> {
     let path_slice = path.as_slice();
-    let mut cc = ChainCode::default();
 
-    let sk = Pallas::zip32_orchard_derive(path_slice, (&mut cc).into(), None)
+    // `None` for the chain code: nothing here uses it, and asking for it made the Secure Element
+    // write a secret into a plain stack buffer that no `Drop` reaches — the syscall answers a `None`
+    // with a null pointer and a zero length, so the value is never materialized rather than
+    // materialized and wiped.
+    let sk = Pallas::zip32_orchard_derive(path_slice, None, None)
         .map_err(|_| AppSW::TechnicalProblem)?;
 
     Ok(sk)

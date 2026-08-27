@@ -234,6 +234,10 @@ version = "0.4.2"
 [dependencies.zcash_spec]
 version = "0.2.1"
 
+[dependencies.zeroize]
+version = "1.6.0"
+default-features = false
+
 [dependencies.zip32]
 version = "0.2.0"
 default-features = false

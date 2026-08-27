@@ -2081,6 +2081,7 @@ dependencies = [
  "visibility",
  "zcash_note_encryption",
  "zcash_spec",
+ "zeroize",
  "zip32",
 ]
 
