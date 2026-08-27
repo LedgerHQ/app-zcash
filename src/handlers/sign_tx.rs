@@ -53,6 +53,24 @@ pub fn handler_hash_input_start(
             return Err(AppSW::BadState);
         }
 
+        // A continuation is the signing round, so it may only resume a transaction the user has
+        // already reviewed. It preserves the output amounts and the change classification the
+        // review round accumulated, yet `parse_header` re-initialises the V5 hashers while
+        // `is_tx_parsed_once` is false. Accepting it mid-review would therefore let a host park an
+        // output in the displayed fee computation while dropping it from the signed outputs
+        // digest, so the value of that output would silently go to the miner instead.
+        if !ctx.tx_signing_state.is_tx_parsed_once {
+            error!("Legacy continuation before the transaction was reviewed");
+            return Err(AppSW::BadState);
+        }
+
+        // Once every input is signed the approval is spent; a further round would build a second
+        // transaction on top of it.
+        if ctx.is_finished() {
+            error!("Legacy continuation after signing completed");
+            return Err(AppSW::BadState);
+        }
+
         info!("Reset parser");
         ctx.legacy_parser = LegacyParser::new(LegacyParserMode::Signature);
         // Extract transparent output count from output parser on final state

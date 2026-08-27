@@ -997,3 +997,30 @@ def test_legacy_change_info_accepts_the_vector_change_path(backend):
         "e04aff00" + f"{len(bytes.fromhex(_LEGACY_VALID_CHANGE_PATH)):02x}" + _LEGACY_VALID_CHANGE_PATH
     )
     assert sw == 0x9000
+
+
+def test_legacy_continuation_rejects_a_round_before_the_review(backend):
+    """A signing continuation must not restart hashing while the review round is still open.
+
+    HASH_INPUT_START with P1_FIRST + P2_CONTINUE is the signing round: it deliberately keeps the
+    output amounts and change classification the review round accumulated, and only replaces the
+    input parser. But while ``is_tx_parsed_once`` is still false, parsing the header also
+    re-initialises the V5 hashers, which empties the outputs digest.
+
+    A host could exploit that split: declare output 1 as change, send this APDU, then finalize with
+    output 2 alone. The fee shown to the user would be computed from outputs 1 and 2 with output 1
+    filtered out as change, while the signature would commit to output 2 only — so the value of
+    output 1 would go to the miner instead of back to the user.
+
+    The same shape sent at its legitimate point, after the review is approved, is exercised by the
+    multi-input tests above, which is what keeps this from passing by rejecting every continuation.
+    """
+    transport = ZcashCommandSender(backend)
+
+    # Leaves the app mid review round: one input hashed, outputs not yet finalized or approved.
+    _open_legacy_change_info_state(transport)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw("e04400800d050000800a27a726b4d0d6c201")
+
+    assert e.value.status == Errors.SW_BAD_STATE
