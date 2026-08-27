@@ -333,17 +333,11 @@ fn orchard_spend_auth_signature_with_ask(
             _ => AppSW::TechnicalProblem,
         })?;
 
+    // Never logged: the randomized spend authorizing key is a device-only secret, and printing it
+    // would disclose the signing key outright.
     let randomized_ask = ask
         .randomize_ledger(&alpha)
         .map_err(map_ledger_crypto_error)?;
-
-    debug!(
-        "randomized_ask: {}",
-        HexSlice(&{
-            let randomized_ask_bytes: [u8; 32] = (&randomized_ask).into();
-            randomized_ask_bytes
-        })
-    );
 
     // Drawn here, and checked, so that an RNG failure aborts the signature instead of producing one
     // with an all-zero nonce seed, which would disclose the randomized signing key.
@@ -355,8 +349,11 @@ fn orchard_spend_auth_signature_with_ask(
         .map_err(map_ledger_crypto_error)?;
     let auth_sig: [u8; 64] = (&auth_sig).into();
 
+    // Only the signature is logged: it goes on chain. The randomizer is not, even though the host
+    // supplied it and already knows it — a build with logging enabled would otherwise put scalar
+    // material next to the signature it randomizes, and the pair is what turns a second leak into a
+    // key recovery.
     debug!("Orchard spend auth signature: {}", HexSlice(&auth_sig));
-    debug!("Orchard alpha: {}", HexSlice(&alpha_bytes));
 
     Ok(auth_sig)
 }

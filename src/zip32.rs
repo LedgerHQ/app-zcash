@@ -3,9 +3,7 @@ use zcash_protocol::consensus::NetworkType;
 
 use ledger_device_sdk::ecc::Pallas;
 use ledger_device_sdk::ecc::Secret;
-use ledger_device_sdk::info;
 
-use crate::utils::HexSlice;
 use crate::utils::extended_public_key::ExtendedPublicKey;
 use crate::{AppSW, utils::bip32_path::Bip32Path};
 
@@ -84,7 +82,6 @@ fn orchard_sk_from_bytes(sk_bytes: &Secret<32>) -> Result<OrchardSk, AppSW> {
 pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
     let sk = derive_orchard_sk_bytes(path)?;
     let orchard_fvk = derive_orchard_fvk_bytes(sk)?;
-    info!("Orchard FVK: {}", HexSlice(&orchard_fvk.to_bytes()));
 
     Ok(orchard_fvk)
 }
@@ -93,7 +90,6 @@ pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
 pub fn derive_orchard_fvk_from_sk(sk_bytes: &Secret<32>) -> Result<OrchardFvk, AppSW> {
     let sk = orchard_sk_from_bytes(sk_bytes)?;
     let fvk = OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
-    info!("Orchard FVK: {}", HexSlice(&fvk.to_bytes()));
     Ok(fvk)
 }
 
@@ -103,7 +99,6 @@ pub fn derive_orchard_fvk_and_ask_from_sk(
 ) -> Result<(OrchardFvk, OrchardAsk), AppSW> {
     let sk = orchard_sk_from_bytes(sk_bytes)?;
     let fvk = OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
-    info!("Orchard FVK: {}", HexSlice(&fvk.to_bytes()));
     let ask = OrchardAsk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
     Ok((fvk, ask))
 }
