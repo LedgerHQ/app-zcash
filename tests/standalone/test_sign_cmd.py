@@ -377,6 +377,59 @@ def test_sign_tx_v5_change(backend, scenario_navigator):
     assert check_tx_v5_signature_validity(public_key, signature, TX_BYTES, input_index=0, input_amounts=[81630485])
 
 
+def test_sign_tx_v5_self_transfer_shows_its_output(backend, scenario_navigator):
+    """A transaction paying only its own change address still shows that output.
+
+    The review filters change out, so a transaction whose every output is change would otherwise be
+    presented with no output at all: no destination, no amount, only the fee.
+    """
+    LOCKTIME = 0x00
+    EXPIRY = 0x00
+    SIGHASH_TYPE = 0x01
+    PREVOUT_TX_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c200000000f9081a000198cd6cd9559cd98109ad0622f899bc38805f11648e4f985ebe344b8238f87b13010000006b48304502210095104ae9d53a95105be4ba5a31caddff2ae83ced24b21ab4aec6d735d568fad102206e054b158047529bb736c810902ea7fc8d92f3f604c1b2a8bb0b92f0e6c016a8012102010a560c7325827df0212bca20f5cf6556b1345991b6b64b469c616e758230a5ffffffff021595dd04000000001976a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88aca245117c140000001976a914c8b56e00740e62449a053c15bdd4809f720b5cb588ac000000"
+    )
+
+    # Single output, paying the very address the change path derives.
+    TX_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c2"
+        + LOCKTIME.to_bytes(4, byteorder="big").hex()
+        + EXPIRY.to_bytes(4, byteorder="big").hex()  # header
+        + "01"
+        + "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+        + "00000000"  # hash + prevout idx
+        + "19"
+        + "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac00000000"  # input scriptPubKey + sequence
+        + "01"
+        + "958ddd0400000000"  # output amount
+        + "19"
+        + "76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"  # change output scriptPubKey
+        + "000000"  # empty sapling and orchard
+    )
+
+    path = "m/44'/133'/0'/0/0"
+    change_path = "m/44'/133'/0'/1/0"
+
+    trusted_input_idx = 0
+
+    client = ZcashCommandSender(backend)
+
+    trusted_input = client.get_trusted_input(PREVOUT_TX_BYTES, trusted_input_idx).data
+
+    response = client.get_public_key(path=path).data
+    public_key, _, _ = unpack_get_public_key_response(response)
+
+    client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input], change_path=change_path)
+
+    with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE):
+        scenario_navigator.review_approve()
+
+    resp = client.hash_sign(path=path, locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE).data
+    signature = resp[:-1]
+
+    assert check_tx_v5_signature_validity(public_key, signature, TX_BYTES, input_index=0, input_amounts=[81630485])
+
+
 def test_sign_tx_refuse(backend, scenario_navigator):
     LOCKTIME = 0x00
     EXPIRY = 0x00

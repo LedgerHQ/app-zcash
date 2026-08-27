@@ -71,6 +71,19 @@ impl LegacyOutputParser {
                 fees
             ));
         } else {
+            // Every output being change means the transaction pays only itself — a consolidation,
+            // or a send whose whole value returns to the change address. The review filters change
+            // out, so it would list no output at all and the user would approve a transfer with no
+            // visible destination and no visible amount. Reveal them instead, as the PCZT path does
+            // for its internal transfers. Only outside swap: `check_swap_params` counts the
+            // external outputs, and clearing the flag would show it several where there is one.
+            if !ctx.tx_info.outputs.iter().any(|output| !output.is_change) {
+                info!("No external output; revealing the self-transfer outputs");
+                for output in ctx.tx_info.outputs.iter_mut() {
+                    output.is_change = false;
+                }
+            }
+
             // The review is deliberately not run here. On this path `locktime` and
             // `expiry_height` only reach the device with the HASH_SIGN header that follows, so
             // reviewing now would ask the user to approve a transaction whose validity window is
