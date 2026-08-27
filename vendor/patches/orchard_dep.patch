@@ -6,8 +6,8 @@
 # Regenerate: fetch the base artifact, then diff it against the vendored tree.
 #
 diff -ruN a/Cargo.toml b/Cargo.toml
---- a/Cargo.toml	1970-01-01 00:00:01.000000000 +0000
-+++ b/Cargo.toml	2026-08-14 14:52:29.670662008 +0000
+--- a/Cargo.toml	2026-08-27 10:50:00.405109000 +0000
++++ b/Cargo.toml	2026-08-27 10:50:00.540109000 +0000
 @@ -48,6 +48,7 @@
  circuit = [
      "dep:halo2_gadgets",
@@ -46,7 +46,18 @@ diff -ruN a/Cargo.toml b/Cargo.toml
  default-features = false
  
  [dependencies.visibility]
-@@ -270,8 +280,3 @@
+@@ -224,6 +234,10 @@
+ [dependencies.zcash_spec]
+ version = "0.2.1"
+ 
++[dependencies.zeroize]
++version = "1.6.0"
++default-features = false
++
+ [dependencies.zip32]
+ version = "0.2.0"
+ default-features = false
+@@ -270,8 +284,3 @@
      "flamegraph",
  ]
  
@@ -56,8 +67,8 @@ diff -ruN a/Cargo.toml b/Cargo.toml
 -[profile.release]
 -debug = 2
 diff -ruN a/src/bundle/commitments.rs b/src/bundle/commitments.rs
---- a/src/bundle/commitments.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/bundle/commitments.rs	2026-08-14 14:52:29.638662008 +0000
+--- a/src/bundle/commitments.rs	2026-08-27 10:50:00.424109000 +0000
++++ b/src/bundle/commitments.rs	2026-08-27 10:50:00.496109000 +0000
 @@ -1,3 +1,4 @@
 +#![allow(missing_docs)]
  //! Utility functions for computing bundle commitments
@@ -80,9 +91,51 @@ diff -ruN a/src/bundle/commitments.rs b/src/bundle/commitments.rs
  const ZCASH_ORCHARD_V6_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthOrchaH_v6";
  const ZCASH_IRONWOOD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIronwd_H_v6";
 diff -ruN a/src/keys.rs b/src/keys.rs
---- a/src/keys.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/keys.rs	2026-08-14 14:52:29.665662008 +0000
-@@ -93,6 +93,19 @@
+--- a/src/keys.rs	2026-08-27 10:50:00.452109000 +0000
++++ b/src/keys.rs	2026-08-27 10:50:00.530109000 +0000
+@@ -2,6 +2,7 @@
+ 
+ use alloc::boxed::Box;
+ use alloc::vec::Vec;
++use core::fmt;
+ use corez::io::{self, Read, Write};
+ 
+ use ::zip32::{AccountId, ChildIndex};
+@@ -18,6 +19,7 @@
+ use rand::RngCore;
+ use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
+ use zcash_note_encryption::EphemeralKeyBytes;
++use zeroize::Zeroize as _;
+ 
+ use crate::{
+     address::Address,
+@@ -40,9 +42,24 @@
+ /// $\mathsf{sk}$ as defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
+ ///
+ /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
+-#[derive(Debug, Copy, Clone)]
++/// Deliberately not `Copy`: this is the master Orchard spending key, and an implicit copy would
++/// leave a duplicate behind that the `Drop` below cannot reach. `Debug` is implemented by hand so
++/// that no `{:?}` can print the key material.
++#[derive(Clone)]
+ pub struct SpendingKey([u8; 32]);
+ 
++impl fmt::Debug for SpendingKey {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_tuple("SpendingKey").field(&"<redacted>").finish()
++    }
++}
++
++impl Drop for SpendingKey {
++    fn drop(&mut self) {
++        self.0.zeroize();
++    }
++}
++
+ impl ConstantTimeEq for SpendingKey {
+     fn ct_eq(&self, other: &Self) -> Choice {
+         self.to_bytes().ct_eq(other.to_bytes())
+@@ -93,6 +110,19 @@
          &self.0
      }
  
@@ -102,7 +155,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Derives the Orchard spending key for the given seed, coin type, and account.
      pub fn from_zip32_seed(
          seed: &[u8],
-@@ -129,12 +142,81 @@
+@@ -129,12 +159,81 @@
          to_scalar(PrfExpand::ORCHARD_ASK.with(&sk.0))
      }
  
@@ -184,7 +237,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl From<&SpendingKey> for SpendAuthorizingKey {
-@@ -248,6 +330,15 @@
+@@ -248,6 +347,15 @@
  }
  
  impl NullifierDerivingKey {
@@ -200,7 +253,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      pub(crate) fn prf_nf(&self, rho: pallas::Base) -> pallas::Base {
          prf_nf(self.0, rho)
      }
-@@ -284,6 +375,15 @@
+@@ -284,6 +392,15 @@
  }
  
  impl CommitIvkRandomness {
@@ -216,7 +269,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the inner scalar value.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn inner(&self) -> pallas::Scalar {
-@@ -344,6 +444,17 @@
+@@ -344,6 +461,17 @@
  }
  
  impl FullViewingKey {
@@ -234,7 +287,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the nullifier deriving key for this full viewing key.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn nk(&self) -> &NullifierDerivingKey {
-@@ -379,6 +490,22 @@
+@@ -379,6 +507,22 @@
          )
      }
  
@@ -257,7 +310,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the payment address for this key at the given index.
      pub fn address_at(&self, j: impl Into<DiversifierIndex>, scope: Scope) -> Address {
          self.to_ivk(scope).address_at(j)
-@@ -480,6 +607,65 @@
+@@ -480,6 +624,65 @@
              Scope::Internal => OutgoingViewingKey::from_fvk(&self.derive_internal()),
          }
      }
@@ -323,7 +376,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  /// A key that provides the capability to derive a sequence of diversifiers.
-@@ -576,6 +762,23 @@
+@@ -576,6 +779,23 @@
          let ivk = KeyAgreementPrivateKey::derive_inner(fvk).unwrap();
          KeyAgreementPrivateKey(ivk.into())
      }
@@ -347,7 +400,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl KeyAgreementPrivateKey {
-@@ -612,6 +815,19 @@
+@@ -612,6 +832,19 @@
          let pk_d = DiversifiedTransmissionKey::derive(&prepared_ivk, &d);
          Address::from_parts(d, pk_d)
      }
@@ -367,7 +420,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  /// A key that provides the capability to detect and decrypt incoming notes from the block
-@@ -640,6 +856,15 @@
+@@ -640,6 +873,15 @@
              ivk: KeyAgreementPrivateKey::from_fvk(fvk),
          }
      }
@@ -383,7 +436,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl IncomingViewingKey {
-@@ -680,6 +905,16 @@
+@@ -680,6 +922,16 @@
          self.address(self.dk.get(j))
      }
  
@@ -400,7 +453,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the payment address for this key corresponding to the given diversifier.
      pub fn address(&self, d: Diversifier) -> Address {
          self.ivk.address(d)
-@@ -741,6 +976,12 @@
+@@ -741,6 +993,12 @@
      fn from_fvk(fvk: &FullViewingKey) -> Self {
          fvk.derive_dk_ovk().1
      }
@@ -413,7 +466,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl From<[u8; 32]> for OutgoingViewingKey {
-@@ -785,6 +1026,13 @@
+@@ -785,6 +1043,13 @@
          NonIdentityPallasPoint::from_bytes(bytes).map(DiversifiedTransmissionKey)
      }
  
@@ -428,8 +481,8 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn to_bytes(self) -> [u8; 32] {
 diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
---- a/src/note_encryption.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/note_encryption.rs	2026-08-14 14:52:29.664662008 +0000
+--- a/src/note_encryption.rs	2026-08-27 10:50:00.455109000 +0000
++++ b/src/note_encryption.rs	2026-08-27 10:50:00.531109000 +0000
 @@ -579,9 +579,11 @@
  
  #[cfg(test)]
@@ -442,7 +495,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
      use zcash_note_encryption::{
          batch, try_compact_note_decryption, try_note_decryption, try_output_recovery_with_ovk,
          BatchDomain, Domain, EphemeralKeyBytes, NoteEncryption,
-@@ -1022,4 +1024,406 @@
+@@ -1022,4 +1024,567 @@
              assert_eq!(batched_wnaf, expected);
          }
      }
@@ -636,6 +689,71 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +                .collect::<String>()
 +        );
 +    }
++
++    /// Emits the V3 note commitment for a zero-valued output that the device cannot decrypt,
++    /// as used by `_valid_ironwood_action()` in test_pczt_ironwood.py. Such an action carries an
++    /// all-zero enc_ciphertext, so only the commitment has to agree with the firmware.
++    ///
++    /// ```sh
++    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
++    /// cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
++    ///   --target-dir /tmp/orchard-host -- gen_v3_valid_action_cmx --nocapture
++    /// ```
++    #[test]
++    fn gen_v3_valid_action_cmx() {
++        // _INTERNAL_RECIPIENT
++        let recipient_bytes: [u8; 43] = [
++            0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe, 0x68, 0x14, 0xce,
++            0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09, 0x46, 0xf1, 0xab,
++            0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f, 0xd0, 0x52, 0xe2,
++            0x0a,
++        ];
++        let diversifier = Diversifier::from_bytes(recipient_bytes[..11].try_into().unwrap());
++        let pk_d =
++            DiversifiedTransmissionKey::from_bytes(recipient_bytes[11..].try_into().unwrap())
++                .unwrap();
++        let recipient = Address::from_parts(diversifier, pk_d);
++
++        // _NULLIFIER
++        let nullifier_bytes: [u8; 32] = [
++            0xed, 0x37, 0xcc, 0x73, 0x3c, 0x22, 0x8d, 0xc3, 0xdd, 0xa2, 0xcf, 0x08, 0x8b, 0xa6,
++            0x46, 0xf9, 0xd2, 0x04, 0xad, 0xc9, 0xd8, 0xd6, 0xf9, 0x5e, 0xc3, 0x61, 0x26, 0xeb,
++            0x74, 0x2c, 0x3a, 0x10,
++        ];
++        let nf_old = Nullifier::from_bytes(&nullifier_bytes).unwrap();
++        let rho = Rho::from_nf_old(nf_old);
++
++        // _RSEED = 0x2e followed by 31 zero bytes
++        let rseed_bytes: [u8; 32] = {
++            let mut b = [0u8; 32];
++            b[0] = 0x2e;
++            b
++        };
++        let rseed = Option::from(RandomSeed::from_bytes(rseed_bytes, &rho))
++            .expect("rseed 0x2e... is valid for this rho");
++
++        let note: Note = Option::from(Note::from_parts(
++            recipient,
++            NoteValue::from_raw(0),
++            rho,
++            rseed,
++            NoteVersion::V3,
++        ))
++        .expect("note construction failed");
++
++        let cmx_bytes = ExtractedNoteCommitment::from(note.commitment()).to_bytes();
++
++        println!("\n# ---- V3 cmx for _valid_ironwood_action (gen_v3_valid_action_cmx) ----");
++        println!("# recipient = _INTERNAL_RECIPIENT, value = 0, nullifier = _NULLIFIER");
++        println!("# rseed     = 0x2e followed by 31 zero bytes (_RSEED)\n");
++        println!(
++            "_CMX = bytes.fromhex(\n    \"{}\"\n)",
++            cmx_bytes
++                .iter()
++                .map(|b| format!("{:02x}", b))
++                .collect::<String>()
++        );
++    }
 +}
 +
 +#[cfg(test)]
@@ -662,7 +780,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +
 +    use crate::{
 +        keys::{DiversifiedTransmissionKey, Diversifier, FullViewingKey, Scope},
-+        note::{ExtractedNoteCommitment, RandomSeed, Rho},
++        note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
 +        note_encryption::{IronwoodDomain, IronwoodNoteEncryption},
 +        value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
 +        Address, Note, NoteVersion,
@@ -794,7 +912,8 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +            hex_str(&ext_nf_bytes)
 +        );
 +
-+        // ── V2 output note (value = 180 000, rho = ext_nullifier) ────────
++        // ── V3 output note (value = 180 000, rho = ext_nullifier) ────────
++        // The Ironwood value pool carries V3 note plaintexts only.
 +        let ext_div = Diversifier::from_bytes(EXT_RECIPIENT[..11].try_into().unwrap());
 +        let ext_pk_d =
 +            DiversifiedTransmissionKey::from_bytes(EXT_RECIPIENT[11..].try_into().unwrap())
@@ -811,7 +930,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +            NoteValue::from_raw(180_000),
 +            ext_output_rho,
 +            ext_rseed,
-+            NoteVersion::V2,
++            NoteVersion::V3,
 +        ))
 +        .expect("external output note must be valid");
 +
@@ -848,11 +967,106 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +            hex_lines(out_ct.as_ref())
 +        );
 +    }
++
++    /// Generate updated V3 memo-action vectors for test_pczt_ironwood.py.
++    ///
++    /// The memo action is a dummy padding spend whose 90 000-zat output goes to
++    /// `_EXT_RECIPIENT` and carries an ASCII memo recovered through the external OVK.
++    ///
++    /// ```sh
++    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
++    /// cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
++    ///   --target-dir /tmp/orchard-host -- gen_v3_memo_action_vectors --nocapture
++    /// ```
++    #[test]
++    fn gen_v3_memo_action_vectors() {
++        let fvk = FullViewingKey::from_bytes(&FVK_BYTES).expect("Speculos Orchard FVK must decode");
++        let ovk = fvk.to_ovk(Scope::External);
++
++        let ext_div = Diversifier::from_bytes(EXT_RECIPIENT[..11].try_into().unwrap());
++        let ext_pk_d =
++            DiversifiedTransmissionKey::from_bytes(EXT_RECIPIENT[11..].try_into().unwrap())
++                .expect("ext_recipient pk_d must be valid");
++        let ext_addr = Address::from_parts(ext_div, ext_pk_d);
++
++        // _MEMO_NULLIFIER — the action's nullifier; the output rho derives from it.
++        let memo_nf_bytes: [u8; 32] = [
++            0x78, 0x1c, 0x4f, 0xaf, 0x96, 0x02, 0x06, 0x51, 0x0f, 0xdc, 0x72, 0x73, 0x92, 0x67,
++            0xfa, 0x19, 0x3d, 0x9e, 0x01, 0x2d, 0xbc, 0x68, 0x99, 0x8d, 0x35, 0x53, 0x98, 0x37,
++            0xe5, 0x20, 0xae, 0x2a,
++        ];
++        let nf_old = Nullifier::from_bytes(&memo_nf_bytes).expect("_MEMO_NULLIFIER must be valid");
++        let rho = Rho::from_nf_old(nf_old);
++
++        // _MEMO_RSEED = 0x29 followed by 31 zero bytes.
++        let memo_rseed_bytes: [u8; 32] = {
++            let mut b = [0u8; 32];
++            b[0] = 0x29;
++            b
++        };
++        let rseed = Option::from(RandomSeed::from_bytes(memo_rseed_bytes, &rho))
++            .expect("_MEMO_RSEED must be valid for rho");
++
++        let note: Note = Option::from(Note::from_parts(
++            ext_addr,
++            NoteValue::from_raw(90_000),
++            rho,
++            rseed,
++            NoteVersion::V3,
++        ))
++        .expect("memo output note must be valid");
++
++        let cmx = ExtractedNoteCommitment::from(note.commitment());
++        println!("\n# ---- V3 memo action (gen_v3_memo_action_vectors) ----");
++        println!(
++            "_MEMO_CMX = bytes.fromhex(\"{}\")",
++            hex_str(&cmx.to_bytes())
++        );
++
++        let mut memo = [0u8; 512];
++        let text = b"PCZT Orchard memo test";
++        memo[..text.len()].copy_from_slice(text);
++
++        let esk = note.esk();
++        let encryptor = IronwoodNoteEncryption::new_with_esk(esk, Some(ovk), note, memo);
++        let epk_bytes = IronwoodDomain::epk_bytes(encryptor.epk());
++        println!(
++            "_MEMO_EPHEMERAL_KEY = bytes.fromhex(\"{}\")",
++            hex_str(&epk_bytes.0)
++        );
++        let enc_ct = encryptor.encrypt_note_plaintext();
++        println!(
++            "_MEMO_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
++            hex_lines(enc_ct.as_ref())
++        );
++
++        // _MEMO_RCV = 0x3d …; the action spends nothing and outputs 90 000.
++        let memo_rcv_bytes: [u8; 32] = {
++            let mut b = [0u8; 32];
++            b[0] = 0x3d;
++            b
++        };
++        let rcv = ValueCommitTrapdoor::from_bytes(memo_rcv_bytes)
++            .into_option()
++            .expect("_MEMO_RCV must be a valid scalar");
++        let value_net = NoteValue::from_raw(0) - NoteValue::from_raw(90_000);
++        let cv_net = ValueCommitment::derive(value_net, rcv);
++        println!(
++            "_MEMO_CV_NET = bytes.fromhex(\"{}\")",
++            hex_str(&cv_net.to_bytes())
++        );
++
++        let out_ct = encryptor.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut OsRng);
++        println!(
++            "_MEMO_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
++            hex_lines(out_ct.as_ref())
++        );
++    }
  }
 diff -ruN a/src/primitives/redpallas.rs b/src/primitives/redpallas.rs
---- a/src/primitives/redpallas.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/primitives/redpallas.rs	2026-08-14 14:52:29.650662008 +0000
-@@ -55,6 +55,38 @@
+--- a/src/primitives/redpallas.rs	2026-08-27 10:50:00.461109000 +0000
++++ b/src/primitives/redpallas.rs	2026-08-27 10:50:00.513109000 +0000
+@@ -55,6 +55,42 @@
      }
  }
  
@@ -879,12 +1093,16 @@ diff -ruN a/src/primitives/redpallas.rs b/src/primitives/redpallas.rs
 +    }
 +
 +    /// Creates a SpendAuth signature using Ledger SDK RedPallas primitives.
-+    pub fn sign_ledger<R: RngCore + CryptoRng>(
++    ///
++    /// `random_bytes` must be 80 freshly drawn random bytes; see
++    /// [`reddsa::SigningKey::sign_ledger`] for why the entropy is passed in rather than drawn from
++    /// an `RngCore`.
++    pub fn sign_ledger(
 +        &self,
-+        rng: R,
++        random_bytes: &[u8; 80],
 +        msg: &[u8],
 +    ) -> Result<Signature<SpendAuth>, ledger_zcash_crypto::Error> {
-+        self.0.sign_ledger(rng, msg).map(Signature)
++        self.0.sign_ledger(random_bytes, msg).map(Signature)
 +    }
 +}
 +
@@ -892,8 +1110,8 @@ diff -ruN a/src/primitives/redpallas.rs b/src/primitives/redpallas.rs
      /// Creates a signature of type `T` on `msg` using this `SigningKey`.
      pub fn sign<R: RngCore + CryptoRng>(&self, rng: R, msg: &[u8]) -> Signature<T> {
 diff -ruN a/src/spec.rs b/src/spec.rs
---- a/src/spec.rs	2006-07-24 01:21:28.000000000 +0000
-+++ b/src/spec.rs	2026-08-14 14:52:29.665662008 +0000
+--- a/src/spec.rs	2026-08-27 10:50:00.461109000 +0000
++++ b/src/spec.rs	2026-08-27 10:50:00.532109000 +0000
 @@ -60,6 +60,34 @@
          assert!(!bool::from(p.is_identity()));
          NonIdentityPallasPoint(p)
