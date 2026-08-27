@@ -130,7 +130,10 @@ class ZcashTests(ExchangeTestRunner):
 
         # Send TX
         # Start hashing TX
-        with client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input_bytes]):
+        client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input_bytes])
+
+        # No review in swap mode: the header is checked against the Exchange parameters
+        with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE):
             pass
 
         # Finalize and sign

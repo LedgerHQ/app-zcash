@@ -45,10 +45,9 @@ impl LegacyOutputParser {
         self.state == LegacyOutputParserState::OutputProcessingDone
     }
 
-    fn finalize_outputs_review(
-        &mut self,
-        ctx: &mut LegacyOutputParserCtx<'_>,
-    ) -> Result<(), ParserError> {
+    /// Completes the output side: derives the fee, cross-checks it under swap, and closes the
+    /// outputs hash. The user-facing review is run later, by `handler_hash_sign`.
+    fn finalize_outputs(&mut self, ctx: &mut LegacyOutputParserCtx<'_>) -> Result<(), ParserError> {
         if ctx.tx_info.outputs.is_empty() {
             return Err(ParserError::from_str("No transparent outputs to display"));
         }
@@ -72,11 +71,12 @@ impl LegacyOutputParser {
                 fees
             ));
         } else {
-            let transfer_type = TransferType::classify(true, false, &ctx.tx_info.outputs);
-            if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type)) {
-                return Err(ParserError::user());
-            }
-            info!("All outputs reviewed");
+            // The review is deliberately not run here. On this path `locktime` and
+            // `expiry_height` only reach the device with the HASH_SIGN header that follows, so
+            // reviewing now would ask the user to approve a transaction whose validity window is
+            // still unknown, and the host could then pick any. `handler_hash_sign` runs it once
+            // the header is in.
+            ctx.tx_info.fees = fees;
         }
 
         ok!(ctx
@@ -221,7 +221,7 @@ impl LegacyOutputParser {
                     if self.output_count == self.output_parsed_count {
                         info!("All outputs parsed");
 
-                        self.finalize_outputs_review(ctx)?;
+                        self.finalize_outputs(ctx)?;
                         self.state = LegacyOutputParserState::OutputProcessingDone;
                     } else {
                         self.state = LegacyOutputParserState::ParsingOutput;

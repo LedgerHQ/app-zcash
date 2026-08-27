@@ -167,6 +167,8 @@ pub struct TxInfo {
     pub sighash_type: u8,
     pub expiry_height: u32,
     pub total_amount: u64,
+    /// Fee derived from the parsed amounts, kept for the review that runs after the outputs.
+    pub fees: u64,
 
     pub outputs: Vec<TxOutput>,
     pub is_change_found: bool,

@@ -362,11 +362,10 @@ class ZcashCommandSender:
                 data=script + sequence,
             )
 
-    @contextmanager
     def _hash_input_finalize_outputs(
         self,
         change_path: str | None = None,
-    ) -> Generator[None, None, None]:
+    ) -> None:
         # Send outputs chunks
         outputs: list[dict] = self.tx_chunks["outputs"]  # type: ignore
         outputs_num = len(outputs)
@@ -400,31 +399,32 @@ class ZcashCommandSender:
         script = outputs[-1]["script"]
         script_len = len(script)
 
-        with self.backend.exchange_async(
+        self.backend.exchange(
             cla=CLA,
             ins=InsType.HASH_INPUT_FINALIZE_FULL,
             p1=P1.P1_FINALIZE_FULL_MORE,
             p2=P2.P2_FINALIZE_FULL_DEFAULT,
             data=outputs_num_bytes + value + script_len.to_bytes(1, byteorder="big") + script,
-        ) as response:
-            yield response
+        )
 
-    @contextmanager
     def hash_input(
         self,
         transaction: bytes,
         trusted_inputs: list[bytes],
         change_path: str | None = None,
-    ) -> Generator[None, None, None]:
+    ) -> None:
+        """Stream the transaction's inputs and outputs.
+
+        Nothing is displayed at this point: the legacy review runs on the header APDU that
+        `hash_sign_header` sends, once the transaction's validity window is known too.
+        """
         self.tx_chunks = split_tx_v5_for_hash_input(transaction)
         self.trusted_inputs = trusted_inputs
         self.pczt_transparent_inputs = []
         self.pczt_transparent_outputs = []
 
         self._send_trusted_inputs_and_header(continue_hashing=False)
-
-        with self._hash_input_finalize_outputs(change_path) as response:
-            yield response
+        self._hash_input_finalize_outputs(change_path)
 
     def _pczt_optional_u32(self, value: int | None) -> bytes:
         if value is None:
@@ -984,9 +984,20 @@ class ZcashCommandSender:
             ) as response:
                 yield response
 
-    def hash_sign(self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01) -> RAPDU:
-        # Send extra header data
-        self.backend.exchange(
+    @contextmanager
+    def hash_sign_header(
+        self,
+        locktime: int,
+        expiry: int,
+        sighash_type: int = 0x01,
+    ) -> Generator[None, None, None]:
+        """Send the transaction header, which is what triggers the legacy review.
+
+        Exposed separately from `hash_sign` because the review happens here: the header carries the
+        locktime and the expiry height, so this is the first point at which the whole transaction is
+        known to the device.
+        """
+        with self.backend.exchange_async(
             cla=CLA,
             ins=InsType.HASH_SIGN,
             p1=P1.P1_FIRST,
@@ -995,8 +1006,11 @@ class ZcashCommandSender:
             + locktime.to_bytes(4, byteorder="big")
             + sighash_type.to_bytes(1, byteorder="big")
             + expiry.to_bytes(4, byteorder="big"),
-        )
+        ) as response:
+            yield response
 
+    def hash_sign(self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01) -> RAPDU:
+        """Sign one input. The header must already have been sent and approved."""
         self._send_trusted_inputs_and_header(continue_hashing=True)
 
         return self.backend.exchange(

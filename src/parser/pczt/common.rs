@@ -161,7 +161,13 @@ impl PcztParser {
                 &ctx.tx_info.outputs,
                 fees
             ));
-        } else if !ok!(ui_display_tx(&ctx.tx_info.outputs, fees, transfer_type)) {
+        } else if !ok!(ui_display_tx(
+            &ctx.tx_info.outputs,
+            fees,
+            transfer_type,
+            ctx.tx_info.locktime,
+            ctx.tx_info.expiry_height,
+        )) {
             return Err(ParserError::user());
         }
 

@@ -125,7 +125,10 @@ def test_sign_tx_v5_simple(backend, scenario_navigator: NavigateWithScenario):
     public_key, _, _ = unpack_get_public_key_response(response)
 
     # Start hashing TX
-    with client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input]):
+    client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input])
+
+    # Review covers the header too, so it happens on the first HASH_SIGN APDU
+    with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE):
         scenario_navigator.review_approve()
 
     # Finalize and sign
@@ -199,7 +202,9 @@ def test_sign_tx_v5_nu6_2_trusted_input_and_tx(backend, scenario_navigator: Navi
     response = client.get_public_key(path=path).data
     public_key, _, _ = unpack_get_public_key_response(response)
 
-    with client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input]):
+    client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input])
+
+    with client.hash_sign_header(locktime=locktime, expiry=expiry, sighash_type=sighash_type):
         scenario_navigator.review_approve()
 
     resp = client.hash_sign(
@@ -287,7 +292,9 @@ def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: Navi
     response = client.get_public_key(path=path).data
     public_key, _, _ = unpack_get_public_key_response(response)
 
-    with client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input]):
+    client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input])
+
+    with client.hash_sign_header(locktime=locktime, expiry=expiry, sighash_type=sighash_type):
         scenario_navigator.review_approve()
 
     resp = client.hash_sign(
@@ -358,7 +365,9 @@ def test_sign_tx_v5_change(backend, scenario_navigator):
     response = client.get_public_key(path=path).data
     public_key, _, _ = unpack_get_public_key_response(response)
 
-    with client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input], change_path=change_path):
+    client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input], change_path=change_path)
+
+    with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE):
         scenario_navigator.review_approve()
 
     # Finalize and sign
@@ -399,8 +408,10 @@ def test_sign_tx_refuse(backend, scenario_navigator):
     trusted_input = client.get_trusted_input(PREVOUT_TX_BYTES, trusted_input_idx).data
 
     # Start hashing TX
+    client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input])
+
     with pytest.raises(ExceptionRAPDU) as e:
-        with client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input]):
+        with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY):
             scenario_navigator.review_reject()
 
     # Assert that we have received a refusal
@@ -463,15 +474,15 @@ def test_sign_tx_v5_old(backend, scenario_navigator):
     sw, _ = transport.exchange_raw("e04480050400000000")
     assert sw == 0x9000
 
-    # Send outputs and review
-    with transport.exchange_async_raw("e04a80002301958ddd04000000001976a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"):
+    # Send outputs
+    sw, _ = transport.exchange_raw("e04a80002301958ddd04000000001976a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac")
+    assert sw == 0x9000
+
+    # Send extra header data, which carries the validity window and triggers the review
+    with transport.exchange_async_raw("e04800000b0000000000000100000000"):
         scenario_navigator.review_approve()
 
     sw = transport.get_async_response().status
-    assert sw == 0x9000
-
-    # Send extra header data
-    sw, _ = transport.exchange_raw("e04800000b0000000000000100000000")
     assert sw == 0x9000
 
     # Send trusted inputs for final hash computation
@@ -612,14 +623,15 @@ def test_sign_tx_v5_mult_inputs_old(backend, scenario_navigator):
     sw, _ = transport.exchange_raw("e04480801d76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac00000000")
     assert sw == 0x9000
 
-    # Send outputs and review
-    with transport.exchange_async_raw("e04a8000230117222605000000001976a9147340a80cad7353cff25bad918e73837c2e2863eb88ac"):
+    # Send outputs
+    sw, _ = transport.exchange_raw("e04a8000230117222605000000001976a9147340a80cad7353cff25bad918e73837c2e2863eb88ac")
+    assert sw == 0x9000
+
+    # The extra header data carries the validity window and triggers the review
+    with transport.exchange_async_raw("e04800000b0000000000000100000000"):
         scenario_navigator.review_approve()
 
     sw = transport.get_async_response().status
-    assert sw == 0x9000
-
-    sw, _ = transport.exchange_raw("e04800000b0000000000000100000000")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04400800d050000800a27a726b4d0d6c201")
     assert sw == 0x9000
@@ -706,13 +718,14 @@ def test_sign_tx_v5_mult_outputs_old(backend, scenario_navigator):
     )
     assert sw == 0x9000
 
-    with transport.exchange_async_raw("e04a800013f31771790b77502f55895a396a64e74da588ac"):
+    sw, _ = transport.exchange_raw("e04a800013f31771790b77502f55895a396a64e74da588ac")
+    assert sw == 0x9000
+
+    # The extra header data carries the validity window and triggers the review
+    with transport.exchange_async_raw("e04800000b0000000000000100000000"):
         scenario_navigator.review_approve()
 
     sw = transport.get_async_response().status
-    assert sw == 0x9000
-
-    sw, _ = transport.exchange_raw("e04800000b0000000000000100000000")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04400800d050000800a27a726b4d0d6c201")
     assert sw == 0x9000
@@ -776,13 +789,14 @@ def test_sign_tx_with_v4_nu6_input(backend, scenario_navigator):
     )
     assert sw == 0x9000
 
-    with transport.exchange_async_raw("e04a8000138ff6367f0ea6763f1c1d865329af0715ac88ac"):
+    sw, _ = transport.exchange_raw("e04a8000138ff6367f0ea6763f1c1d865329af0715ac88ac")
+    assert sw == 0x9000
+
+    # The extra header data carries the validity window and triggers the review
+    with transport.exchange_async_raw("e04800000b0000000000000100000000"):
         scenario_navigator.review_approve()
 
     sw = transport.get_async_response().status
-    assert sw == 0x9000
-
-    sw, _ = transport.exchange_raw("e04800000b0000000000000100000000")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04400800d050000800a27a7265510e7c801")
     assert sw == 0x9000

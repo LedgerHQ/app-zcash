@@ -32,17 +32,30 @@ fn format_zec_amount(amount: u64) -> String {
     format!("{}.{:08} {}", whole, fractional, ZCASH_TICKER)
 }
 
-/// Display transaction outputs and fees for user confirmation.
+/// Display transaction outputs, fees and validity window for user confirmation.
 ///
 /// `transfer_type` classifies the flow (public, shielding, deshielding, private
 /// or mixed) and is shown as the review subtitle so the user can tell apart the
 /// involved value pools.
+///
+/// `expiry_height` is always shown, including when it is zero: zero means the
+/// transaction never expires, which is the widest possible window for it to be
+/// broadcast and therefore the case the user most needs to see. `locktime` is
+/// shown only when set, since zero constrains nothing.
 pub fn ui_display_tx(
     outputs: &[TxOutput],
     fees: u64,
     transfer_type: TransferType,
+    locktime: u32,
+    expiry_height: u32,
 ) -> Result<bool, AppSW> {
     let fees_str = format_zec_amount(fees);
+    let locktime_str = format!("{locktime}");
+    let expiry_str = if expiry_height == 0 {
+        String::from("Never expires")
+    } else {
+        format!("{expiry_height}")
+    };
 
     // Build name and value strings
     let mut name_strs = Vec::new();
@@ -95,6 +108,18 @@ pub fn ui_display_tx(
     my_fields.push(Field {
         name: "Fees",
         value: fees_str.as_str(),
+    });
+
+    if locktime != 0 {
+        my_fields.push(Field {
+            name: "Lock time",
+            value: locktime_str.as_str(),
+        });
+    }
+
+    my_fields.push(Field {
+        name: "Expiry height",
+        value: expiry_str.as_str(),
     });
 
     // Create NBGL review. Maximum number of fields and string buffer length can be customized

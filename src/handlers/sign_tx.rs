@@ -20,12 +20,13 @@ use ledger_device_sdk::log::{debug, error, info};
 use zeroize::Zeroizing;
 
 use crate::AppSW;
+use crate::app_ui::sign::ui_display_tx;
 use crate::consts::SIGHASH_ALL;
 use crate::parser::{
     LegacyOutputParserCtx, LegacyParser, LegacyParserCtx, LegacyParserMode, ParserSourceError,
 };
 use crate::rng;
-use crate::tx::TxContext;
+use crate::tx::{TransferType, TxContext};
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
 use crate::zip32::{derive_orchard_ask_from_sk, map_ledger_crypto_error};
@@ -187,11 +188,6 @@ pub fn handler_hash_input_finalize_full(
             }
         })?;
 
-    if ctx.legacy_output_parser.is_finished() && !ctx.tx_signing_state.is_tx_parsed_once {
-        info!("Set TX parsed once flag");
-        ctx.tx_signing_state.is_tx_parsed_once = true;
-    }
-
     Ok(())
 }
 
@@ -234,7 +230,11 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         return Err(AppSW::WrongApduLength);
     }
 
-    if ctx.tx_signing_state.is_tx_parsed_once && !ctx.is_extra_header_data_set() {
+    // This APDU carries the header of a transaction whose outputs are already in. It is the point
+    // at which the transaction is fully known, so it is also where the user reviews it: the
+    // validity window arrives here and nowhere earlier, and reviewing before it would leave the
+    // host free to pick a locktime and an expiry the approval never covered.
+    if ctx.legacy_output_parser.is_finished() && !ctx.is_extra_header_data_set() {
         // not used path size 1 + not used auth len 1 + locktime 4 + sighhash ty 1 +  expiry height 4
         const EXTRA_HEADER_DATA_LEN: usize = 11;
         if data.len() != EXTRA_HEADER_DATA_LEN {
@@ -253,6 +253,26 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         ctx.tx_info.expiry_height = expiry_height;
 
         ctx.set_extra_header_data();
+
+        // Under swap the Exchange approval stands in for the review, and the output parser has
+        // already cross-checked the transaction against it.
+        if ctx.swap_params.is_none() {
+            let transfer_type = TransferType::classify(true, false, &ctx.tx_info.outputs);
+            if !ui_display_tx(
+                &ctx.tx_info.outputs,
+                ctx.tx_info.fees,
+                transfer_type,
+                locktime,
+                expiry_height,
+            )? {
+                info!("Transaction refused at review");
+                ctx.set_finished();
+                return Err(AppSW::Deny);
+            }
+            info!("Transaction reviewed");
+        }
+
+        ctx.tx_signing_state.is_tx_parsed_once = true;
 
         return Ok(());
     }

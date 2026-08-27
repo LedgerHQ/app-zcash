@@ -372,8 +372,11 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             tx_ctx.is_vk_display_finished = false;
             (true, StatusType::Address)
         }
+        // The legacy review runs on HASH_SIGN, which is where the transaction header completes it,
+        // so both its outcomes are reported there. HASH_INPUT_FINALIZE_FULL keeps its refusal arm
+        // for the errors the output parser itself raises.
         (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
-        | (Instruction::HashSign, AppSW::Ok)
+        | (Instruction::HashSign, AppSW::Ok | AppSW::Deny)
             if tx_ctx.is_finished() =>
         {
             (true, StatusType::Transaction)
