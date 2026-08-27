@@ -37,11 +37,23 @@ pub fn handler_hash_input_start(
     continue_hashing: bool,
 ) -> Result<(), AppSW> {
     // Any shape that does not reset the context reuses the transaction state already there, which is
-    // sound only after a legacy round.
+    // sound only after a legacy round that is still in progress.
     let resets_context = first && !continue_hashing;
-    if !resets_context && ctx.pczt_parser.is_session_active() {
-        error!("Legacy round during a PCZT session");
-        return Err(AppSW::BadState);
+    if !resets_context {
+        if ctx.pczt_parser.is_session_active() {
+            error!("Legacy round during a PCZT session");
+            return Err(AppSW::BadState);
+        }
+
+        // A transaction that is finished — fully signed, or refused at its review — keeps its
+        // outputs, hashers and parsers until the next reset, and a PCZT that ran to completion is
+        // no longer reported as an active session. Resuming that state would append this round's
+        // outputs to the previous transaction's, so the review would list outputs the signature
+        // does not cover, and would spend an approval that is already spent.
+        if ctx.is_finished() {
+            error!("Legacy round resuming a finished transaction");
+            return Err(AppSW::BadState);
+        }
     }
 
     if continue_hashing {
@@ -61,13 +73,6 @@ pub fn handler_hash_input_start(
         // digest, so the value of that output would silently go to the miner instead.
         if !ctx.tx_signing_state.is_tx_parsed_once {
             error!("Legacy continuation before the transaction was reviewed");
-            return Err(AppSW::BadState);
-        }
-
-        // Once every input is signed the approval is spent; a further round would build a second
-        // transaction on top of it.
-        if ctx.is_finished() {
-            error!("Legacy continuation after signing completed");
             return Err(AppSW::BadState);
         }
 

@@ -239,6 +239,109 @@ def test_pczt_sign_tx_v5_simple(
     )
 
 
+def test_legacy_round_after_a_completed_pczt_is_rejected(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A legacy round must not resume the state a finished PCZT left behind.
+
+    Completing a PCZT marks the transaction finished and resets the PCZT parser, but its outputs,
+    hashers and the legacy parsers stay in place. The guard the legacy handlers use against
+    cross-protocol mixing is `pczt_parser.is_session_active()`, which reports nothing once the
+    session has run to completion, so a HASH_INPUT_START that does not reset the context was
+    accepted: the legacy output parser would append its outputs to those the PCZT had already
+    displayed, and the next review would list outputs the new signature does not cover.
+
+    The transaction signed here is the one from `test_pczt_sign_tx_v5_simple`, whose review
+    snapshots it therefore shares. Starting a fresh legacy transaction with P1_FIRST stays
+    available, and the tests above cover it.
+    """
+    PCZT_GLOBAL = PcztGlobal()
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    TRANSPARENT_OUTPUT = PcztTransparentOutput(
+        value=81628565,
+        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=[TRANSPARENT_OUTPUT],
+    ):
+        _review_approve(scenario_navigator, "test_sign_tx_v5_simple")
+
+    # The single input is now signed, so the transaction is finished. Completion puts the transient
+    # review-status screen up, and an APDU sent while it is showing times out, so wait for the app
+    # to settle back on its home screen first.
+    client.pczt_sign_transparent(input_index=0)
+    backend.wait_for_home_screen()
+
+    # HASH_INPUT_START with P1_NEXT: the shape that continues a round instead of starting one.
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.exchange_raw("e04480050400000000")
+
+    assert e.value.status == Errors.SW_BAD_STATE
+
+
+def test_trusted_input_continuation_after_a_completed_pczt_is_rejected(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The same guard, reached through GET_TRUSTED_INPUT instead of the signing instruction.
+
+    `handler_get_trusted_input` refuses a continuation once the transaction is finished, and the
+    test above only exercises the sibling guard in the signing handler. Both entry points parse
+    into the same hashers, so a continuation accepted here would extend a finished transaction's
+    digest just as one accepted there would — covering only one of the two would leave the guard
+    that stands in front of the trusted-input parser asserted by nothing.
+
+    Shares the review snapshots of `test_sign_tx_v5_simple`, whose transaction this signs. A first
+    packet, `P1_FIRST`, legitimately starts a fresh round and resets the context; that path stays
+    open and `test_trusted_input_cmd.py` covers it.
+    """
+    PCZT_GLOBAL = PcztGlobal()
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    TRANSPARENT_OUTPUT = PcztTransparentOutput(
+        value=81628565,
+        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=[TRANSPARENT_OUTPUT],
+    ):
+        _review_approve(scenario_navigator, "test_sign_tx_v5_simple")
+
+    client.pczt_sign_transparent(input_index=0)
+    backend.wait_for_home_screen()
+
+    # GET_TRUSTED_INPUT with P1 = 0x80: a continuation, carrying the one-byte output count that a
+    # legitimate continuation would send next.
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.exchange_raw("e04280000102")
+
+    assert e.value.status == Errors.SW_BAD_STATE
+
+
 def test_pczt_sign_tx_v5_p2sh_output(
     backend,
     scenario_navigator: NavigateWithScenario,

@@ -31,6 +31,14 @@ pub fn handler_get_trusted_input(
         return Err(AppSW::BadState);
     }
 
+    // Likewise once a transaction is finished: its outputs and hashers stay in place, and a
+    // completed PCZT no longer reports an active session, so a continuation would build on the
+    // previous transaction's state instead of a fresh one.
+    if !first && ctx.is_finished() {
+        error!("Trusted-input continuation resuming a finished transaction");
+        return Err(AppSW::BadState);
+    }
+
     if first {
         info!("Reset TX context");
         ctx.reset_for_new_transaction(LegacyParserMode::TrustedInput)?;
