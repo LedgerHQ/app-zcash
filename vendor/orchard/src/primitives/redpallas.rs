@@ -78,12 +78,16 @@ impl SigningKey<SpendAuth> {
     }
 
     /// Creates a SpendAuth signature using Ledger SDK RedPallas primitives.
-    pub fn sign_ledger<R: RngCore + CryptoRng>(
+    ///
+    /// `random_bytes` must be 80 freshly drawn random bytes; see
+    /// [`reddsa::SigningKey::sign_ledger`] for why the entropy is passed in rather than drawn from
+    /// an `RngCore`.
+    pub fn sign_ledger(
         &self,
-        rng: R,
+        random_bytes: &[u8; 80],
         msg: &[u8],
     ) -> Result<Signature<SpendAuth>, ledger_zcash_crypto::Error> {
-        self.0.sign_ledger(rng, msg).map(Signature)
+        self.0.sign_ledger(random_bytes, msg).map(Signature)
     }
 }
 

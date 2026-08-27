@@ -71,22 +71,22 @@ impl SigningKey<crate::orchard::SpendAuth> {
     }
 
     /// Create a SpendAuth signature using Ledger SDK RedPallas primitives.
-    pub fn sign_ledger<R: RngCore + CryptoRng>(
+    ///
+    /// `random_bytes` must be (\ell_H + 128)/8 = 80 freshly drawn random bytes. It is passed in
+    /// rather than drawn from an `RngCore` because `RngCore::fill_bytes` cannot report a hardware
+    /// RNG failure: a silent failure here would make the nonce a public function of the
+    /// verification key and `msg`, disclosing the signing key. The caller is responsible for
+    /// checking that the draw succeeded.
+    pub fn sign_ledger(
         &self,
-        mut rng: R,
+        random_bytes: &[u8; 80],
         msg: &[u8],
     ) -> Result<Signature<crate::orchard::SpendAuth>, ledger_zcash_crypto::Error> {
-        let random_bytes = {
-            let mut bytes = [0; 80];
-            rng.fill_bytes(&mut bytes);
-            bytes
-        };
-
         let sk_bytes = self.sk.to_repr().as_ref().try_into().unwrap();
         let ledger_signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(sk_bytes)
             .map_err(ledger_zcash_crypto::Error::from)?;
         let signature =
-            ledger_zcash_crypto::redpallas::spendauth_sign(&ledger_signing_key, &random_bytes, msg)
+            ledger_zcash_crypto::redpallas::spendauth_sign(&ledger_signing_key, random_bytes, msg)
                 .map_err(ledger_zcash_crypto::Error::from)?;
 
         Ok(signature.into())

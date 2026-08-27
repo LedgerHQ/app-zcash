@@ -2,6 +2,7 @@ use crate::{
     AppSW,
     consts::TRUSTED_INPUT_SIZE,
     parser::{LegacyParserCtx, LegacyParserMode, ParserSourceError},
+    rng,
     settings::Settings,
     tx::TxContext,
     utils::{Endianness, HexSlice, read_u32},
@@ -10,7 +11,6 @@ use ledger_device_sdk::{
     hmac::{HMACInit, sha2::Sha2_256 as HmacSha256},
     io::Comm,
     log::{debug, error, info},
-    random::rand_bytes,
 };
 
 const MAGIC_TRUSTED_INPUT: u8 = 0x32;
@@ -66,11 +66,11 @@ pub fn handler_get_trusted_input(
             return Err(AppSW::IncorrectData);
         }
 
-        let mut rng = [0u8; 4];
-        rand_bytes(&mut rng);
+        let mut nonce = [0u8; 4];
+        rng::fill_bytes(&mut nonce)?;
 
         comm.append(&[MAGIC_TRUSTED_INPUT, 0x00]);
-        comm.append(&rng[2..]);
+        comm.append(&nonce[2..]);
         comm.append(&ctx.trusted_input_info.tx_id);
         comm.append(
             ctx.trusted_input_info

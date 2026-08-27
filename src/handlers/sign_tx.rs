@@ -17,13 +17,14 @@
 use ledger_device_sdk::ecc::{Secp256k1, Secret, SeedDerive as _};
 use ledger_device_sdk::io::Comm;
 use ledger_device_sdk::log::{debug, error, info};
-use ledger_device_sdk::random::LedgerRng;
+use zeroize::Zeroizing;
 
 use crate::AppSW;
 use crate::consts::SIGHASH_ALL;
 use crate::parser::{
     LegacyOutputParserCtx, LegacyParser, LegacyParserCtx, LegacyParserMode, ParserSourceError,
 };
+use crate::rng;
 use crate::tx::TxContext;
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
@@ -344,8 +345,13 @@ fn orchard_spend_auth_signature_with_ask(
         })
     );
 
+    // Drawn here, and checked, so that an RNG failure aborts the signature instead of producing one
+    // with an all-zero nonce seed, which would disclose the randomized signing key.
+    let mut random_bytes = Zeroizing::new([0u8; 80]);
+    rng::fill_bytes(&mut random_bytes[..])?;
+
     let auth_sig = randomized_ask
-        .sign_ledger(LedgerRng, sig_hash)
+        .sign_ledger(&random_bytes, sig_hash)
         .map_err(map_ledger_crypto_error)?;
     let auth_sig: [u8; 64] = (&auth_sig).into();
 
