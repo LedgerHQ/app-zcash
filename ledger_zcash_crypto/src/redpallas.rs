@@ -12,6 +12,7 @@ use ledger_device_sdk::{
     },
 };
 use pasta_curves::pallas;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::{
     bytes::reverse_copy,
@@ -84,7 +85,10 @@ impl SpendAuthVerificationKey {
 }
 
 /// RedPallas spend-auth signing key representation.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+///
+/// Deliberately not `Copy`/`Clone`: `bytes` is a secret scalar, and an implicit copy would leave a
+/// duplicate behind that no `Drop` can reach. Nor `Debug`/`PartialEq`, so the secret cannot reach a
+/// log through `{:?}` and cannot be compared in non-constant time.
 pub struct SpendAuthSigningKey {
     bytes: [u8; 32],
     verification_key: SpendAuthVerificationKey,
@@ -93,6 +97,12 @@ pub struct SpendAuthSigningKey {
 impl SpendAuthSigningKey {
     pub fn verification_key_bytes(&self) -> [u8; 32] {
         self.verification_key.bytes
+    }
+}
+
+impl Drop for SpendAuthSigningKey {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
     }
 }
 
@@ -150,7 +160,8 @@ impl From<&BindingVerificationKey> for [u8; 32] {
 }
 
 /// RedPallas binding signing key representation.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+///
+/// Not `Copy`/`Clone`/`Debug`/`PartialEq`, for the same reasons as [`SpendAuthSigningKey`].
 pub struct BindingSigningKey {
     bytes: [u8; 32],
     verification_key: BindingVerificationKey,
@@ -163,6 +174,12 @@ impl BindingSigningKey {
 
     pub fn verification_key(&self) -> BindingVerificationKey {
         self.verification_key
+    }
+}
+
+impl Drop for BindingSigningKey {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
     }
 }
 
@@ -228,8 +245,8 @@ pub fn spendauth_randomized_signing_key(
 
         let sum = Bn::alloc(32)?;
         {
-            let scalar = Bn::alloc_init(&scalar_bytes_be)?;
-            let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
+            let scalar = Bn::alloc_init(&scalar_bytes_be[..])?;
+            let randomizer = Bn::alloc_init(&randomizer_bytes_be[..])?;
             sum.mod_add(&scalar, &randomizer, &order)?;
         }
 
@@ -242,15 +259,15 @@ pub fn spendauth_randomized_signing_key(
         let randomized = Bn::alloc(32)?;
         randomized.reduce(&sum, &order)?;
 
-        let mut randomized_bytes_be = [0u8; 32];
-        randomized.export(&mut randomized_bytes_be)?;
+        let mut randomized_bytes_be = Zeroizing::new([0u8; 32]);
+        randomized.export(&mut randomized_bytes_be[..])?;
 
-        let mut randomized_bytes_le = [0u8; 32];
+        let mut randomized_bytes_le = Zeroizing::new([0u8; 32]);
         reverse_copy(&mut randomized_bytes_le, &randomized_bytes_be);
         randomized_bytes_le
     };
 
-    spendauth_signing_key(randomized_bytes_le)
+    spendauth_signing_key(*randomized_bytes_le)
 }
 
 /// Computes only the *bytes* of the randomized RedPallas spend-auth verification
@@ -275,8 +292,8 @@ pub fn spendauth_randomized_verification_key_bytes(
 
         let sum = Bn::alloc(32)?;
         {
-            let scalar = Bn::alloc_init(&scalar_bytes_be)?;
-            let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
+            let scalar = Bn::alloc_init(&scalar_bytes_be[..])?;
+            let randomizer = Bn::alloc_init(&randomizer_bytes_be[..])?;
             sum.mod_add(&scalar, &randomizer, &order)?;
         }
 
@@ -289,8 +306,8 @@ pub fn spendauth_randomized_verification_key_bytes(
         let randomized = Bn::alloc(32)?;
         randomized.reduce(&sum, &order)?;
 
-        let mut randomized_bytes_be = [0u8; 32];
-        randomized.export(&mut randomized_bytes_be)?;
+        let mut randomized_bytes_be = Zeroizing::new([0u8; 32]);
+        randomized.export(&mut randomized_bytes_be[..])?;
         randomized_bytes_be
     };
 
@@ -346,9 +363,9 @@ fn redpallas_sign(
     let challenge_bytes_le = redpallas_hstar(&[&r_bytes, pk_bytes, msg])?;
     let challenge_bytes_be = canonical_scalar_bytes_be(&challenge_bytes_le)?;
 
-    let nonce = Bn::alloc_init(&nonce_bytes_be)?;
-    let challenge = Bn::alloc_init(&challenge_bytes_be)?;
-    let scalar = Bn::alloc_init(&scalar_bytes_be)?;
+    let nonce = Bn::alloc_init(&nonce_bytes_be[..])?;
+    let challenge = Bn::alloc_init(&challenge_bytes_be[..])?;
+    let scalar = Bn::alloc_init(&scalar_bytes_be[..])?;
     let mut order = Bn::alloc(32)?;
     CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
@@ -380,11 +397,16 @@ fn redpallas_sign(
     Ok(signature)
 }
 
-fn canonical_scalar_bytes_be(scalar_bytes_le: &[u8; 32]) -> Result<[u8; 32], Error> {
-    let mut scalar_bytes_be = [0u8; 32];
+/// Reverses a little-endian scalar into the big-endian form the SDK big-number API expects, after
+/// checking it is canonical.
+///
+/// Returns the bytes wrapped in [`Zeroizing`]: most callers pass a secret scalar (a signing key, a
+/// randomizer or a nonce), and wrapping unconditionally avoids having to decide per call site.
+fn canonical_scalar_bytes_be(scalar_bytes_le: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>, Error> {
+    let mut scalar_bytes_be = Zeroizing::new([0u8; 32]);
     reverse_copy(&mut scalar_bytes_be, scalar_bytes_le);
 
-    let scalar = Bn::alloc_init(&scalar_bytes_be)?;
+    let scalar = Bn::alloc_init(&scalar_bytes_be[..])?;
     let mut order = Bn::alloc(32)?;
     CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
@@ -443,34 +465,40 @@ fn basepoint_mul_from_scalar_be(
     Ok((encode_pallas_point_bytes(&x_be, sign), point))
 }
 
-fn redpallas_hstar(chunks: &[&[u8]]) -> Result<[u8; 32], Error> {
+/// Computes the RedPallas `H^star` hash-to-scalar.
+///
+/// The result is [`Zeroizing`] because on the nonce call the digest *is* the nonce, and recovering
+/// it from a signature's `s` would disclose the signing key.
+fn redpallas_hstar(chunks: &[&[u8]]) -> Result<Zeroizing<[u8; 32]>, Error> {
     let mut personalization = REDPALLAS_HSTAR_PERSONALIZATION;
-    let mut output = [0u8; 64];
+    let mut output = Zeroizing::new([0u8; 64]);
     let mut hasher = Blake2b_512::new_with_salt_and_perso(None, Some(&mut personalization))?;
 
     for chunk in chunks {
         hasher.update(chunk)?;
     }
-    hasher.finalize(&mut output)?;
+    hasher.finalize(&mut output[..])?;
 
     reduce_uniform_le_bytes_mod_pallas_order(&output)
 }
 
-fn reduce_uniform_le_bytes_mod_pallas_order(uniform_le: &[u8; 64]) -> Result<[u8; 32], Error> {
-    let mut uniform_be = [0u8; 64];
+fn reduce_uniform_le_bytes_mod_pallas_order(
+    uniform_le: &[u8; 64],
+) -> Result<Zeroizing<[u8; 32]>, Error> {
+    let mut uniform_be = Zeroizing::new([0u8; 64]);
     reverse_copy(&mut uniform_be, uniform_le);
 
-    let wide = Bn::alloc_init(&uniform_be)?;
+    let wide = Bn::alloc_init(&uniform_be[..])?;
     let mut order = Bn::alloc(32)?;
     CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
     let reduced = Bn::alloc(32)?;
     reduced.reduce(&wide, &order)?;
 
-    let mut reduced_bytes_be = [0u8; 32];
-    reduced.export(&mut reduced_bytes_be)?;
+    let mut reduced_bytes_be = Zeroizing::new([0u8; 32]);
+    reduced.export(&mut reduced_bytes_be[..])?;
 
-    let mut reduced_bytes_le = [0u8; 32];
+    let mut reduced_bytes_le = Zeroizing::new([0u8; 32]);
     reverse_copy(&mut reduced_bytes_le, &reduced_bytes_be);
 
     Ok(reduced_bytes_le)

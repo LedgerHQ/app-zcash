@@ -1717,6 +1717,7 @@ dependencies = [
  "ff",
  "ledger_device_sdk",
  "pasta_curves",
+ "zeroize",
 ]
 
 [[package]]

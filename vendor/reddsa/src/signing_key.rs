@@ -47,7 +47,9 @@ impl SigningKey<crate::orchard::SpendAuth> {
     pub fn try_from_ledger_signing_key(
         ask: ledger_zcash_crypto::redpallas::SpendAuthSigningKey,
     ) -> Result<Self, ledger_zcash_crypto::Error> {
-        let sk = ledger_zcash_crypto::pallas_scalar_from_repr(<[u8; 32]>::from(ask))?;
+        // By reference: `SpendAuthSigningKey` is no longer `Copy`, so that it can zeroize its secret
+        // scalar on drop.
+        let sk = ledger_zcash_crypto::pallas_scalar_from_repr(<[u8; 32]>::from(&ask))?;
         let pk = VerificationKey::from_ledger_verification_key(ask.verification_key());
 
         Ok(SigningKey { sk, pk })

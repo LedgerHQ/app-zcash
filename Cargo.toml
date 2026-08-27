@@ -5,6 +5,7 @@ exclude = ["vendor/rust-secp256k1"]
 
 [workspace.dependencies]
 ledger_device_sdk = { version = "1.*", features = ["sys"] }
+zeroize = { version = "1.6.0", default-features = false }
 
 [package]
 name = "zcash"
@@ -28,7 +29,7 @@ zcash_address = { version = "0.13.0", default-features = false }
 
 orchard = { path = "./vendor/orchard", default-features = false, features = ["ledger"] }
 num_enum = { version = "0.7.5", default-features = false }
-zeroize = { version = "1.6.0", default-features = false }
+zeroize = { workspace = true }
 
 [patch.crates-io]
 # Pulled by bitvec (via orchard)
