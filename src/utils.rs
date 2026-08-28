@@ -167,19 +167,27 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
         return false;
     }
 
-    let purpose = path[PURPOSE_OFFSET] & UNHARDENED_MASK;
-    if purpose != BIP44_PURPOSE {
+    // BIP-44 hardens purpose, coin type and account. Comparing them with the hardening bit masked
+    // off equates `m/44/133/…` with `m/44'/133'/…`, which derive unrelated keys: the app would
+    // vouch for an address the wallet does not own. The OS refuses to derive a path outside the
+    // ones the app declares, but it answers that refusal by aborting the app rather than by a
+    // status word, so the check has to be exact here.
+    if path[PURPOSE_OFFSET] != (BIP44_PURPOSE | HARDENED) {
         error!("Bad Bip44 purpose");
         return false;
     }
 
-    let coin_type = path[BIP44_COIN_TYPE_OFFSET] & UNHARDENED_MASK;
-    if coin_type != ZCASH_BIP44_COIN_TYPE {
+    if path[BIP44_COIN_TYPE_OFFSET] != (ZCASH_BIP44_COIN_TYPE | HARDENED) {
         error!("Bad Bip44 coin type");
         return false;
     }
 
     if let Bip44CheckMode::Full { is_change_path } = mode {
+        if path[BIP44_ACCOUNT_OFFSET] & HARDENED == 0 {
+            error!("Bip44 account is not hardened");
+            return false;
+        }
+
         let account = path[BIP44_ACCOUNT_OFFSET] & UNHARDENED_MASK;
         if account > MAX_BIP44_ACCOUNT_RECOMMENDED {
             error!("Bad Bip44 account");
@@ -192,7 +200,10 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
             return false;
         }
 
-        let address_index = path[BIP44_ADDRESS_INDEX_OFFSET] & UNHARDENED_MASK;
+        // Change and address index are the non-hardened half of BIP-44, and both are read unmasked:
+        // a hardened value exceeds the bound below on its own, so it cannot pass for the small
+        // index it would be mistaken for.
+        let address_index = path[BIP44_ADDRESS_INDEX_OFFSET];
         if address_index > MAX_BIP44_ADDRESS_INDEX_RECOMMENDED {
             error!("Bad Bip44 address index");
             return false;

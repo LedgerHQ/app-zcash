@@ -1026,6 +1026,15 @@ def _open_legacy_change_info_state(transport) -> None:
         pytest.param("058000002c80000085800000650000000100000000", id="account_over_ceiling"),
         # Address index 50001, one past the accepted ceiling.
         pytest.param("058000002c8000008580000002000000010000c351", id="address_index_over_ceiling"),
+        # The three components BIP-44 hardens, each turned unhardened in turn. Compared with the
+        # hardening bit masked off they read as the valid path itself, yet they derive unrelated
+        # keys — so the output would be dropped from the review as change of an address the wallet
+        # does not own.
+        pytest.param("050000002c80000085800000020000000100000000", id="unhardened_purpose"),
+        pytest.param("058000002c00000085800000020000000100000000", id="unhardened_coin_type"),
+        pytest.param("058000002c80000085000000020000000100000000", id="unhardened_account"),
+        # The converse: the address index hardened where BIP-44 leaves it plain.
+        pytest.param("058000002c80000085800000020000000180000000", id="hardened_address_index"),
     ],
 )
 def test_legacy_change_info_rejects_non_change_path(backend, change_path):
