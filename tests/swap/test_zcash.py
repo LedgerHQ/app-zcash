@@ -390,6 +390,26 @@ class TestsZcashPcztSeveralExternalOutputs:
         assert e.value.status == ZcashErrors.SW_INVALID_TRANSACTION
 
 
+class ZcashDestinationExtraIdTests(ZcashTests):
+    """Approve a swap whose destination carries an extra ID.
+
+    Chains that need one put the routing or deposit information there rather than in the address.
+    The transaction the device signs here is transparent, so it has nowhere to put it: signing would
+    hand the provider funds it cannot attribute to the trade.
+    """
+
+    valid_destination_memo_1 = "0badc0de"
+
+
+class TestsZcashSwapDestinationExtraId:
+    # Its own name, and so its own snapshots: the Exchange review shows the extra ID, which the
+    # shared golden of `swap_valid_1` does not carry.
+    def test_zcash_swap_destination_extra_id(self, backend, exchange_navigation_helper):
+        with pytest.raises(ExceptionRAPDU) as e:
+            ZcashDestinationExtraIdTests(backend, exchange_navigation_helper).run_test("swap_valid_1")
+        assert e.value.status == ZcashErrors.SW_INVALID_TRANSACTION
+
+
 class ZcashOutOfRangeAmountTests(ZcashTests):
     """Approve a swap for an amount Zcash cannot represent, then pay its low 64 bits.
 
