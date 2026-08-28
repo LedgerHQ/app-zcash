@@ -27,7 +27,7 @@ use crate::parser::{
 };
 use crate::rng;
 use crate::tx::{TransferType, TxContext};
-use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
+use crate::utils::{Bip44CheckMode, HexSlice, bip44_account, check_bip44_compliance};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
 use crate::zip32::{derive_orchard_ask_from_sk, map_ledger_crypto_error};
 
@@ -146,6 +146,9 @@ pub fn handler_hash_input_finalize_full(
         let public_key_with_cc = ExtendedPublicKey::try_from(&path)?;
         let change_pk_hash = public_key_with_cc.compressed_public_key_hash160()?;
         ctx.tx_info.change_pk_hash = Some(change_pk_hash);
+        // Remembered for the signing step, which is the first point where the account being spent
+        // from is known too.
+        ctx.tx_info.change_account = bip44_account(&path);
 
         info!("Change pk hash: {}", HexSlice(&change_pk_hash));
 
@@ -294,6 +297,19 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
 
     if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
         error!("Signing path not compliant");
+        return Err(AppSW::ConditionsOfUseNotSatisfied);
+    }
+
+    // A change output is removed from the review, so nothing on screen tells the user where it
+    // goes. That is only acceptable while it returns to the account the transaction spends from:
+    // otherwise the host names a change path in another account, and the value leaves the account
+    // the user is spending with no destination and no amount displayed. Both accounts are known
+    // only here, so this is where the transaction is refused — before any signature exists, since
+    // a released signature cannot be recalled.
+    if let Some(change_account) = ctx.tx_info.change_account
+        && bip44_account(&path) != Some(change_account)
+    {
+        error!("Change path account differs from the signing account");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
 

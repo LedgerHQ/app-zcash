@@ -173,6 +173,11 @@ pub struct TxInfo {
     pub outputs: Vec<TxOutput>,
     pub is_change_found: bool,
     pub change_pk_hash: Option<[u8; 20]>,
+    /// Account component of the change path the host declared, hardening bit included.
+    ///
+    /// Kept so the signature can be refused when it would spend from a different account than the
+    /// one the hidden change returns to.
+    pub change_account: Option<u32>,
 
     pub prevouts_hash: [u8; 32],
     pub sequence_hash: [u8; 32],

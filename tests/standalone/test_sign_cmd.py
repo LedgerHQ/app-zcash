@@ -1,5 +1,6 @@
 # pylint: disable=C0301
 
+import hashlib
 import struct
 
 import pytest
@@ -8,7 +9,7 @@ from application_client.zcash_response_unpacker import (
     unpack_get_public_key_response,
     unpack_trusted_input_response,
 )
-from application_client.zcash_utils import write_varint
+from application_client.zcash_utils import ripemd160, write_varint
 from application_client.zcash_verify_sign import (
     check_tx_v5_signature_validity,
     nu5_txid_digests,
@@ -375,6 +376,71 @@ def test_sign_tx_v5_change(backend, scenario_navigator):
     signature = resp[:-1]
 
     assert check_tx_v5_signature_validity(public_key, signature, TX_BYTES, input_index=0, input_amounts=[81630485])
+
+
+def test_legacy_change_in_another_account_yields_no_signature(backend, scenario_navigator):
+    """Change declared in an account other than the one being spent is refused at signing.
+
+    The review hides change outputs, so an output the host presents as change of a foreign account
+    leaves the screen with no trace of the value going there. The two accounts are only both known
+    once the signing path arrives, so the refusal lands there — with no signature emitted, since a
+    released signature cannot be recalled.
+    """
+    LOCKTIME = 0x00
+    EXPIRY = 0x00
+    SIGHASH_TYPE = 0x01
+    PREVOUT_TX_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c200000000f9081a000198cd6cd9559cd98109ad0622f899bc38805f11648e4f985ebe344b8238f87b13010000006b48304502210095104ae9d53a95105be4ba5a31caddff2ae83ced24b21ab4aec6d735d568fad102206e054b158047529bb736c810902ea7fc8d92f3f604c1b2a8bb0b92f0e6c016a8012102010a560c7325827df0212bca20f5cf6556b1345991b6b64b469c616e758230a5ffffffff021595dd04000000001976a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88aca245117c140000001976a914c8b56e00740e62449a053c15bdd4809f720b5cb588ac000000"
+    )
+
+    path = "m/44'/133'/0'/0/0"
+    # Change one account over. Same seed, so the device does own it — which is exactly what makes
+    # the output pass for change and disappear from the review.
+    foreign_change_path = "m/44'/133'/1'/1/0"
+
+    client = ZcashCommandSender(backend)
+
+    # The change output has to hash to the foreign path's key, otherwise it would simply be shown as
+    # a regular output and the review would never hide it.
+    foreign_pubkey, _, _ = unpack_get_public_key_response(client.get_public_key(path=foreign_change_path).data)
+    compressed = bytes([0x02 + (foreign_pubkey[64] & 1)]) + foreign_pubkey[1:33]
+    foreign_pk_hash = ripemd160(hashlib.sha256(compressed).digest())
+
+    TX_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c2"
+        + LOCKTIME.to_bytes(4, byteorder="big").hex()
+        + EXPIRY.to_bytes(4, byteorder="big").hex()  # header
+        + "01"
+        + "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+        + "00000000"  # hash + prevout idx
+        + "19"
+        + "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac00000000"  # input scriptPubKey + sequence
+        + "02"
+        + "005a620200000000"  # output amount
+        + "19"
+        + "76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"  # output scriptPubKey
+        + "c11b7b0200000000"  # change output amount
+        + "19"
+        + "76a914" + foreign_pk_hash.hex() + "88ac"  # change output paying the foreign account
+        + "000000"  # empty sapling and orchard
+    )
+
+    trusted_input = client.get_trusted_input(PREVOUT_TX_BYTES, 0).data
+
+    client.hash_input(
+        transaction=TX_BYTES, trusted_inputs=[trusted_input], change_path=foreign_change_path
+    )
+
+    # The review runs and shows the external output alone: the foreign-account output is hidden, so
+    # the user has nothing to refuse on. Approval here is the attacker's premise, not the defence.
+    with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE):
+        scenario_navigator.review_approve()
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        client.hash_sign(path=path, locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE)
+
+    assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+    assert not error.value.data
 
 
 def test_sign_tx_v5_self_transfer_shows_its_output(backend, scenario_navigator):

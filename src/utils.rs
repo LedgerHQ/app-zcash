@@ -26,6 +26,22 @@ const APP_DECLARED_PURPOSES: [u32; 2] = [44, 32];
 // a different shape.
 const BIP44_PURPOSE: u32 = 44;
 
+const BIP44_PATH_LEN: usize = 5;
+const BIP44_ACCOUNT_OFFSET: usize = 2;
+
+/// The account component of a five-component BIP-44 path, hardening bit included.
+///
+/// Returned raw on purpose. The account is what separates two key trees, so an unhardened value
+/// must not compare equal to the hardened one: masking here would let `m/44'/133'/2/0/0` pass for
+/// account `2'` while deriving somewhere else entirely.
+pub fn bip44_account(path: &Bip32Path) -> Option<u32> {
+    let path = path.as_slice();
+    if path.len() != BIP44_PATH_LEN {
+        return None;
+    }
+    Some(path[BIP44_ACCOUNT_OFFSET])
+}
+
 pub enum Endianness {
     Big,
     _Little,
@@ -92,9 +108,7 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const HARDENED: u32 = 0x8000_0000;
     const PURPOSE_OFFSET: usize = 0;
 
-    const BIP44_PATH_LEN: usize = 5;
     const BIP44_COIN_TYPE_OFFSET: usize = 1;
-    const BIP44_ACCOUNT_OFFSET: usize = 2;
     const BIP44_CHANGE_OFFSET: usize = 3;
     const BIP44_ADDRESS_INDEX_OFFSET: usize = 4;
     const MAX_BIP44_ACCOUNT_RECOMMENDED: u32 = 100;
