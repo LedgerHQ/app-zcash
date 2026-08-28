@@ -1166,3 +1166,35 @@ def test_legacy_continuation_rejects_a_round_before_the_review(backend):
         transport.exchange_raw("e04400800d050000800a27a726b4d0d6c201")
 
     assert e.value.status == Errors.SW_BAD_STATE
+
+
+def test_legacy_signing_input_script_size_is_bounded(backend):
+    """An inflated script size on a signing input is refused rather than allocated.
+
+    The size is a CompactSize the host writes, and the parser reserves that many bytes as soon as it
+    reads it. The heap is a fixed arena of a few kilobytes, so an oversized value does not come back
+    as a parse error: the allocation cannot be served and the app exits, losing the transaction in
+    progress. The sibling readers — the trusted-input parser and the output parser — already cap the
+    size; this one did not.
+
+    The same packet with its real 25-byte script is sent by every legacy signing test above, which is
+    what keeps this from passing by refusing all input scripts.
+    """
+    transport = ZcashCommandSender(backend)
+
+    for apdu in _LEGACY_TRUSTED_INPUT_ROUND:
+        sw, _ = transport.exchange_raw(apdu)
+        assert sw == 0x9000
+
+    sw, trusted_input = transport.exchange_raw("e042800009000000000400000000")
+    assert sw == 0x9000
+
+    sw, _ = transport.exchange_raw("e04400050d050000800a27a726b4d0d6c201")
+    assert sw == 0x9000
+
+    # The valid input packet, with its `19` script size swapped for a CompactSize announcing one
+    # megabyte — two orders of magnitude over the whole heap.
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw("e04480053f0138" + trusted_input.hex() + "fe00001000")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
