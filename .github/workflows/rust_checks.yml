@@ -29,6 +29,14 @@ jobs:
         # Not shipped in the dev-tools image.
         run: cargo install cargo-audit --locked
 
+      - name: Check that the lockfile matches the manifest
+        # cargo audit reads the committed Cargo.lock. Without this step nothing proves that
+        # this lockfile describes the graph the manifest asks for, so a pull request could move a
+        # dependency requirement, leave the old lockfile in place, and have the audit clear a
+        # graph that no build ever compiles. `cargo audit` is not a build command and takes no
+        # --locked of its own, hence a separate check rather than a flag.
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       - name: Audit
         # Advisories judged not impactful are listed in .cargo/audit.toml with the dependency
         # path that makes them unreachable. Anything else fails here.
@@ -49,4 +57,4 @@ jobs:
       - name: Cargo test
         # These are SDK `TestType` cases executed by `sdk_test_runner` under Speculos, so they
         # need a device target rather than the host; the runner comes from .cargo/config.toml.
-        run: cargo test -p ledger_zcash_crypto --features unit_test --target apex_p
+        run: cargo test --locked -p ledger_zcash_crypto --features unit_test --target apex_p
