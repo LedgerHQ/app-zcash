@@ -132,9 +132,7 @@ def _assert_pczt_orchard_sign_digest(
     client = ZcashCommandSender(backend)
     transparent_inputs = [] if transparent_input is None else [transparent_input]
     input_amounts = [txin.value for txin in transparent_inputs]
-    expected_auth_sigs = (
-        [expected_auth_sigs] if isinstance(expected_auth_sigs, bytes) else expected_auth_sigs
-    )
+    expected_auth_sigs = [expected_auth_sigs] if isinstance(expected_auth_sigs, bytes) else expected_auth_sigs
     if prevout_tx is not None:
         # Temporary RNG alignment with the legacy HASH_SIGN flow.
         _ = client.get_trusted_input(prevout_tx, 0).data
@@ -159,18 +157,13 @@ def _assert_pczt_orchard_sign_digest(
         orchard_bundle,
     )
     transparent_sigs = [
-        client.pczt_sign_transparent(input_index=input_index).data
-        for input_index, _ in enumerate(transparent_inputs)
+        client.pczt_sign_transparent(input_index=input_index).data for input_index, _ in enumerate(transparent_inputs)
     ]
     auth_sigs = _sign_all_orchard_actions(client, orchard_bundle)
 
-    assert [sig.hex() for sig in auth_sigs] == [
-        sig.hex() for sig in expected_auth_sigs
-    ], [sig.hex() for sig in auth_sigs]
+    assert [sig.hex() for sig in auth_sigs] == [sig.hex() for sig in expected_auth_sigs], [sig.hex() for sig in auth_sigs]
 
-    for input_index, (_txin, transparent_sig) in enumerate(
-        zip(transparent_inputs, transparent_sigs, strict=True)
-    ):
+    for input_index, (_txin, transparent_sig) in enumerate(zip(transparent_inputs, transparent_sigs, strict=True)):
         assert check_tx_v5_signature_validity(
             transparent_public_keys[input_index],
             transparent_sig[:-1],
@@ -1943,7 +1936,9 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
     # Action 1 is the dummy change spend (spend_value == 0), signed host-side;
     # the device produces no spend-auth signature for it.
     EXPECTED_AUTH_SIG = [
-        bytes.fromhex("8e02f26bee1e1a0635692338689b25753059fcc73ba63f8742cd6fcb6a2f972966b8f0f4243826a4a5d413e64d8fdabde9e242c2ac0e4f4bd7ef35b297d6d138"),
+        bytes.fromhex(
+            "8e02f26bee1e1a0635692338689b25753059fcc73ba63f8742cd6fcb6a2f972966b8f0f4243826a4a5d413e64d8fdabde9e242c2ac0e4f4bd7ef35b297d6d138"
+        ),
     ]
 
     _assert_pczt_orchard_sign_digest(
@@ -2034,9 +2029,7 @@ def _apdu(ins: int, p1: int, p2: int, data: bytes) -> str:
 _V5_TX_VERSION_OVERWINTERED = 0x80000005
 _V5_VERSION_GROUP_ID = 0x26A7270A
 _NU6_BRANCH_ID = 0xC8E71055
-_LEGACY_V5_HEADER_NO_INPUTS = struct.pack(
-    "<IIIB", _V5_TX_VERSION_OVERWINTERED, _V5_VERSION_GROUP_ID, _NU6_BRANCH_ID, 0
-)
+_LEGACY_V5_HEADER_NO_INPUTS = struct.pack("<IIIB", _V5_TX_VERSION_OVERWINTERED, _V5_VERSION_GROUP_ID, _NU6_BRANCH_ID, 0)
 
 # HASH_SIGN's extra header data: an unused path size and auth length, then locktime, sighash type
 # and expiry height, all big-endian.
@@ -2053,9 +2046,7 @@ _LEGACY_NON_RESETTING_APDUS = {
         P2.P2_HASH_INPUT_START_SAPLING,
         _LEGACY_V5_HEADER_NO_INPUTS,
     ),
-    "get_trusted_input_next": _apdu(
-        InsType.GET_TRUSTED_INPUT, P1.P1_NEXT, P2.P2_NONE, _LEGACY_V5_HEADER_NO_INPUTS
-    ),
+    "get_trusted_input_next": _apdu(InsType.GET_TRUSTED_INPUT, P1.P1_NEXT, P2.P2_NONE, _LEGACY_V5_HEADER_NO_INPUTS),
 }
 
 

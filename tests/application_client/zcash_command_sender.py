@@ -273,8 +273,7 @@ class ZcashCommandSender:
             # non-success status, but an empty success is silent and has to be caught here.
             if not continuation.data:
                 raise ValueError(
-                    "Viewing-key continuation returned no data, "
-                    f"{len(response_data)} of {total_response_len} bytes collected"
+                    f"Viewing-key continuation returned no data, {len(response_data)} of {total_response_len} bytes collected"
                 )
 
             response_data.extend(continuation.data)

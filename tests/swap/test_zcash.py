@@ -233,9 +233,7 @@ class ZcashPcztTests(ZcashTests):
             )
             for index, value in enumerate((first_value, total_value - first_value))
         ]
-        transparent_outputs = [
-            PcztTransparentOutput(value=send_amount, script_pubkey=script_for_destination(destination))
-        ]
+        transparent_outputs = [PcztTransparentOutput(value=send_amount, script_pubkey=script_for_destination(destination))]
 
         def send() -> None:
             with client.send_pczt(
@@ -277,9 +275,7 @@ class ZcashPcztTests(ZcashTests):
             )
             for index, value in enumerate((first_value, total_value - first_value))
         ]
-        transparent_outputs = [
-            PcztTransparentOutput(value=send_amount, script_pubkey=script_for_destination(destination))
-        ]
+        transparent_outputs = [PcztTransparentOutput(value=send_amount, script_pubkey=script_for_destination(destination))]
 
         with client.send_pczt(
             pczt_global=PcztGlobal(),

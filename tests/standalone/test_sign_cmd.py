@@ -236,6 +236,7 @@ def test_sign_tx_v5_nu6_2_trusted_input_and_tx(backend, scenario_navigator: Navi
             sighash_type=sighash_type,
         )
 
+
 def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: NavigateWithScenario):
     locktime = 0
     expiry = 0
@@ -250,16 +251,20 @@ def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: Navi
         locktime=locktime,
         expiry=expiry,
         branch_id=NU6_3_BRANCH_ID,
-        inputs=[{
-            "prev_txid": bytes.fromhex("11" * 32),
-            "prev_vout": 0,
-            "script": bytes.fromhex("6a"),
-            "sequence": 0xFFFFFFFF,
-        }],
-        outputs=[{
-            "value": input_amount,
-            "script": input_script_pubkey,
-        }],
+        inputs=[
+            {
+                "prev_txid": bytes.fromhex("11" * 32),
+                "prev_vout": 0,
+                "script": bytes.fromhex("6a"),
+                "sequence": 0xFFFFFFFF,
+            }
+        ],
+        outputs=[
+            {
+                "value": input_amount,
+                "script": input_script_pubkey,
+            }
+        ],
     )
     prevout_txid = nu5_txid_digests(prevout_tx_bytes)["final_digest"]
 
@@ -267,28 +272,32 @@ def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: Navi
         locktime=locktime,
         expiry=expiry,
         branch_id=NU6_3_BRANCH_ID,
-        inputs=[{
-            "prev_txid": prevout_txid,
-            "prev_vout": 0,
-            "script": input_script_pubkey,
-            "sequence": 0,
-        }],
-        outputs=[{
-            "value": send_amount,
-            "script": output_script_pubkey,
-        }],
+        inputs=[
+            {
+                "prev_txid": prevout_txid,
+                "prev_vout": 0,
+                "script": input_script_pubkey,
+                "sequence": 0,
+            }
+        ],
+        outputs=[
+            {
+                "value": send_amount,
+                "script": output_script_pubkey,
+            }
+        ],
     )
 
     assert prevout_tx_bytes[8:12] == struct.pack("<I", NU6_3_BRANCH_ID)
-    assert tx_bytes[8:12]         == struct.pack("<I", NU6_3_BRANCH_ID)
+    assert tx_bytes[8:12] == struct.pack("<I", NU6_3_BRANCH_ID)
 
     client = ZcashCommandSender(backend)
 
     trusted_input = client.get_trusted_input(prevout_tx_bytes, 0).data
     trusted_txid, trusted_input_idx, trusted_amount, _, _ = unpack_trusted_input_response(trusted_input)
-    assert trusted_txid      == prevout_txid
+    assert trusted_txid == prevout_txid
     assert trusted_input_idx == 0
-    assert trusted_amount    == input_amount
+    assert trusted_amount == input_amount
 
     response = client.get_public_key(path=path).data
     public_key, _, _ = unpack_get_public_key_response(response)
@@ -325,6 +334,7 @@ def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: Navi
             input_amounts=[input_amount],
             sighash_type=sighash_type,
         )
+
 
 def test_sign_tx_v5_change(backend, scenario_navigator):
     LOCKTIME = 0x00
@@ -421,15 +431,15 @@ def test_legacy_change_in_another_account_yields_no_signature(backend, scenario_
         + "76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"  # output scriptPubKey
         + "c11b7b0200000000"  # change output amount
         + "19"
-        + "76a914" + foreign_pk_hash.hex() + "88ac"  # change output paying the foreign account
+        + "76a914"
+        + foreign_pk_hash.hex()
+        + "88ac"  # change output paying the foreign account
         + "000000"  # empty sapling and orchard
     )
 
     trusted_input = client.get_trusted_input(PREVOUT_TX_BYTES, 0).data
 
-    client.hash_input(
-        transaction=TX_BYTES, trusted_inputs=[trusted_input], change_path=foreign_change_path
-    )
+    client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input], change_path=foreign_change_path)
 
     # The review runs and shows the external output alone: the foreign-account output is hidden, so
     # the user has nothing to refuse on. Approval here is the attacker's premise, not the defence.
@@ -1119,9 +1129,7 @@ def test_legacy_change_info_rejects_non_change_path(backend, change_path):
     _open_legacy_change_info_state(transport)
 
     with pytest.raises(ExceptionRAPDU) as e:
-        transport.exchange_raw(
-            "e04aff00" + f"{len(bytes.fromhex(change_path)):02x}" + change_path
-        )
+        transport.exchange_raw("e04aff00" + f"{len(bytes.fromhex(change_path)):02x}" + change_path)
 
     assert e.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
 
