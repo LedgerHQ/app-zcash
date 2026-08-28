@@ -4,7 +4,11 @@ default-members = ["."]
 exclude = ["vendor/rust-secp256k1"]
 
 [workspace.dependencies]
-ledger_device_sdk = { version = "1.*", features = ["sys"] }
+# Floor at 1.37: earlier releases accept an APDU while a command is still being processed, so a
+# transport can be answered mid-review. The app does not enable `io_new`, so it runs the legacy I/O
+# path, which is where that release added the guard. Expressed as a requirement rather than left to
+# the lock file, which a regeneration could move on its own.
+ledger_device_sdk = { version = "1.37", features = ["sys"] }
 zeroize = { version = "1.6.0", default-features = false }
 
 [package]
