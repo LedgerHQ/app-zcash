@@ -59,7 +59,20 @@ Zcash deviations:
   authorizing digest (ZIP 229), which a trusted input never computes — so the host streams no
   anchor at all.
 - `HASH_INPUT_FINALIZE_FULL` with `P1 = 0xFF` supplies change information, which the app uses
-  to decide which outputs to display for approval.
+  to decide which outputs to display for approval. The change path must be a five-component
+  BIP-44 path with purpose, coin type and account hardened and the address index unhardened,
+  and its account must be the one the signing path spends from — otherwise the app parses the
+  transaction but refuses to sign it.
+- **The review runs on the first `HASH_SIGN`, not at the end of `HASH_INPUT_FINALIZE_FULL`.**
+  `locktime` and `expiry_height` only reach the device with the eleven-byte header that
+  `HASH_SIGN` carries, so reviewing earlier would ask the user to approve a transaction whose
+  validity window is still unknown and which the host could then choose freely. The host order
+  is unchanged — `0x4A` outputs, then the eleven-byte `0x48` header, then `0x44`
+  FIRST+CONTINUE, then the `0x48` that asks for the signature — but the APDU that carries a
+  user refusal is now the first `0x48` rather than the last `0x4A`.
+- A `HASH_INPUT_START` continuation (`P2 = 0x80`) is refused before the review has happened or
+  after the transaction has completed, and no legacy round may resume a transaction the device
+  has already finished. Both answer `BadState`.
 
 ## INS_GET_WALLET_PUBLIC_KEY
 
@@ -68,10 +81,14 @@ Zcash deviations:
   - `0x00`: derive without displaying the address
   - `0x01`: display the transparent address for user approval
 - P2: `0x00`
-- Data: BIP32 path. Only the prefix is constrained — purpose `44` or `32`
-  followed by the Zcash coin type, the hardening bit being ignored in this check
-  — so the host may request an account-level path or any deeper one. A path
-  outside the two prefixes returns `IncorrectData`.
+- Data: BIP32 path. Only the prefix is constrained — purpose `44'` or `32'`
+  followed by the Zcash coin type, both hardened — so the host may request the
+  two-component prefix itself, an account-level path, or any deeper one. A path
+  outside the two prefixes, or one whose prefix components are not hardened,
+  returns `IncorrectData`. The hardening bit is part of the comparison: the app
+  declares `44'/133'` and `32'/133'`, so an unhardened prefix is a path the OS
+  will not derive, and it answers that by taking the app down rather than with a
+  status word.
 - Response:
   - `public_key_len u8`
   - secp256k1 public key bytes, currently 65 bytes
@@ -128,14 +145,15 @@ P1 `0x80` with empty data until the full response has been collected. For UFVK,
 the first two response bytes encode the total UTF-8 string length.
 
 The command displays the requested viewing key on the device before returning
-the first response chunk. User rejection returns `Deny` with an empty response.
+the first response chunk, naming the account the key belongs to alongside it.
+User rejection returns `Deny` with an empty response.
 
 ## INS_GET_SHIELD_ADDR
 
 - INS: `0x51`
 - P1:
   - `0x00`: derive without displaying the address
-  - `0x01`: display the address for user approval
+  - `0x01`: display the address for user approval, accepted with P2 `0x00` only
 - P2:
   - `0x00`: unified address string response
   - `0x01`: raw Orchard address bytes
@@ -148,6 +166,16 @@ the first response chunk. User rejection returns `Deny` with an empty response.
 
 If P1 is `0x01` and the user rejects the address, the command returns `Deny`
 with an empty response.
+
+P1 `0x01` combined with P2 `0x01` returns `WrongP1P2`. A raw Orchard receiver
+has no encoding the holder could read back against their own wallet, so there
+is no screen this mode could show, and answering a request for the user's
+confirmation without asking for it is what the refusal prevents.
+
+Both P2 modes derive an Orchard key, and the Secure Element does not reclaim
+what such a derivation consumes until the next power cycle. The app therefore
+caps the derivations of one run and answers `NotEnoughMemorySpace` (`0x6A84`)
+past the cap. The ceiling sits well above a session of normal use.
 
 ## INS_PCZT_HEADER
 
@@ -215,6 +243,13 @@ form, including OP_RETURN, is refused with `IncorrectData`.
 This command is still sent when a transaction has no Orchard actions. In that
 case its payload is only the CompactSize action count `0`.
 
+The memo text a transaction's shielded outputs may keep for the review is
+bounded. Past the budget a memo is shown as its hash instead of its text, and
+past that the command returns `NotEnoughMemorySpace` (`0x6A84`). The budget
+holds two maximum-length memos, well above what a wallet-built transaction
+carries. The same applies to `INS_PCZT_IRONWOOD_ACTION`, which shares the
+rendering.
+
 For **V5 transactions**, `P2 = 0x01` on the last APDU marks the PCZT payload
 as complete. For **V6 transactions**, the last APDU of this command must use
 `P2 = 0x00`; the FINISHED marker moves to the last
@@ -234,6 +269,12 @@ layout.
 
 The full PCZT payload must have been received and finalized before this command
 is accepted. Each transparent input can be signed only once.
+
+If the payload declared a change output, its account must be the one this input
+spends from; otherwise the command returns `ConditionsOfUseNotSatisfied` and no
+signature is produced. Change is filtered out of the review, so an output
+returning to another account would otherwise be hidden from the user while
+still being paid.
 
 ## INS_PCZT_SIGN_ORCHARD
 
