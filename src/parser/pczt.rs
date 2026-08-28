@@ -47,7 +47,7 @@ use crate::utils::{
     Bip44CheckMode, CheckDispOutput, HexSlice,
     base58_address::{Base58Address, ToBase58Address},
     bip32_path::Bip32Path,
-    check_bip44_compliance,
+    check_bip44_compliance, derivation_account,
     extended_public_key::ExtendedPublicKey,
     hashers::ToHash160,
 };

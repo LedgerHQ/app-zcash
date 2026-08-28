@@ -29,14 +29,19 @@ const BIP44_PURPOSE: u32 = 44;
 const BIP44_PATH_LEN: usize = 5;
 const BIP44_ACCOUNT_OFFSET: usize = 2;
 
-/// The account component of a five-component BIP-44 path, hardening bit included.
+/// The account component of a derivation path, hardening bit included.
+///
+/// Accepts both trees the app derives in: BIP-44 for transparent keys, ZIP-32 for shielded ones.
+/// They place the account at the same depth, and a transparent and a shielded path bearing the same
+/// account belong to the same wallet account — which is what lets a transparent change output be
+/// compared against a shielded spend.
 ///
 /// Returned raw on purpose. The account is what separates two key trees, so an unhardened value
 /// must not compare equal to the hardened one: masking here would let `m/44'/133'/2/0/0` pass for
 /// account `2'` while deriving somewhere else entirely.
-pub fn bip44_account(path: &Bip32Path) -> Option<u32> {
+pub fn derivation_account(path: &Bip32Path) -> Option<u32> {
     let path = path.as_slice();
-    if path.len() != BIP44_PATH_LEN {
+    if path.len() != BIP44_PATH_LEN && path.len() != ZIP32_PATH_LEN {
         return None;
     }
     Some(path[BIP44_ACCOUNT_OFFSET])

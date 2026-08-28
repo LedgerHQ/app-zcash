@@ -4,7 +4,8 @@ use ledger_device_sdk::log::{debug, error, info};
 use crate::AppSW;
 use crate::handlers::sign_tx::{append_signature, orchard_spend_auth_signature_with_sk};
 use crate::parser::{LegacyParserMode, ParserError, ParserSourceError, PcztParserCtx};
-use crate::tx::TxContext;
+use crate::tx::{TxContext, TxInfo};
+use crate::utils::{bip32_path::Bip32Path, derivation_account};
 
 fn are_pczt_transparent_signatures_done(ctx: &TxContext) -> bool {
     ctx.tx_signing_state.total_input_count == 0
@@ -26,6 +27,33 @@ fn reset_pczt_parser_after_error(ctx: &mut TxContext) {
 fn reset_pczt_parser_with_sw(ctx: &mut TxContext, sw: AppSW) -> AppSW {
     reset_pczt_parser_after_error(ctx);
     sw
+}
+
+/// Refuse a signature that would spend from an account other than the one the change returns to.
+///
+/// A transparent change output is dropped from the review, so nothing on screen says where its
+/// value goes. That is only acceptable while it comes back to the account being spent. Checked here
+/// rather than while parsing because the transparent outputs are parsed before the Orchard bundle,
+/// so a shielded spend paying transparent change has no account to compare against yet.
+///
+/// Both signing paths are accepted: BIP-44 for a transparent input, ZIP-32 for an Orchard action.
+/// The shielded outputs need no equivalent check — a note counts as change only when it decrypts
+/// under the viewing key derived from the very spending key that signs the action, and the parser
+/// already refuses a second Orchard action declaring another path.
+fn check_change_returns_to_signing_account(
+    tx_info: &TxInfo,
+    path: &Bip32Path,
+) -> Result<(), AppSW> {
+    let Some(change_account) = tx_info.change_account else {
+        return Ok(());
+    };
+
+    if derivation_account(path) != Some(change_account) {
+        error!("PCZT change account differs from the signing account");
+        return Err(AppSW::ConditionsOfUseNotSatisfied);
+    }
+
+    Ok(())
 }
 
 fn map_pczt_parser_error(ctx: &mut TxContext, error: ParserError) -> AppSW {
@@ -298,6 +326,10 @@ pub fn handler_pczt_sign_transparent(
         }
     };
 
+    if let Err(sw) = check_change_returns_to_signing_account(&ctx.tx_info, path) {
+        return Err(reset_pczt_parser_with_sw(ctx, sw));
+    }
+
     if let Err(sw) = append_signature(
         comm,
         &ctx.tx_info.signature_digest,
@@ -370,6 +402,10 @@ pub fn handler_pczt_sign_orchard(
             return Err(map_pczt_parser_error(ctx, e));
         }
     };
+
+    if let Err(sw) = check_change_returns_to_signing_account(&ctx.tx_info, &path) {
+        return Err(reset_pczt_parser_with_sw(ctx, sw));
+    }
 
     // Reuse the session-cached account spending key rather than re-deriving it
     // per action (repeated zip32_orchard_derive exhausts the SE and fails 6f00).

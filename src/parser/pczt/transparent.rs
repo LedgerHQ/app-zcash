@@ -678,6 +678,19 @@ impl PcztParser {
         let change_pk_hash: [u8; 20] = ok!(pubkey.hash160());
         ctx.tx_info.change_pk_hash = Some(change_pk_hash);
 
+        // Kept for the signing step, which is where it meets the account actually being spent. Two
+        // change outputs naming different accounts are refused outright: whichever one the signing
+        // check then matched, the other would still be hidden from the review.
+        let change_account = derivation_account(&path);
+        match ctx.tx_info.change_account {
+            Some(previous) if Some(previous) != change_account => {
+                return Err(ParserError::from_str(
+                    "PCZT change outputs declare different accounts",
+                ));
+            }
+            _ => ctx.tx_info.change_account = change_account,
+        }
+
         debug!(
             "PCZT transparent output #{} bip32 derivation pubkey: {}",
             self.transparent_output_parsed_count,

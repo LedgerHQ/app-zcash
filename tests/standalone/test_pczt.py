@@ -1,5 +1,6 @@
 # pylint: disable=C0301
 
+import hashlib
 import struct
 
 import pytest
@@ -20,6 +21,7 @@ from application_client.zcash_command_sender import (
     ZcashCommandSender,
 )
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
+from application_client.zcash_utils import ripemd160
 from application_client.zcash_verify_sign import (
     check_tx_v5_signature_validity,
 )
@@ -469,6 +471,66 @@ def test_pczt_sign_tx_v5_change(
         input_index=0,
         input_amounts=[TRANSPARENT_INPUT.value],
     )
+
+
+def test_pczt_transparent_change_in_another_account_yields_no_signature(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A transparent change output in another account than the input yields no signature.
+
+    Change is removed from the review, so an output the host declares as change of a foreign account
+    leaves nothing on screen naming where that value goes. The transparent outputs are parsed before
+    any Orchard bundle, so the account being spent is not always known then: the refusal lands at
+    signing, where both are, and before any signature exists.
+    """
+    PCZT_GLOBAL = PcztGlobal()
+    PATH = "m/44'/133'/0'/0/0"
+    # One account over. Same seed, so the device does own the address — which is precisely what lets
+    # the output pass for change and disappear from the review.
+    FOREIGN_CHANGE_PATH = "m/44'/133'/1'/1/0"
+
+    client = ZcashCommandSender(backend)
+
+    foreign_pubkey = client._compressed_pubkey_from_path(FOREIGN_CHANGE_PATH)
+    foreign_pk_hash = ripemd160(hashlib.sha256(foreign_pubkey).digest())
+
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path=PATH,
+    )
+    RECIPIENT_OUTPUT = PcztTransparentOutput(
+        value=40000000,
+        script_pubkey=bytes.fromhex("76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"),
+    )
+    CHANGE_OUTPUT = PcztTransparentOutput(
+        value=41622465,
+        script_pubkey=bytes.fromhex("76a914") + foreign_pk_hash + bytes.fromhex("88ac"),
+        signing_path=FOREIGN_CHANGE_PATH,
+    )
+    TRANSPARENT_OUTPUTS = [RECIPIENT_OUTPUT, CHANGE_OUTPUT]
+
+    # The review shows the recipient alone: the foreign-account output is hidden, so the user has
+    # nothing to refuse on. Approving is the attacker's premise, not the defence.
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=TRANSPARENT_OUTPUTS,
+    ):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_transparent_change_in_another_account_yields_no_signature",
+        )
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        client.pczt_sign_transparent(input_index=0)
+
+    assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+    assert not error.value.data
 
 
 def test_pczt_sign_tx_v5_change_hash_not_sticky(
