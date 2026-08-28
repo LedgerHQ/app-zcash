@@ -71,6 +71,10 @@ impl Hashers {
 
 #[derive(Default)]
 pub struct TxOutputMemo {
+    /// Names the kind of memo. Composed with the index of the output at display time, since that
+    /// index is the only thing tying a memo to its recipient: an output without a memo contributes
+    /// no field, so a label naming the kind alone leaves the position of a memo among the memo
+    /// fields unable to identify which output it came with.
     pub label: &'static str,
     pub value: String,
 }
@@ -78,14 +82,14 @@ pub struct TxOutputMemo {
 impl TxOutputMemo {
     pub fn text(value: String) -> Self {
         Self {
-            label: "Memo",
+            label: "memo",
             value,
         }
     }
 
     pub fn hash(value: String) -> Self {
         Self {
-            label: "Memo hash",
+            label: "memo hash",
             value,
         }
     }

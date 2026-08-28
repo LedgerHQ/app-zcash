@@ -1405,6 +1405,77 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_memo(
     )
 
 
+def test_pczt_memo_is_labelled_with_its_own_output(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A memo on the second of two outputs must name that output, not memos in general.
+
+    The first output carries none, so it contributes no memo field. A label naming only the kind
+    therefore leaves the memo's position among the fields identifying nothing, and a host that moves
+    a memo from one recipient to another draws the very same review. The captures are the assertion
+    here: they record that the field reads as belonging to output #2.
+    """
+    TX_PREVOUT_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000"
+    )
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"),
+        prevout_index=0,
+        value=100000,
+        script_pubkey=bytes.fromhex("76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"),
+        sequence=bytes.fromhex("ffffffff"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    # Output #1: transparent, memoless. It is what makes the label meaningful — with a single
+    # memo-bearing output the index could not be wrong.
+    TRANSPARENT_OUTPUTS = [
+        PcztTransparentOutput(
+            value=5000,
+            script_pubkey=bytes.fromhex("76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"),
+        )
+    ]
+    # Output #2: the shielded output of the memo fixture above, unchanged — its ciphertexts decrypt
+    # through the external OVK to the ASCII memo "PCZT Orchard memo test".
+    ORCHARD_ACTION = {
+        "cv_net": "fd87b590de6e73dbf0372fc4e80e4c9a44c6f9b196fd296165276b15f38ca7be",
+        "nullifier": "781c4faf960206510fdc72739267fa193d9e012dbc68998d35539837e520ae2a",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0100000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1500000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "8fa021d7ce7e10ac828106e295d0daaec54ca3101f22054e90a4bb9b61a38000",
+        "ephemeral_key": "7895cdaf491fc7b6754bbe1339eab4f4d142e59fff9cf8d3820217f1e940801b",
+        "enc_ciphertext": "ffebe7c7d7f8e08fd0baffb71f54ca6fad3b8a1b1702be187bcc24f1874a48bc3013c44c8d0aaadfbdbebeb31c3eda96e539d9853c28766cee658408606d473c76b102d20e11eb6a69bc90a1cc543f49d32d30b47241d1632e6dcba30492b6a7bdbaafb9f9dd1e68c2ac12d17b485aed2fb8ba6162f4ec70f8b3c045c4db74fd7861cfb6ce2dc74c2a4219fa429332ed86e891aeca5cf2dfd0517f99fee0f0ddcc5a1a2729bac0626f895a1b572fa8eddaf3b72d2cbb6c1681aeb865740d439b7c90334512faa315207d540eb411dfe8d38b3f6673cb65e12816f42bee50abb966437fa386c34ac54611c86cc093ddee1cfe098903f3be4a8de20de1c48fdbd8ca8a9900eeee734dfff526c39ad353a81de786deb8278bdc870b9d65cc99422e54d0bf7e8e0fcf88a0a701ee59195aaa130b8950bf39bc598520f913af4bf770dfcf37e1ed4d19549759e1642945affbe385eb80497b9652e33a5366667b4fd9c212b061c6c2c47d3f289dee39fea4eba73faf6c91428ca0b97d2be3feb7c0e1ea5ee0250aed9a96d7fe9e91c525f46debe71ddbbc0f8d05576ea27a2249f5b9a341561772b6b480404d5e839af42a56d71f20ad5538214b9925f7931d926017353759398d25a5a2611cf243ff44f732cdc57312b7dfe386118a1e9377f36d7ee312be7ce3c0efa96228a83653a607e00d556f8e04defbb39a2179bb2ed8a0389bb157c75913236e6f9ddf21dcc7108b804c1fa194b2603058e03da7ab3f6ee5dacb4fc3769879d72fc21f68116f0af30414236191a3d962f29d7edab27b8e9ebd96e21f",  # noqa: E501
+        "out_ciphertext": "9964518f9947818c4b75d0aad44fd05bb75a2ed34ff2a915c080e829a150cd8491272ea43bf99db6fc677560484f7667c8ee7307c1acc44873068ef0475b940a62834f31fad9a486f183a5e2d030a01b",  # noqa: E501
+        "rcv": "3d00000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2900000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 0,
+        "value": 90000,
+        "recipient": "4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
+    }
+    ORCHARD_BUNDLE = PcztOrchardBundle(
+        actions=[_strict_orchard_action(ORCHARD_ACTION)],
+        flags=3,
+        value_balance=-90000,
+        anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
+    )
+    PCZT_GLOBAL = PcztGlobal()
+    # Every Orchard spend is dummy padding, signed host-side.
+    EXPECTED_AUTH_SIG: list[bytes] = []
+
+    _assert_pczt_orchard_sign_digest(
+        backend,
+        scenario_navigator,
+        "test_pczt_memo_is_labelled_with_its_own_output",
+        PCZT_GLOBAL,
+        EXPECTED_AUTH_SIG,
+        TRANSPARENT_OUTPUTS,
+        ORCHARD_BUNDLE,
+        transparent_input=TRANSPARENT_INPUT,
+        prevout_tx=TX_PREVOUT_BYTES,
+    )
+
+
 def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
     backend,
     scenario_navigator: NavigateWithScenario,

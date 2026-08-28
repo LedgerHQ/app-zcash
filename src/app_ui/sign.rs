@@ -72,6 +72,14 @@ pub fn ui_display_tx(
         name_strs.push((
             format!("Output #{idx} amount"),
             format!("Output #{idx} address"),
+            // The memo carries the index of its output, and is shown right after it below. Grouped
+            // at the end under a label naming only the kind, a memo could not be traced back to a
+            // recipient — an output without one contributes no field, so position identifies
+            // nothing, and two memos exchanged between two outputs would draw the same screen.
+            output
+                .memo
+                .as_ref()
+                .map(|memo| format!("Output #{idx} {}", memo.label)),
         ));
 
         value_strs.push(format_zec_amount(output.amount));
@@ -94,12 +102,10 @@ pub fn ui_display_tx(
             name: name_strs[idx].1.as_str(),
             value: &output.address,
         });
-    }
 
-    for output in outputs.iter().filter(|output| !output.is_change) {
-        if let Some(memo) = output.memo.as_ref() {
+        if let (Some(label), Some(memo)) = (name_strs[idx].2.as_ref(), output.memo.as_ref()) {
             my_fields.push(Field {
-                name: memo.label,
+                name: label.as_str(),
                 value: memo.value.as_str(),
             });
         }
