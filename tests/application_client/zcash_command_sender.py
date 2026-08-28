@@ -214,11 +214,14 @@ class ZcashCommandSender:
         path: str,
         mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS,
         transparent_path: str | None = None,
+        display: bool = False,
     ) -> RAPDU:
+        # Synchronous even with `display`, for the modes that answer the flag without a screen.
+        # A mode that does show one needs `get_shielded_address_with_confirmation` instead.
         return self.backend.exchange(
             cla=CLA,
             ins=InsType.GET_SHIELDED_ADDRESS,
-            p1=P1.P1_FIRST,
+            p1=P1.P1_GET_PUBLIC_KEY_DISPLAY if display else P1.P1_FIRST,
             p2=mode,
             data=self._pack_derivation_paths(path, transparent_path),
         )

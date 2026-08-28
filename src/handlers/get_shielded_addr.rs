@@ -46,6 +46,16 @@ pub fn handler_get_shielded_addr(
     mode: P2ShieldedAddrMode,
     display: bool,
 ) -> Result<(), AppSW> {
+    // A raw Orchard receiver is thirty-odd bytes with no encoding the user could read back against
+    // their wallet, so this mode has no screen to show. The dispatcher accepts the display P1 for
+    // it all the same, and the handler used to answer by returning the receiver with no review at
+    // all — a request for the user's confirmation served without asking for it. Refused here,
+    // ahead of the derivation, so it also costs nothing on the Secure Element.
+    if display && matches!(mode, P2ShieldedAddrMode::OrchardAddress) {
+        error!("Raw Orchard receiver cannot be displayed for verification");
+        return Err(AppSW::WrongP1P2);
+    }
+
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
     let (path, transparent_path) = parse_shielded_paths(data, mode)?;

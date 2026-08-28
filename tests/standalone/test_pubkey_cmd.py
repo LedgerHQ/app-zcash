@@ -398,6 +398,27 @@ def test_get_orchard_uaddress_confirm_refused(backend, scenario_navigator):
     assert len(e.value.data) == 0
 
 
+def test_get_orchard_raw_address_refuses_a_display_request(backend):
+    """A raw receiver cannot be verified on screen, so asking for its verification must not succeed.
+
+    The dispatcher accepts the display P1 for both address modes, but only the unified one has
+    something a user can read back against their wallet. Asked to display a raw receiver, the
+    handler used to return it with no review at all: the host set the bit that requests the user's
+    confirmation and received the derived value without the user ever being asked.
+    """
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.get_shielded_address(
+            path="m/32'/133'/0'",
+            mode=GetShieldedAddressMode.ORCHARD_RAW_ADDRESS,
+            display=True,
+        )
+
+    assert e.value.status == Errors.SW_WRONG_P1P2
+    assert len(e.value.data) == 0
+
+
 def test_get_orchard_uaddress_requires_transparent_path(backend):
     client = ZcashCommandSender(backend)
 
