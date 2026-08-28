@@ -128,8 +128,6 @@ pub fn ui_display_tx(
         value: expiry_str.as_str(),
     });
 
-    // Create NBGL review. Maximum number of fields and string buffer length can be customized
-    // with constant generic parameters of NbglReview. Default values are 32 and 1024 respectively.
     let review: NbglReview = NbglReview::new()
         .titles(
             "Review transaction to send ZEC",

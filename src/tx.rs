@@ -175,6 +175,11 @@ pub struct TxInfo {
     pub fees: u64,
 
     pub outputs: Vec<TxOutput>,
+    /// Bytes of memo text already kept for the review of this transaction.
+    ///
+    /// Bounds what the shielded outputs can claim on the heap: the host decides how many memos
+    /// there are and how long each one is, and the review holds them all at once.
+    pub retained_memo_bytes: usize,
     pub is_change_found: bool,
     pub change_pk_hash: Option<[u8; 20]>,
     /// Account component of the change path the host declared, hardening bit included.
