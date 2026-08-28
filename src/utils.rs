@@ -134,12 +134,22 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
                 return false;
             }
 
-            if !APP_DECLARED_PURPOSES.contains(&(path[PURPOSE_OFFSET] & UNHARDENED_MASK)) {
+            // Compared hardening bit included. The app declares `44'/133'` and `32'/133'`, so an
+            // unhardened prefix is a path the OS will not derive — and it answers that by taking the
+            // app down, not by a status word. Masking the bit off here let such a path through the
+            // one check standing between the host and the derivation.
+            //
+            // Only the two prefix components are constrained: key export legitimately takes paths of
+            // any depth from two components up, and the shortest of them, `44'/133'`, is what Ledger
+            // Live asks for to build the account xpub.
+            if !APP_DECLARED_PURPOSES.contains(&(path[PURPOSE_OFFSET] & UNHARDENED_MASK))
+                || path[PURPOSE_OFFSET] & HARDENED == 0
+            {
                 error!("Bad purpose");
                 return false;
             }
 
-            if (path[BIP44_COIN_TYPE_OFFSET] & UNHARDENED_MASK) != ZCASH_BIP44_COIN_TYPE {
+            if path[BIP44_COIN_TYPE_OFFSET] != (ZCASH_BIP44_COIN_TYPE | HARDENED) {
                 error!("Bad coin type");
                 return false;
             }

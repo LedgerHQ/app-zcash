@@ -49,6 +49,9 @@ def review_approve_ufvk(self):
 # In this test we check that the GET_PUBLIC_KEY works in non-confirmation mode
 def test_get_public_key_no_confirm(backend):
     for path in [
+        # The prefix alone, which is what Ledger Live asks for to build the account xpub. The
+        # prefix check must keep accepting it: it is the shortest path the app answers.
+        "m/44'/133'",
         "m/44'/133'/0'/0/0",
         "m/44'/133'/0/0/0",
         "m/44'/133'/911'/0/0",
@@ -187,8 +190,22 @@ def test_get_ufvk_account_mismatch(backend):
         "m/44'/0'/0'/0/0",  # Bitcoin coin type
         "m/49'/133'/0'/0/0",  # right coin type, purpose the app does not declare
         "m/133'/0'",  # coin type in the purpose position
+        # The declared prefixes are hardened. Read with the hardening bit masked off these are the
+        # app's own prefixes, yet they name a different subtree the OS will not derive — and it
+        # refuses by taking the app down, so the check has to catch them first.
+        "m/44/133'/0'/0/0",
+        "m/44'/133/0'/0/0",
+        "m/32/133'/0'",
     ],
-    ids=["ethereum", "bitcoin", "undeclared_purpose", "coin_type_as_purpose"],
+    ids=[
+        "ethereum",
+        "bitcoin",
+        "undeclared_purpose",
+        "coin_type_as_purpose",
+        "unhardened_purpose",
+        "unhardened_coin_type",
+        "unhardened_zip32_purpose",
+    ],
 )
 def test_get_public_key_rejects_out_of_prefix_path(backend, path):
     client = ZcashCommandSender(backend)
