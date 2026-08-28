@@ -16,6 +16,7 @@
  *****************************************************************************/
 
 use alloc::borrow::Cow;
+use alloc::format;
 use alloc::string::String;
 
 use ledger_device_sdk::nbgl::{Field, NbglAddressReview};
@@ -73,7 +74,15 @@ fn shorten_fvk_to_display<'s>(
     Cow::Owned(shortened)
 }
 
-fn ui_display_fvk(review_title: &str, fvk: &str) -> Result<bool, AppSW> {
+/// Confirm the export of a viewing key, naming the account it opens.
+///
+/// The key itself is opaque and shortened for the screen, so on its own it tells the holder
+/// nothing about what is leaving the device: a host asking for a different account than the one
+/// the user opened in their wallet drew exactly the same prompt. The account number is the whole
+/// of what varies — validation pins the purpose and the coin type, both trees put the account at
+/// the same depth, and the two paths of a unified key must agree on it — so naming it states the
+/// full scope of the export.
+fn ui_display_fvk(review_title: &str, fvk: &str, account: u32) -> Result<bool, AppSW> {
     let viewing_key = if cfg!(any(target_os = "nanosplus", target_os = "nanox")) {
         const ELLIPSIS: &str = "\n ... \n";
         const ROW_LEN: usize = 18;
@@ -89,11 +98,18 @@ fn ui_display_fvk(review_title: &str, fvk: &str) -> Result<bool, AppSW> {
         shorten_fvk_to_display(fvk, SHORTENED_DISPLAY_LEN, PREFIX_LEN, ELLIPSIS)
     };
 
+    let account_str = format!("#{account}");
+    let account_field = [Field {
+        name: "Account",
+        value: account_str.as_str(),
+    }];
+
     // Display the viewing key export confirmation screen.
     #[allow(unused_mut)]
     let mut review = NbglAddressReview::new()
         .glyph(load_glyph())
-        .review_title(review_title);
+        .review_title(review_title)
+        .set_tag_value_list(&account_field);
 
     #[cfg(not(any(target_os = "nanosplus", target_os = "nanox")))]
     {
@@ -103,10 +119,14 @@ fn ui_display_fvk(review_title: &str, fvk: &str) -> Result<bool, AppSW> {
     Ok(review.show(viewing_key.as_ref()))
 }
 
-pub fn ui_display_ufvk(ufvk: &str) -> Result<bool, AppSW> {
-    ui_display_fvk("Share Zcash Unified Full Viewing Key?", ufvk)
+pub fn ui_display_ufvk(ufvk: &str, account: u32) -> Result<bool, AppSW> {
+    ui_display_fvk("Share Zcash Unified Full Viewing Key?", ufvk, account)
 }
 
-pub fn ui_display_orchard_fvk(orchard_fvk: &str) -> Result<bool, AppSW> {
-    ui_display_fvk("Share Zcash Orchard Full Viewing Key?", orchard_fvk)
+pub fn ui_display_orchard_fvk(orchard_fvk: &str, account: u32) -> Result<bool, AppSW> {
+    ui_display_fvk(
+        "Share Zcash Orchard Full Viewing Key?",
+        orchard_fvk,
+        account,
+    )
 }

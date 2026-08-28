@@ -6,7 +6,9 @@ use ledger_device_sdk::log::{error, info};
 
 use crate::app_ui::address::{ui_display_orchard_fvk, ui_display_ufvk};
 use crate::consts::{UNHARDENED_MASK, ZCASH_BIP44_COIN_TYPE};
-use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance, encode_string_response};
+use crate::utils::{
+    Bip44CheckMode, HexSlice, check_bip44_compliance, derivation_account, encode_string_response,
+};
 use crate::zip32::{derive_orchard_fvk, derive_transparent_account_pubkey, orchard_network};
 use crate::{
     AppSW, P2VkMode,
@@ -93,6 +95,10 @@ pub fn handler_get_vk(
         }
     }
 
+    // Validation above pins every component but this one, so it is the whole of what the review
+    // has to name. Unhardening it is for the screen only; the derivation used the raw value.
+    let account = derivation_account(&path).ok_or(AppSW::IncorrectData)? & UNHARDENED_MASK;
+
     let orchard_fvk = derive_orchard_fvk(&path)?;
 
     let response_bytes = match mode {
@@ -100,7 +106,7 @@ pub fn handler_get_vk(
             let orchard_fvk_bytes = orchard_fvk.to_bytes();
             let orchard_fvk_str = format!("{}", HexSlice(&orchard_fvk_bytes));
 
-            if !ui_display_orchard_fvk(&orchard_fvk_str)? {
+            if !ui_display_orchard_fvk(&orchard_fvk_str, account)? {
                 ctx.is_vk_display_finished = true;
                 return Err(AppSW::Deny);
             }
@@ -122,7 +128,7 @@ pub fn handler_get_vk(
 
             let ufvk_str = ufvk.encode(&network);
 
-            if !ui_display_ufvk(&ufvk_str)? {
+            if !ui_display_ufvk(&ufvk_str, account)? {
                 ctx.is_vk_display_finished = true;
                 return Err(AppSW::Deny);
             }
