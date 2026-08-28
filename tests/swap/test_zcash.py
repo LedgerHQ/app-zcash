@@ -390,6 +390,31 @@ class TestsZcashPcztSeveralExternalOutputs:
         assert e.value.status == ZcashErrors.SW_INVALID_TRANSACTION
 
 
+class ZcashOutOfRangeAmountTests(ZcashTests):
+    """Approve a swap for an amount Zcash cannot represent, then pay its low 64 bits.
+
+    Exchange carries the amount in a sixteen-byte field. Setting a bit above the low eight bytes
+    names a quantity four billion times the whole supply, yet a transaction paying only what those
+    low bytes spell matches it once the high half is dropped. Refusing the request is the only sound
+    answer: there is no transaction the device could sign that honours what was approved.
+    """
+
+    valid_send_amount_1 = 2**64 + ZcashTests.valid_send_amount_1
+
+    def perform_final_tx(self, destination, send_amount, fees, memo):
+        # The transaction carries what the comparison would keep of the approved amount.
+        super().perform_final_tx(destination, send_amount % 2**64, fees, memo)
+
+
+class TestsZcashOutOfRangeSwapAmount:
+    # Its own name, and so its own snapshots: the Exchange review displays the approved amount, which
+    # here is not the one the shared golden of `swap_valid_1` recorded.
+    def test_zcash_out_of_range_swap_amount(self, backend, exchange_navigation_helper):
+        with pytest.raises(ExceptionRAPDU) as e:
+            ZcashOutOfRangeAmountTests(backend, exchange_navigation_helper).run_test("swap_valid_1")
+        assert e.value.status == ZcashErrors.SW_INVALID_TRANSACTION
+
+
 class TestsZcashPcztRestartAfterPartialSignature:
     # Keeps its own name, and so its own snapshots: like the case above it drives `swap_valid_1` to
     # a refusal, where that scenario's shared golden records a success.
