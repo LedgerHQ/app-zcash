@@ -293,6 +293,31 @@ def test_get_orchard_fvk_confirm_refused(backend, scenario_navigator):
     assert len(e.value.data) == 0
 
 
+def test_orchard_derivations_are_capped(backend):
+    """The no-display address endpoint derives an Orchard key before any user action can intervene.
+
+    The Secure Element does not reclaim what that derivation consumes until the next power cycle, so
+    a host repeating the request drains the resource and every later derivation fails — including
+    the ones a transaction needs. The budget turns that open drain into a bounded one that reports
+    itself with its own status word rather than with the technical error an exhausted syscall
+    returns.
+
+    Fifty derivations must still go through: a session of normal use stays far below that, and the
+    endpoint would be unusable if the ceiling bit earlier.
+    """
+    client = ZcashCommandSender(backend)
+    path = "m/32'/133'/0'"
+
+    for _ in range(50):
+        client.get_shielded_address(path=path, mode=GetShieldedAddressMode.ORCHARD_RAW_ADDRESS)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.get_shielded_address(path=path, mode=GetShieldedAddressMode.ORCHARD_RAW_ADDRESS)
+
+    assert e.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    assert len(e.value.data) == 0
+
+
 def test_get_orchard_address_raw(backend):
     REF_ORCHARD_ADDRESS_RAW_ACC_0 = bytes.fromhex(
         "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02"

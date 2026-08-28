@@ -3,6 +3,7 @@ use zcash_protocol::consensus::NetworkType;
 
 use ledger_device_sdk::ecc::Pallas;
 use ledger_device_sdk::ecc::Secret;
+use ledger_device_sdk::log::error;
 
 use crate::utils::extended_public_key::ExtendedPublicKey;
 use crate::{AppSW, utils::bip32_path::Bip32Path};
@@ -60,6 +61,8 @@ pub fn derive_transparent_account_pubkey(path: &Bip32Path) -> Result<[u8; 65], A
 // the result and passes it to the `*_from_sk` helpers below. This function is
 // the single derivation site; do not call it per action.
 pub fn derive_orchard_sk_bytes(path: &Bip32Path) -> Result<Secret<32>, AppSW> {
+    consume_orchard_derivation_budget()?;
+
     let path_slice = path.as_slice();
 
     // `None` for the chain code: nothing here uses it, and asking for it made the Secure Element
@@ -70,6 +73,43 @@ pub fn derive_orchard_sk_bytes(path: &Bip32Path) -> Result<Secret<32>, AppSW> {
         .map_err(|_| AppSW::TechnicalProblem)?;
 
     Ok(sk)
+}
+
+/// Ceiling on the Orchard derivations one run of the app may request.
+///
+/// The address and viewing-key endpoints derive before any display, and their no-display form takes
+/// no user action at all, so a host alone decides how many times the syscall above runs. Left
+/// uncounted, it drains the resources the Secure Element does not reclaim until the next power
+/// cycle, and every later derivation — including the ones a transaction needs — comes back as a
+/// technical error.
+///
+/// Fifty is set against observed use rather than against the Secure Element's own threshold, which
+/// is undocumented: a Ledger Live sync derives none, and the heaviest session measured stays around
+/// fifteen. Should the real threshold prove lower, this bounds the drain and names it instead of
+/// preventing it — which is still the difference between a diagnosable refusal and an app that
+/// fails everywhere afterwards for no stated reason.
+const MAX_ORCHARD_DERIVATIONS: u32 = 50;
+
+/// Reset by the app exiting, not by this code: the count is deliberately not clearable from the
+/// wire, or a host would clear it between requests.
+static mut ORCHARD_DERIVATIONS: u32 = 0;
+
+fn consume_orchard_derivation_budget() -> Result<(), AppSW> {
+    // SAFETY: the app is single-threaded and this is its only accessor.
+    let spent = unsafe {
+        ORCHARD_DERIVATIONS = ORCHARD_DERIVATIONS.saturating_add(1);
+        ORCHARD_DERIVATIONS
+    };
+
+    if spent > MAX_ORCHARD_DERIVATIONS {
+        error!("Orchard derivation budget exhausted: {}", spent);
+        // Deliberately not the technical error the exhausted syscall itself returns: a caller that
+        // hits the ceiling should be able to tell a spent budget, which a restart clears, from a
+        // derivation that genuinely failed.
+        return Err(AppSW::NotEnoughMemorySpace);
+    }
+
+    Ok(())
 }
 
 // Builds an `OrchardSk` from already-derived key bytes, WITHOUT invoking

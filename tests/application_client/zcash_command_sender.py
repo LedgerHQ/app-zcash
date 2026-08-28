@@ -135,6 +135,7 @@ class Errors(IntEnum):
     SW_BAD_STATE = 0xB007
     SW_SIGNATURE_FAIL = 0xB008
     SW_INVALID_TRANSACTION = 0x6A80
+    SW_NOT_ENOUGH_MEMORY_SPACE = 0x6A84
 
 
 def split_message(message: bytes, max_size: int) -> list[bytes]:
