@@ -1,5 +1,11 @@
-diff --git a/secp256k1-sys/build.rs b/secp256k1-sys/build.rs
-index 49d02e35..87247500 100644
+# Ledger delta for the vendored `rust-secp256k1` crate.
+#
+# Base: https://github.com/rust-bitcoin/rust-secp256k1.git at secp256k1-0.29.1
+# Apply from vendor/rust-secp256k1 with: git apply ../patches/rust-secp256k1_dep.patch
+#
+# Regenerate with vendor/generate_patches.sh, which also verifies the result.
+#
+diff -ruN a/secp256k1-sys/build.rs b/secp256k1-sys/build.rs
 --- a/secp256k1-sys/build.rs
 +++ b/secp256k1-sys/build.rs
 @@ -11,55 +11,57 @@

@@ -6,8 +6,8 @@
 # Regenerate: fetch the base artifact, then diff it against the vendored tree.
 #
 diff -ruN a/Cargo.toml b/Cargo.toml
---- a/Cargo.toml	2026-08-27 10:50:00.405109000 +0000
-+++ b/Cargo.toml	2026-08-27 10:50:00.540109000 +0000
+--- a/Cargo.toml
++++ b/Cargo.toml
 @@ -48,6 +48,7 @@
  circuit = [
      "dep:halo2_gadgets",
@@ -67,8 +67,8 @@ diff -ruN a/Cargo.toml b/Cargo.toml
 -[profile.release]
 -debug = 2
 diff -ruN a/src/bundle/commitments.rs b/src/bundle/commitments.rs
---- a/src/bundle/commitments.rs	2026-08-27 10:50:00.424109000 +0000
-+++ b/src/bundle/commitments.rs	2026-08-27 10:50:00.496109000 +0000
+--- a/src/bundle/commitments.rs
++++ b/src/bundle/commitments.rs
 @@ -1,3 +1,4 @@
 +#![allow(missing_docs)]
  //! Utility functions for computing bundle commitments
@@ -91,8 +91,8 @@ diff -ruN a/src/bundle/commitments.rs b/src/bundle/commitments.rs
  const ZCASH_ORCHARD_V6_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthOrchaH_v6";
  const ZCASH_IRONWOOD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIronwd_H_v6";
 diff -ruN a/src/keys.rs b/src/keys.rs
---- a/src/keys.rs	2026-08-27 10:50:00.452109000 +0000
-+++ b/src/keys.rs	2026-08-27 10:50:00.530109000 +0000
+--- a/src/keys.rs
++++ b/src/keys.rs
 @@ -2,6 +2,7 @@
  
  use alloc::boxed::Box;
@@ -481,8 +481,8 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn to_bytes(self) -> [u8; 32] {
 diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
---- a/src/note_encryption.rs	2026-08-27 10:50:00.455109000 +0000
-+++ b/src/note_encryption.rs	2026-08-27 10:50:00.531109000 +0000
+--- a/src/note_encryption.rs
++++ b/src/note_encryption.rs
 @@ -579,9 +579,11 @@
  
  #[cfg(test)]
@@ -1064,8 +1064,8 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +    }
  }
 diff -ruN a/src/primitives/redpallas.rs b/src/primitives/redpallas.rs
---- a/src/primitives/redpallas.rs	2026-08-27 10:50:00.461109000 +0000
-+++ b/src/primitives/redpallas.rs	2026-08-27 10:50:00.513109000 +0000
+--- a/src/primitives/redpallas.rs
++++ b/src/primitives/redpallas.rs
 @@ -55,6 +55,42 @@
      }
  }
@@ -1110,8 +1110,8 @@ diff -ruN a/src/primitives/redpallas.rs b/src/primitives/redpallas.rs
      /// Creates a signature of type `T` on `msg` using this `SigningKey`.
      pub fn sign<R: RngCore + CryptoRng>(&self, rng: R, msg: &[u8]) -> Signature<T> {
 diff -ruN a/src/spec.rs b/src/spec.rs
---- a/src/spec.rs	2026-08-27 10:50:00.461109000 +0000
-+++ b/src/spec.rs	2026-08-27 10:50:00.532109000 +0000
+--- a/src/spec.rs
++++ b/src/spec.rs
 @@ -60,6 +60,34 @@
          assert!(!bool::from(p.is_identity()));
          NonIdentityPallasPoint(p)

@@ -1,132 +1,96 @@
 #!/bin/bash
+#
+# Rebuild the vendored crates from their pinned bases and reapply the Ledger
+# patches. Run from the repository root.
+#
+# The patches are the record of every local modification, several of which are
+# security fixes, so a base that a patch cannot apply to is a hard failure here
+# rather than something to skip past.
 
 set -euo pipefail
 
 VENDOR_DIR="vendor"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-function clone_repo() {
-    local repo_url=$1
-    local commit_hash=$2
-    local dest_dir="$3"
+# shellcheck source=vendor/pinned_deps.sh
+source "$SCRIPT_DIR/pinned_deps.sh"
 
-    if [ -d "$dest_dir" ]; then
-        echo "Directory $dest_dir already exists. Skipping clone."
-    else
-        echo "Cloning $repo_url into $dest_dir..."
-        git clone "$repo_url" "$dest_dir" > /dev/null
-        pushd "$dest_dir" > /dev/null
-        git checkout $commit_hash > /dev/null 2>&1
-        popd > /dev/null
-    fi
+should_remove_existing_vendor_dirs() {
+    local choice
 
-}
-
-list_vendor_dirs() {
-    local dir
-    local nullglob_was_set=0
-
-    if shopt -q nullglob; then
-        nullglob_was_set=1
-    else
-        shopt -s nullglob
-    fi
-
-    for dir in "$VENDOR_DIR"/*/; do
-        dir="${dir%/}"
-
-        [[ "$(basename "$dir")" == "patches" ]] && continue
-
-        printf '%s\n' "$dir"
-    done
-
-    if [[ "$nullglob_was_set" -eq 0 ]]; then
-        shopt -u nullglob
-    fi
+    read -r -p "Remove existing directories in $VENDOR_DIR before fetching? [y/N] " choice
+    [[ "$choice" =~ ^([yY]|[yY][eE][sS])$ ]]
 }
 
 should_keep_git_dirs() {
     local choice
 
-    read -r -p "Keep .git directories in vendored repos? [y/N] " choice
+    read -r -p "Keep .git directories in git-sourced vendored repos? [y/N] " choice
     [[ "$choice" =~ ^([yY]|[yY][eE][sS])$ ]]
 }
 
-should_remove_existing_vendor_dirs() {
-    local choice
-
-    read -r -p "Remove existing directories in $VENDOR_DIR before cloning? [y/N] " choice
-    [[ "$choice" =~ ^([yY]|[yY][eE][sS])$ ]]
-}
-
-# Create dir if it doesn't exist
 mkdir -p "$VENDOR_DIR"
 
-mapfile -t vendor_repo_dirs < <(list_vendor_dirs)
+existing=()
+for entry in "${VENDORED_DEPS[@]}"; do
+    IFS='|' read -r name _ _ <<< "$entry"
+    [[ -d "$VENDOR_DIR/$name" ]] && existing+=("$name")
+done
 
-if [[ "${#vendor_repo_dirs[@]}" -gt 0 ]]; then
+remove_existing=0
+if [[ "${#existing[@]}" -gt 0 ]]; then
     echo "Existing directories in $VENDOR_DIR:"
-    printf ' - %s\n' "${vendor_repo_dirs[@]#"$VENDOR_DIR"/}"
+    printf ' - %s\n' "${existing[@]}"
 
     if should_remove_existing_vendor_dirs; then
-        echo "Removing directories from $VENDOR_DIR:"
-        printf ' - %s\n' "${vendor_repo_dirs[@]#"$VENDOR_DIR"/}"
-        for dest_dir in "${vendor_repo_dirs[@]}"; do
-            rm -rf "$dest_dir"
-        done
+        remove_existing=1
     else
-        echo "Keeping existing directories in $VENDOR_DIR"
+        echo "Keeping existing directories; they will be left untouched."
     fi
 fi
 
-clone_repo "https://github.com/zcash/orchard.git"               "29d1d55db62153dcaeef8ef631c8991c53ed1248" "$VENDOR_DIR/orchard"
-clone_repo "https://github.com/ferrilab/radium.git"             "3f27e0d827338aee919213fd071b99819a1b9fff" "$VENDOR_DIR/radium"
-clone_repo "https://github.com/rust-bitcoin/rust-secp256k1.git" "secp256k1-0.29.1"                         "$VENDOR_DIR/rust-secp256k1"
-clone_repo "https://github.com/zcash/sapling-crypto.git"        "8186b407b47b595a2ea4f04c73d59fdd83bd401f" "$VENDOR_DIR/sapling-crypto"
-clone_repo "https://github.com/zesterer/spin-rs.git"            "502c9dca17c99762184095c9d64c0aedd1db97ff" "$VENDOR_DIR/spin"
-clone_repo "https://github.com/ZcashFoundation/reddsa.git"      "0.5.1"                                    "$VENDOR_DIR/reddsa"
+git_sourced=()
 
-pushd "$VENDOR_DIR" > /dev/null
+for entry in "${VENDORED_DEPS[@]}"; do
+    IFS='|' read -r name kind coord <<< "$entry"
 
-# Patch submodule deps
-# For every patch file in deps/patches, apply it to the corresponding submodule
-shopt -s nullglob
-mapfile -t patch_files < <(printf '%s\n' patches/*.patch | sort -V)
+    dest="$VENDOR_DIR/$name"
+    patch_file="$SCRIPT_DIR/patches/${name}_dep.patch"
 
-for patch_file in "${patch_files[@]}"; do
-    patch_filename=$(basename "$patch_file")
+    if [[ -d "$dest" ]]; then
+        if [[ "$remove_existing" -eq 1 ]]; then
+            rm -rf "$dest"
+        else
+            echo "Skipping $name: directory already present."
+            [[ "$kind" == "git" ]] && git_sourced+=("$dest")
+            continue
+        fi
+    fi
 
-    if [[ "$patch_filename" =~ ^(.+)_dep([0-9]+)?\.patch$ ]]; then
-        submodule_name="${BASH_REMATCH[1]}"
-    else
-        echo "Skipping patch with unexpected name: $patch_file"
+    echo "Fetching $name base ($kind $coord)..."
+    materialize_base "$name" "$kind" "$coord" "$dest"
+
+    if [[ ! -f "$patch_file" ]]; then
+        echo "No patch for $name; leaving the base as fetched."
+        [[ "$kind" == "git" ]] && git_sourced+=("$dest")
         continue
     fi
 
-    echo "Applying patch $patch_file to submodule $submodule_name"
-    # Change to submodule directory
-    pushd "$submodule_name" > /dev/null
-    # Apply the patch
-    git apply "../$patch_file"
-    # Return to original directory
-    popd > /dev/null
+    echo "Applying patches/${name}_dep.patch to $name..."
+    apply_dep_patch "$kind" "$dest" "$patch_file"
+
+    [[ "$kind" == "git" ]] && git_sourced+=("$dest")
 done
 
-popd > /dev/null
-
-mapfile -t vendor_repo_dirs < <(list_vendor_dirs)
-
-if [[ "${#vendor_repo_dirs[@]}" -gt 0 ]]; then
-    echo "Vendored repos:"
-    printf ' - %s\n' "${vendor_repo_dirs[@]#"$VENDOR_DIR"/}"
-fi
-
-if should_keep_git_dirs; then
-    echo "Keeping .git directories in vendored repos"
-else
-    echo "Removing .git directories from:"
-    printf ' - %s\n' "${vendor_repo_dirs[@]#"$VENDOR_DIR"/}"
-    for dest_dir in "${vendor_repo_dirs[@]}"; do
-        echo "Removing .git directory from $dest_dir"
-        rm -rf "$dest_dir/.git"
+if [[ "${#git_sourced[@]}" -gt 0 ]] && ! should_keep_git_dirs; then
+    for dest in "${git_sourced[@]}"; do
+        echo "Removing .git directory from $dest"
+        rm -rf "$dest/.git"
     done
 fi
+
+echo
+echo "Vendored crates rebuilt. Confirm the result matches what is committed with:"
+echo "  git status --porcelain $VENDOR_DIR"
+echo "Anything reported there is a difference between the patches and the"
+echo "committed vendored source, and one of the two is wrong."
