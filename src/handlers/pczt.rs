@@ -36,7 +36,9 @@ fn reset_pczt_parser_with_sw(ctx: &mut TxContext, sw: AppSW) -> AppSW {
 /// rather than while parsing because the transparent outputs are parsed before the Orchard bundle,
 /// so a shielded spend paying transparent change has no account to compare against yet.
 ///
-/// Both signing paths are accepted: BIP-44 for a transparent input, ZIP-32 for an Orchard action.
+/// Every signing path is accepted: BIP-44 for a transparent input, ZIP-32 for an Orchard or an
+/// Ironwood action. All three signing handlers must call this, since any one of them releases a
+/// signature over the same approved digest — an unchecked handler is enough to redirect the change.
 /// The shielded outputs need no equivalent check — a note counts as change only when it decrypts
 /// under the viewing key derived from the very spending key that signs the action, and the parser
 /// already refuses a second Orchard action declaring another path.
@@ -486,6 +488,10 @@ pub fn handler_pczt_sign_ironwood(
             return Err(map_pczt_parser_error(ctx, e));
         }
     };
+
+    if let Err(sw) = check_change_returns_to_signing_account(&ctx.tx_info, &path) {
+        return Err(reset_pczt_parser_with_sw(ctx, sw));
+    }
 
     // Reuse the session-cached account spending key, as the Orchard signing
     // handler does (repeated zip32_orchard_derive exhausts the SE and fails 6f00).

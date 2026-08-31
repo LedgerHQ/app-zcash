@@ -1,5 +1,7 @@
 # pylint: disable=C0301
 
+import hashlib
+
 import pytest
 from application_client.pczt import (
     PcztGlobal,
@@ -19,7 +21,7 @@ from application_client.zcash_command_sender import (
     ZcashCommandSender,
 )
 from application_client.zcash_transaction import split_tx_v5_for_hash_input
-from application_client.zcash_utils import write_varint
+from application_client.zcash_utils import ripemd160, write_varint
 from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
@@ -521,6 +523,98 @@ def test_pczt_ironwood_bundle_signing(
 
     auth_sig = client.pczt_sign_ironwood(action_index=0).data
     assert len(auth_sig) == 64
+
+
+# One account over, same seed: the device does own the address, which is precisely what lets the
+# output pass for change and disappear from the review.
+_FOREIGN_CHANGE_PATH = "m/44'/133'/1'/1/0"
+# Path and matching P2PKH script of a transparent input the device signs, under account 0.
+_TRANSPARENT_INPUT_PATH = "m/44'/133'/0'/0/0"
+_TRANSPARENT_INPUT_SCRIPT = bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac")
+_RECIPIENT_OUTPUT_250K = PcztTransparentOutput(
+    value=250000,
+    script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+)
+
+
+def _foreign_account_change_output(client: ZcashCommandSender, value: int) -> PcztTransparentOutput:
+    """A transparent change output the device owns, but under another account than the one it spends."""
+    pubkey = client._compressed_pubkey_from_path(_FOREIGN_CHANGE_PATH)  # pylint: disable=W0212
+    pk_hash = ripemd160(hashlib.sha256(pubkey).digest())
+
+    return PcztTransparentOutput(
+        value=value,
+        script_pubkey=bytes.fromhex("76a914") + pk_hash + bytes.fromhex("88ac"),
+        signing_path=_FOREIGN_CHANGE_PATH,
+    )
+
+
+@pytest.mark.parametrize("signing_pool", ["transparent", "orchard", "ironwood"])
+def test_pczt_change_in_another_account_yields_no_signature(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    signing_pool,
+):
+    """Change returning to another account yields no signature, whichever pool signs.
+
+    The guard sits on `check_change_returns_to_signing_account`, and the three handlers that
+    release a signature over the approved digest must all call it: any single unchecked handler is
+    enough to redirect the whole change amount. Asserting it on one and trusting the others is how
+    the Ironwood path came to miss it, so the three are asserted here as three cases of one test.
+
+    Totals are those of the passing single-output tests, split in two: 300000 in from whichever
+    pool, 250000 to the recipient and 49000 to the foreign-account change, leaving the fee at 1000.
+    """
+    client = ZcashCommandSender(backend)
+
+    transparent_outputs = [_RECIPIENT_OUTPUT_250K, _foreign_account_change_output(client, 49000)]
+    transparent_inputs = []
+    bundles = {}
+
+    if signing_pool == "transparent":
+        # V5: reaching the transparent signing handler needs no shielded pool.
+        pczt_global = PcztGlobal()
+        transparent_inputs = [
+            PcztTransparentInput(
+                prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+                prevout_index=0,
+                value=300000,
+                script_pubkey=_TRANSPARENT_INPUT_SCRIPT,
+                sequence=bytes.fromhex("00000000"),
+                signing_path=_TRANSPARENT_INPUT_PATH,
+            )
+        ]
+    elif signing_pool == "orchard":
+        pczt_global = PcztGlobal()
+        bundles = {"orchard_bundle": _valid_orchard_bundle()}
+    else:
+        pczt_global = PCZT_V6_GLOBAL
+        bundles = {"ironwood_bundle": _valid_ironwood_bundle()}
+
+    # The review shows the recipient alone: the foreign-account output is hidden, so the user has
+    # nothing to refuse on. Approving is the attacker's premise, not the defence.
+    with client.send_pczt(
+        pczt_global=pczt_global,
+        transparent_inputs=transparent_inputs,
+        transparent_outputs=transparent_outputs,
+        **bundles,
+    ):
+        _review_approve(
+            scenario_navigator,
+            f"test_pczt_change_in_another_account_yields_no_signature_{signing_pool}",
+        )
+
+    sign_action = {
+        "transparent": client.pczt_sign_transparent,
+        "orchard": client.pczt_sign_orchard,
+        "ironwood": client.pczt_sign_ironwood,
+    }[signing_pool]
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        sign_action(0)
+
+    assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+    assert not error.value.data
 
 
 def test_pczt_ironwood_dummy_spend_signature_is_refused(
