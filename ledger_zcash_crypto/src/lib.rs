@@ -34,6 +34,7 @@ use ledger_device_sdk::{
 };
 use montgomery::{PALLAS_BYTES, byte_to_fp, byte_to_fq, repr_to_montgomery_u64x4};
 use pasta_curves::pallas;
+use zeroize::Zeroizing;
 
 // Orchard key material is derived via PrfExpand with the fixed
 // "Zcash_ExpandSeed" personalization.
@@ -119,7 +120,7 @@ impl From<redpallas::Error> for Error {
 ///
 /// The returned bytes are the canonical little-endian encoding of the reduced
 /// Pallas scalar, matching Orchard's `pallas::Scalar::to_repr()`.
-pub fn orchard_ask(sk: &[u8; 32]) -> Result<[u8; 32], Error> {
+pub fn orchard_ask(sk: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>, Error> {
     let uniform = prf_expand_orchard_ask(sk)?;
     to_pallas_scalar_bytes(&uniform)
 }
@@ -129,7 +130,7 @@ pub fn orchard_ask(sk: &[u8; 32]) -> Result<[u8; 32], Error> {
 ///
 /// The returned bytes are the canonical little-endian encoding of the reduced
 /// Pallas base-field element, matching Orchard's `pallas::Base::to_repr()`.
-pub fn orchard_nk(sk: &[u8; 32]) -> Result<[u8; 32], Error> {
+pub fn orchard_nk(sk: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>, Error> {
     let uniform = prf_expand_orchard_nk(sk)?;
     to_pallas_base_bytes(&uniform)
 }
@@ -139,7 +140,7 @@ pub fn orchard_nk(sk: &[u8; 32]) -> Result<[u8; 32], Error> {
 ///
 /// The returned bytes are the canonical little-endian encoding of the reduced
 /// Pallas scalar, matching Orchard's `pallas::Scalar::to_repr()`.
-pub fn orchard_rivk(sk: &[u8; 32]) -> Result<[u8; 32], Error> {
+pub fn orchard_rivk(sk: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>, Error> {
     let uniform = prf_expand_orchard_rivk(sk)?;
     to_pallas_scalar_bytes(&uniform)
 }
@@ -153,10 +154,13 @@ pub fn orchard_rivk_internal(
     rivk: &[u8; 32],
     ak: &[u8; 32],
     nk: &[u8; 32],
-) -> Result<[u8; 32], Error> {
+) -> Result<Zeroizing<[u8; 32]>, Error> {
     let uniform = prf_expand_orchard_rivk_internal(rivk, ak, nk)?;
     to_pallas_scalar_bytes(&uniform)
 }
+
+/// The Orchard `(dk, ovk)` pair, each half wiped when the caller drops it.
+pub type OrchardDkOvk = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>);
 
 /// Computes the Orchard `(dk, ovk)` pair as:
 /// `PrfExpand::ORCHARD_DK_OVK.with(&rivk, &ak, &nk)`.
@@ -168,7 +172,7 @@ pub fn orchard_dk_ovk(
     rivk: &[u8; 32],
     ak: &[u8; 32],
     nk: &[u8; 32],
-) -> Result<([u8; 32], [u8; 32]), Error> {
+) -> Result<OrchardDkOvk, Error> {
     let expanded = prf_expand_orchard_dk_ovk(rivk, ak, nk)?;
     Ok(split_prf_expand_bytes(&expanded))
 }
@@ -190,7 +194,8 @@ pub fn orchard_pk_d(ivk: &[u8; 32], g_d: &[u8; 32]) -> Result<[u8; 32], Error> {
     }
 
     let mut pk_d = pallas_point_from_bytes(g_d)?;
-    pk_d.rnd_scalarmul(&canonical_scalar_bytes_be(&ivk.to_repr())?)?;
+    let ivk_bytes = Zeroizing::new(ivk.to_repr());
+    pk_d.rnd_scalarmul(&canonical_scalar_bytes_be(&ivk_bytes)?)?;
     pallas_point_to_bytes(&pk_d)
 }
 
@@ -312,7 +317,11 @@ pub fn nonidentity_pallas_point_from_bytes(
 ///
 /// The returned bytes are the canonical little-endian encoding of the non-zero
 /// Orchard `ivk` base-field element, matching `NonZeroPallasBase::to_bytes()`.
-pub fn orchard_ivk(ak: &[u8; 32], nk: &[u8; 32], rivk: &[u8; 32]) -> Result<[u8; 32], Error> {
+pub fn orchard_ivk(
+    ak: &[u8; 32],
+    nk: &[u8; 32],
+    rivk: &[u8; 32],
+) -> Result<Zeroizing<[u8; 32]>, Error> {
     let ak = pallas_base_from_repr(*ak)?;
     let nk = pallas_base_from_repr(*nk)?;
     let rivk = pallas_scalar_from_repr(*rivk)?;
@@ -324,7 +333,7 @@ pub fn orchard_ivk(ak: &[u8; 32], nk: &[u8; 32], rivk: &[u8; 32]) -> Result<[u8;
         return Err(Error::InvalidKeyDiscarded);
     }
 
-    Ok(ivk.to_repr())
+    Ok(Zeroizing::new(ivk.to_repr()))
 }
 
 // Isolated from its caller: `message` alone is 510 bytes and the builder below holds ~1020,
@@ -395,17 +404,17 @@ pub fn pallas_base_from_repr(repr: [u8; 32]) -> Result<pallas::Base, Error> {
 }
 
 /// Computes `PrfExpand::ORCHARD_ASK.with(sk)`.
-pub fn prf_expand_orchard_ask(sk: &[u8; 32]) -> Result<[u8; PRF_EXPAND_BYTES], Error> {
+pub fn prf_expand_orchard_ask(sk: &[u8; 32]) -> Result<Zeroizing<[u8; PRF_EXPAND_BYTES]>, Error> {
     prf_expand_with_domain_separator(sk, ORCHARD_ASK_DOMAIN_SEPARATOR)
 }
 
 /// Computes `PrfExpand::ORCHARD_NK.with(sk)`.
-pub fn prf_expand_orchard_nk(sk: &[u8; 32]) -> Result<[u8; PRF_EXPAND_BYTES], Error> {
+pub fn prf_expand_orchard_nk(sk: &[u8; 32]) -> Result<Zeroizing<[u8; PRF_EXPAND_BYTES]>, Error> {
     prf_expand_with_domain_separator(sk, ORCHARD_NK_DOMAIN_SEPARATOR)
 }
 
 /// Computes `PrfExpand::ORCHARD_RIVK.with(sk)`.
-pub fn prf_expand_orchard_rivk(sk: &[u8; 32]) -> Result<[u8; PRF_EXPAND_BYTES], Error> {
+pub fn prf_expand_orchard_rivk(sk: &[u8; 32]) -> Result<Zeroizing<[u8; PRF_EXPAND_BYTES]>, Error> {
     prf_expand_with_domain_separator(sk, ORCHARD_RIVK_DOMAIN_SEPARATOR)
 }
 
@@ -414,7 +423,7 @@ pub fn prf_expand_orchard_rivk_internal(
     rivk: &[u8; 32],
     ak: &[u8; 32],
     nk: &[u8; 32],
-) -> Result<[u8; PRF_EXPAND_BYTES], Error> {
+) -> Result<Zeroizing<[u8; PRF_EXPAND_BYTES]>, Error> {
     prf_expand_with_domain_separator_and_inputs(
         rivk,
         ORCHARD_RIVK_INTERNAL_DOMAIN_SEPARATOR,
@@ -427,7 +436,7 @@ pub fn prf_expand_orchard_dk_ovk(
     rivk: &[u8; 32],
     ak: &[u8; 32],
     nk: &[u8; 32],
-) -> Result<[u8; PRF_EXPAND_BYTES], Error> {
+) -> Result<Zeroizing<[u8; PRF_EXPAND_BYTES]>, Error> {
     prf_expand_with_domain_separator_and_inputs(
         rivk,
         ORCHARD_DK_OVK_DOMAIN_SEPARATOR,
@@ -438,17 +447,20 @@ pub fn prf_expand_orchard_dk_ovk(
 fn prf_expand_with_domain_separator(
     sk: &[u8; 32],
     domain_separator: u8,
-) -> Result<[u8; PRF_EXPAND_BYTES], Error> {
+) -> Result<Zeroizing<[u8; PRF_EXPAND_BYTES]>, Error> {
     prf_expand_with_domain_separator_and_inputs(sk, domain_separator, &[])
 }
 
+/// The 64-byte PRF output is the pre-image of a secret scalar on every call site in this crate, so
+/// zeroization is carried by the return type: a caller that binds it holds a wiped buffer without
+/// having to remember to wrap it.
 fn prf_expand_with_domain_separator_and_inputs(
     sk: &[u8],
     domain_separator: u8,
     inputs: &[&[u8]],
-) -> Result<[u8; PRF_EXPAND_BYTES], Error> {
+) -> Result<Zeroizing<[u8; PRF_EXPAND_BYTES]>, Error> {
     let mut personalization = PRF_EXPAND_PERSONALIZATION;
-    let mut output = [0u8; PRF_EXPAND_BYTES];
+    let mut output = Zeroizing::new([0u8; PRF_EXPAND_BYTES]);
 
     let mut blake2b = Blake2b_512::new_with_salt_and_perso(None, Some(&mut personalization))?;
     blake2b.update(sk)?;
@@ -456,14 +468,16 @@ fn prf_expand_with_domain_separator_and_inputs(
     for input in inputs {
         blake2b.update(input)?;
     }
-    blake2b.finalize(&mut output)?;
+    blake2b.finalize(&mut *output)?;
 
     Ok(output)
 }
 
-fn split_prf_expand_bytes(bytes: &[u8; PRF_EXPAND_BYTES]) -> ([u8; 32], [u8; 32]) {
-    let mut lhs = [0u8; 32];
-    let mut rhs = [0u8; 32];
+fn split_prf_expand_bytes(
+    bytes: &[u8; PRF_EXPAND_BYTES],
+) -> (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>) {
+    let mut lhs = Zeroizing::new([0u8; 32]);
+    let mut rhs = Zeroizing::new([0u8; 32]);
     lhs.copy_from_slice(&bytes[..32]);
     rhs.copy_from_slice(&bytes[32..]);
     (lhs, rhs)
@@ -472,14 +486,18 @@ fn split_prf_expand_bytes(bytes: &[u8; PRF_EXPAND_BYTES]) -> ([u8; 32], [u8; 32]
 /// Reduces a 64-byte little-endian uniform value modulo the Pallas scalar field order.
 ///
 /// This is the Ledger-SDK equivalent of Orchard's `to_scalar(...)`.
-pub fn to_pallas_scalar_bytes(uniform_le: &[u8; PRF_EXPAND_BYTES]) -> Result<[u8; 32], Error> {
+pub fn to_pallas_scalar_bytes(
+    uniform_le: &[u8; PRF_EXPAND_BYTES],
+) -> Result<Zeroizing<[u8; 32]>, Error> {
     reduce_uniform_le_bytes_mod_pallas(uniform_le, CurveDomainParam::Order)
 }
 
 /// Reduces a 64-byte little-endian uniform value modulo the Pallas base field modulus.
 ///
 /// This is the Ledger-SDK equivalent of Orchard's `to_base(...)`.
-pub fn to_pallas_base_bytes(uniform_le: &[u8; PRF_EXPAND_BYTES]) -> Result<[u8; 32], Error> {
+pub fn to_pallas_base_bytes(
+    uniform_le: &[u8; PRF_EXPAND_BYTES],
+) -> Result<Zeroizing<[u8; 32]>, Error> {
     reduce_uniform_le_bytes_mod_pallas(uniform_le, CurveDomainParam::Field)
 }
 
@@ -546,21 +564,21 @@ fn pallas_point_add(lhs: &EcPoint, rhs: &EcPoint) -> Result<EcPoint, Error> {
 fn reduce_uniform_le_bytes_mod_pallas(
     uniform_le: &[u8; PRF_EXPAND_BYTES],
     modulus_param: CurveDomainParam,
-) -> Result<[u8; 32], Error> {
-    let mut uniform_be = [0u8; PRF_EXPAND_BYTES];
+) -> Result<Zeroizing<[u8; 32]>, Error> {
+    let mut uniform_be = Zeroizing::new([0u8; PRF_EXPAND_BYTES]);
     bytes::reverse_copy(&mut uniform_be, uniform_le);
 
-    let wide = Bn::alloc_init(&uniform_be)?;
+    let wide = Bn::alloc_init(&*uniform_be)?;
     let mut modulus = Bn::alloc(PALLAS_BYTES)?;
     CurvesId::Pallas.domain_parameter_bn(modulus_param, &mut modulus)?;
 
     let reduced = Bn::alloc(PALLAS_BYTES)?;
     reduced.reduce(&wide, &modulus)?;
 
-    let mut reduced_be = [0u8; PALLAS_BYTES];
-    reduced.export(&mut reduced_be)?;
+    let mut reduced_be = Zeroizing::new([0u8; PALLAS_BYTES]);
+    reduced.export(&mut *reduced_be)?;
 
-    let mut reduced_le = [0u8; PALLAS_BYTES];
+    let mut reduced_le = Zeroizing::new([0u8; PALLAS_BYTES]);
     bytes::reverse_copy(&mut reduced_le, &reduced_be);
 
     Ok(reduced_le)

@@ -62,13 +62,16 @@ default-features = false
 features = ["alloc"]
 
 [features]
-std = ["blake2b_simd/std", "thiserror", "zeroize", "alloc",
+std = ["blake2b_simd/std", "thiserror", "dep:zeroize", "alloc",
        "serde"] # conditional compilation for serde not complete (issue #9)
 alloc = ["hex"]
 nightly = []
 frost = ["std", "frost-rerandomized"]
 default = ["std"]
-ledger = ["dep:ledger_zcash_crypto"]
+# `zeroize` is optional upstream and only reached through `std`, which a device build does not
+# enable: the Ledger signing path holds secret scalar bytes in `Zeroizing`, so it needs the
+# dependency on its own.
+ledger = ["dep:ledger_zcash_crypto", "dep:zeroize"]
 
 [[bench]]
 name = "bench"

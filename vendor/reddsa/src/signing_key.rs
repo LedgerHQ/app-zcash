@@ -20,6 +20,7 @@ use crate::{
 
 use group::{ff::PrimeField, GroupEncoding};
 use rand_core::{CryptoRng, RngCore};
+use zeroize::Zeroizing;
 
 /// A RedDSA signing key.
 #[derive(Copy, Clone)]
@@ -48,8 +49,12 @@ impl SigningKey<crate::orchard::SpendAuth> {
         ask: ledger_zcash_crypto::redpallas::SpendAuthSigningKey,
     ) -> Result<Self, ledger_zcash_crypto::Error> {
         // By reference: `SpendAuthSigningKey` is no longer `Copy`, so that it can zeroize its secret
-        // scalar on drop.
-        let sk = ledger_zcash_crypto::pallas_scalar_from_repr(<[u8; 32]>::from(&ask))?;
+        // scalar on drop. The conversion still yields a plain array, held in `Zeroizing` so this
+        // frame does not keep an unwiped copy of the scalar `ask` already protects.
+        // `pallas_scalar_from_repr` then takes it by value: its signature is shared with callers
+        // passing public material, and is left alone here rather than changed for this one path.
+        let ask_bytes = Zeroizing::new(<[u8; 32]>::from(&ask));
+        let sk = ledger_zcash_crypto::pallas_scalar_from_repr(*ask_bytes)?;
         let pk = VerificationKey::from_ledger_verification_key(ask.verification_key());
 
         Ok(SigningKey { sk, pk })
@@ -61,11 +66,15 @@ impl SigningKey<crate::orchard::SpendAuth> {
         &self,
         randomizer: &Randomizer<crate::orchard::SpendAuth>,
     ) -> Result<SigningKey<crate::orchard::SpendAuth>, ledger_zcash_crypto::Error> {
-        let sk_bytes = self.sk.to_repr().as_ref().try_into().unwrap();
-        let randomizer_bytes = randomizer.to_repr().as_ref().try_into().unwrap();
+        // `self.sk` is the spend authorizing key: its byte representation is held in `Zeroizing`
+        // so it does not survive this frame. The randomizer is `alpha`, which the app hands to the
+        // host, so it needs no such care.
+        let sk_bytes: Zeroizing<[u8; 32]> =
+            Zeroizing::new(self.sk.to_repr().as_ref().try_into().unwrap());
+        let randomizer_bytes: [u8; 32] = randomizer.to_repr().as_ref().try_into().unwrap();
         let ledger_signing_key = ledger_zcash_crypto::redpallas::spendauth_randomized_signing_key(
-            sk_bytes,
-            randomizer_bytes,
+            &sk_bytes,
+            &randomizer_bytes,
         )
         .map_err(ledger_zcash_crypto::Error::from)?;
 
@@ -84,8 +93,12 @@ impl SigningKey<crate::orchard::SpendAuth> {
         random_bytes: &[u8; 80],
         msg: &[u8],
     ) -> Result<Signature<crate::orchard::SpendAuth>, ledger_zcash_crypto::Error> {
-        let sk_bytes = self.sk.to_repr().as_ref().try_into().unwrap();
-        let ledger_signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(sk_bytes)
+        // `self.sk` is the *randomized* spend authorizing key — the secret this signature is made
+        // with, and the one an attacker recovers a spend authority from. Held in `Zeroizing` so
+        // its bytes do not stay behind in this frame once the signature is out.
+        let sk_bytes: Zeroizing<[u8; 32]> =
+            Zeroizing::new(self.sk.to_repr().as_ref().try_into().unwrap());
+        let ledger_signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(&sk_bytes)
             .map_err(ledger_zcash_crypto::Error::from)?;
         let signature =
             ledger_zcash_crypto::redpallas::spendauth_sign(&ledger_signing_key, random_bytes, msg)

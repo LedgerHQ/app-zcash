@@ -19,7 +19,7 @@ use pasta_curves::pallas;
 use rand::RngCore;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 use zcash_note_encryption::EphemeralKeyBytes;
-use zeroize::Zeroize as _;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::{
     address::Address,
@@ -163,7 +163,7 @@ impl SpendAuthorizingKey {
     #[cfg(feature = "ledger")]
     fn ledger_derive_inner(sk: &SpendingKey) -> Result<pallas::Scalar, ledger_zcash_crypto::Error> {
         let ask = ledger_zcash_crypto::orchard_ask(&sk.0)?;
-        ledger_zcash_crypto::pallas_scalar_from_repr(ask)
+        ledger_zcash_crypto::pallas_scalar_from_repr(*ask)
     }
 
     /// Randomizes this spend authorizing key with the given `randomizer`.
@@ -215,17 +215,19 @@ impl SpendAuthorizingKey {
         if bool::from(ask.is_zero()) {
             return Err(ledger_zcash_crypto::Error::InvalidKeyDiscarded);
         }
-        let ask_bytes = ask.to_repr();
+        // `to_repr` hands out a plain array: held as-is, this copy of `ask` would stay in the
+        // frame with nothing to wipe it.
+        let ask_bytes = Zeroizing::new(ask.to_repr());
         // ask != 0 rules out a malformed-scalar failure, but derivation can still
         // fail on BN-pool exhaustion (CxError): propagate it instead of
         // `.expect()`-panicking, since a panic aborts through the device panic
         // handler and freezes the app mid-signing, whereas a returned error lets
         // the caller fail closed with a proper status word.
-        let signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(ask_bytes)?;
+        let signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(&ask_bytes)?;
 
         let signing_key = if (signing_key.verification_key_bytes()[31] >> 7) == 1 {
-            let neg_ask_bytes = (-ask).to_repr();
-            ledger_zcash_crypto::redpallas::spendauth_signing_key(neg_ask_bytes)?
+            let neg_ask_bytes = Zeroizing::new((-ask).to_repr());
+            ledger_zcash_crypto::redpallas::spendauth_signing_key(&neg_ask_bytes)?
         } else {
             signing_key
         };
@@ -352,7 +354,7 @@ impl NullifierDerivingKey {
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let nk = ledger_zcash_crypto::orchard_nk(&sk.0)?;
         Ok(NullifierDerivingKey(
-            ledger_zcash_crypto::pallas_base_from_repr(nk)?,
+            ledger_zcash_crypto::pallas_base_from_repr(*nk)?,
         ))
     }
 
@@ -397,7 +399,7 @@ impl CommitIvkRandomness {
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let rivk = ledger_zcash_crypto::orchard_rivk(&sk.0)?;
         Ok(CommitIvkRandomness(
-            ledger_zcash_crypto::pallas_scalar_from_repr(rivk)?,
+            ledger_zcash_crypto::pallas_scalar_from_repr(*rivk)?,
         ))
     }
 
@@ -512,14 +514,14 @@ impl FullViewingKey {
     fn derive_dk_ovk_ledger(
         &self,
     ) -> Result<(DiversifierKey, OutgoingViewingKey), ledger_zcash_crypto::Error> {
-        let rivk = self.rivk.to_bytes();
+        let rivk = Zeroizing::new(self.rivk.to_bytes());
         let ak = self.ak.to_bytes();
-        let nk = self.nk.to_bytes();
+        let nk = Zeroizing::new(self.nk.to_bytes());
         let (dk, ovk) = ledger_zcash_crypto::orchard_dk_ovk(&rivk, &ak, &nk)?;
 
         Ok((
-            DiversifierKey::from_bytes(dk),
-            OutgoingViewingKey::from(ovk),
+            DiversifierKey::from_bytes(*dk),
+            OutgoingViewingKey::from(*ovk),
         ))
     }
 
@@ -634,13 +636,13 @@ impl FullViewingKey {
         match scope {
             Scope::External => Ok(self.rivk),
             Scope::Internal => {
-                let rivk = self.rivk.to_bytes();
+                let rivk = Zeroizing::new(self.rivk.to_bytes());
                 let ak = self.ak.to_bytes();
-                let nk = self.nk.to_bytes();
+                let nk = Zeroizing::new(self.nk.to_bytes());
                 let rivk_internal = ledger_zcash_crypto::orchard_rivk_internal(&rivk, &ak, &nk)?;
 
                 Ok(CommitIvkRandomness(
-                    ledger_zcash_crypto::pallas_scalar_from_repr(rivk_internal)?,
+                    ledger_zcash_crypto::pallas_scalar_from_repr(*rivk_internal)?,
                 ))
             }
         }
@@ -784,8 +786,8 @@ impl KeyAgreementPrivateKey {
     #[cfg(feature = "ledger")]
     fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
         let ak = fvk.ak.to_bytes();
-        let nk = fvk.nk.to_bytes();
-        let rivk = fvk.rivk.to_bytes();
+        let nk = Zeroizing::new(fvk.nk.to_bytes());
+        let rivk = Zeroizing::new(fvk.rivk.to_bytes());
         let ivk = ledger_zcash_crypto::orchard_ivk(&ak, &nk, &rivk)?;
 
         let ivk = NonZeroPallasBase::from_bytes(&ivk);
