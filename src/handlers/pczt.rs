@@ -4,8 +4,7 @@ use ledger_device_sdk::log::{debug, error, info};
 use crate::AppSW;
 use crate::handlers::sign_tx::{append_signature, orchard_spend_auth_signature_with_sk};
 use crate::parser::{LegacyParserMode, ParserError, ParserSourceError, PcztParserCtx};
-use crate::tx::{TxContext, TxInfo};
-use crate::utils::{bip32_path::Bip32Path, derivation_account};
+use crate::tx::{TxContext, check_change_returns_to_signing_account};
 
 fn are_pczt_transparent_signatures_done(ctx: &TxContext) -> bool {
     ctx.tx_signing_state.total_input_count == 0
@@ -27,35 +26,6 @@ fn reset_pczt_parser_after_error(ctx: &mut TxContext) {
 fn reset_pczt_parser_with_sw(ctx: &mut TxContext, sw: AppSW) -> AppSW {
     reset_pczt_parser_after_error(ctx);
     sw
-}
-
-/// Refuse a signature that would spend from an account other than the one the change returns to.
-///
-/// A transparent change output is dropped from the review, so nothing on screen says where its
-/// value goes. That is only acceptable while it comes back to the account being spent. Checked here
-/// rather than while parsing because the transparent outputs are parsed before the Orchard bundle,
-/// so a shielded spend paying transparent change has no account to compare against yet.
-///
-/// Every signing path is accepted: BIP-44 for a transparent input, ZIP-32 for an Orchard or an
-/// Ironwood action. All three signing handlers must call this, since any one of them releases a
-/// signature over the same approved digest — an unchecked handler is enough to redirect the change.
-/// The shielded outputs need no equivalent check — a note counts as change only when it decrypts
-/// under the viewing key derived from the very spending key that signs the action, and the parser
-/// already refuses a second Orchard action declaring another path.
-fn check_change_returns_to_signing_account(
-    tx_info: &TxInfo,
-    path: &Bip32Path,
-) -> Result<(), AppSW> {
-    let Some(change_account) = tx_info.change_account else {
-        return Ok(());
-    };
-
-    if derivation_account(path) != Some(change_account) {
-        error!("PCZT change account differs from the signing account");
-        return Err(AppSW::ConditionsOfUseNotSatisfied);
-    }
-
-    Ok(())
 }
 
 fn map_pczt_parser_error(ctx: &mut TxContext, error: ParserError) -> AppSW {
@@ -421,9 +391,9 @@ pub fn handler_pczt_sign_orchard(
             Ok(auth_sig) => auth_sig,
             Err(sw) => return Err(reset_pczt_parser_with_sw(ctx, sw)),
         };
-    comm.append(&auth_sig);
-    ctx.note_signature_released();
-
+    // Marked before the signature reaches the response buffer. A reply carries everything already
+    // appended alongside its status word, so appending first would ship the spend authorization
+    // with an error should this fail. The transparent handler orders it the same way.
     let signed_orchard_count = match ctx.pczt_parser.mark_orchard_action_signed(action_index) {
         Ok(signed_orchard_count) => signed_orchard_count,
         Err(e) => {
@@ -431,6 +401,10 @@ pub fn handler_pczt_sign_orchard(
             return Err(map_pczt_parser_error(ctx, e));
         }
     };
+
+    comm.append(&auth_sig);
+    ctx.note_signature_released();
+
     let orchard_signature_count = ctx.pczt_parser.orchard_signature_count();
 
     info!(
@@ -505,9 +479,8 @@ pub fn handler_pczt_sign_ironwood(
             Ok(auth_sig) => auth_sig,
             Err(sw) => return Err(reset_pczt_parser_with_sw(ctx, sw)),
         };
-    comm.append(&auth_sig);
-    ctx.note_signature_released();
-
+    // Marked before the signature reaches the response buffer, as on the Orchard and transparent
+    // paths: a reply carries everything already appended alongside its status word.
     let signed_ironwood_count = match ctx.pczt_parser.mark_ironwood_action_signed(action_index) {
         Ok(signed_ironwood_count) => signed_ironwood_count,
         Err(e) => {
@@ -515,6 +488,10 @@ pub fn handler_pczt_sign_ironwood(
             return Err(map_pczt_parser_error(ctx, e));
         }
     };
+
+    comm.append(&auth_sig);
+    ctx.note_signature_released();
+
     let ironwood_signature_count = ctx.pczt_parser.ironwood_signature_count();
 
     info!(

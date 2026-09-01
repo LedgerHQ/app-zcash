@@ -22,6 +22,7 @@ use crate::parser::personalization::{
 };
 use crate::parser::{LegacyOutputParser, LegacyParser, LegacyParserMode, PcztParser};
 use crate::utils::blake2b_256_pers::Blake2b256Personalization as _;
+use crate::utils::{bip32_path::Bip32Path, derivation_account};
 use orchard::bundle::commitments::ZCASH_ORCHARD_V5_HASH_PERSONALIZATION;
 
 #[derive(Default)]
@@ -204,6 +205,38 @@ pub struct TxInfo {
     pub branch_id_raw: u32,
 
     pub orchard_decipher_keys: Option<OrchardDecipherKeys>,
+}
+
+/// Refuse a signature that would spend from an account other than the one the change returns to.
+///
+/// A transparent change output is dropped from the review, so nothing on screen says where its
+/// value goes. That is only acceptable while it comes back to the account being spent. Checked at
+/// signing rather than while parsing because the transparent outputs are parsed before the shielded
+/// bundles, so a shielded spend paying transparent change has no account to compare against yet.
+///
+/// Every signing path is accepted: BIP-44 for a transparent input, ZIP-32 for an Orchard or an
+/// Ironwood action. **Every path that releases a signature must call this** — legacy `HASH_SIGN` and
+/// the three PCZT signing handlers alike — since any one of them signs the same approved digest, and
+/// a single unchecked path is enough to redirect the whole change amount. It lives here, beside the
+/// account it reads, so that a new signing path has one rule to adopt rather than one to copy.
+///
+/// The shielded outputs need no equivalent check — a note counts as change only when it decrypts
+/// under the viewing key derived from the very spending key that signs the action, and the parser
+/// already refuses a second shielded action declaring another path.
+pub fn check_change_returns_to_signing_account(
+    tx_info: &TxInfo,
+    path: &Bip32Path,
+) -> Result<(), AppSW> {
+    let Some(change_account) = tx_info.change_account else {
+        return Ok(());
+    };
+
+    if derivation_account(path) != Some(change_account) {
+        error!("Change account differs from the signing account");
+        return Err(AppSW::ConditionsOfUseNotSatisfied);
+    }
+
+    Ok(())
 }
 
 pub enum SupportedTxVersion {

@@ -26,7 +26,7 @@ use crate::parser::{
     LegacyOutputParserCtx, LegacyParser, LegacyParserCtx, LegacyParserMode, ParserSourceError,
 };
 use crate::rng;
-use crate::tx::{TransferType, TxContext};
+use crate::tx::{TransferType, TxContext, check_change_returns_to_signing_account};
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance, derivation_account};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
 use crate::zip32::{derive_orchard_ask_from_sk, map_ledger_crypto_error};
@@ -300,18 +300,9 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
 
-    // A change output is removed from the review, so nothing on screen tells the user where it
-    // goes. That is only acceptable while it returns to the account the transaction spends from:
-    // otherwise the host names a change path in another account, and the value leaves the account
-    // the user is spending with no destination and no amount displayed. Both accounts are known
-    // only here, so this is where the transaction is refused — before any signature exists, since
-    // a released signature cannot be recalled.
-    if let Some(change_account) = ctx.tx_info.change_account
-        && derivation_account(&path) != Some(change_account)
-    {
-        error!("Change path account differs from the signing account");
-        return Err(AppSW::ConditionsOfUseNotSatisfied);
-    }
+    // Both accounts are known only here, so this is where the transaction is refused — before any
+    // signature exists, since a released signature cannot be recalled.
+    check_change_returns_to_signing_account(&ctx.tx_info, &path)?;
 
     append_signature(
         comm,
