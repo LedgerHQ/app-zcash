@@ -704,6 +704,46 @@ def test_pczt_v6_both_pools_sign_independently(
     assert len(ironwood_sig) == 64
 
 
+def test_pczt_v6_orchard_sign_replay_in_session_rejected(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """In-session SIGN_ORCHARD replay is rejected before any signature is produced.
+
+    The Ironwood side of this guard has its own tests; the Orchard side had none. A V6
+    transaction carrying both bundles is what makes the case reachable: the Ironwood action is
+    still unsigned once the Orchard one is signed, so the parser is not reset and the replay has
+    to be caught by the `action.signed` check in `ensure_signature_digest_for_orchard` rather
+    than by the `is_finished()` precondition that would catch it after a reset.
+
+    The empty body is asserted as well as the status word, and that is the point of the test.
+    The handler stages the signature in the reply buffer, and a reply carries whatever is already
+    staged alongside its status word — so were the replay ever to reach the signing step, the
+    device would ship a spend authorization with an error status. The signature is computed from
+    the action's `alpha`, which the first signature zeroed, making that leaked signature valid
+    under the unrandomized spend validating key.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
+        orchard_bundle=_valid_orchard_bundle(),
+        ironwood_bundle=_valid_ironwood_bundle(),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_v6_orchard_sign_replay_in_session_rejected")
+
+    auth_sig = client.pczt_sign_orchard(action_index=0).data
+    assert len(auth_sig) == 64
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.pczt_sign_orchard(action_index=0)
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert not e.value.data
+
+
 def test_pczt_ironwood_unknown_branch_id_rejected(
     backend,
 ):
