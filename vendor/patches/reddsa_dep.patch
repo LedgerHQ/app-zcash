@@ -1,7 +1,7 @@
 # Ledger delta for the vendored `reddsa` crate.
 #
 # Base: crates.io package reddsa 0.5.1, plus the 0.5.2 SigningKey Debug redaction backported
-# Apply from vendor/reddsa with: patch -p1 < ../patches/reddsa_dep.patch
+# Apply from vendor/reddsa with: patch -p1 -E < ../patches/reddsa_dep.patch
 #
 # Regenerate: fetch the base artifact, then diff it against the vendored tree.
 #

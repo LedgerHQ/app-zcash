@@ -1,7 +1,7 @@
 # Ledger delta for the vendored `radium` crate.
 #
 # Base: crates.io package radium 0.7.0
-# Apply from vendor/radium with: patch -p1 < ../patches/radium_dep.patch
+# Apply from vendor/radium with: patch -p1 -E < ../patches/radium_dep.patch
 #
 # Regenerate: fetch the base artifact, then diff it against the vendored tree.
 #

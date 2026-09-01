@@ -1,7 +1,7 @@
 # Ledger delta for the vendored `spin` crate.
 #
 # Base: crates.io package spin 0.9.8
-# Apply from vendor/spin with: patch -p1 < ../patches/spin_dep.patch
+# Apply from vendor/spin with: patch -p1 -E < ../patches/spin_dep.patch
 #
 # Regenerate: fetch the base artifact, then diff it against the vendored tree.
 #

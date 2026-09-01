@@ -1,7 +1,7 @@
 # Ledger delta for the vendored `sapling-crypto` crate.
 #
 # Base: crates.io package sapling-crypto 0.7.0
-# Apply from vendor/sapling-crypto with: patch -p1 < ../patches/sapling-crypto_dep.patch
+# Apply from vendor/sapling-crypto with: patch -p1 -E < ../patches/sapling-crypto_dep.patch
 #
 # Regenerate: fetch the base artifact, then diff it against the vendored tree.
 #
