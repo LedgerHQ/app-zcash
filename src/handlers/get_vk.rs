@@ -18,13 +18,19 @@ use crate::{
 
 const VK_RESPONSE_CHUNK_LEN: usize = 255;
 
+/// Accepts only the account-level BIP-44 path the transparent half of a UFVK derives from.
+///
+/// Purpose and coin type are compared with the hardening bit included, as `check_bip44_compliance`
+/// does. The app is loaded with the `44'/133'` prefix only, so an unhardened variant is a path the
+/// OS will not derive — and it answers that refusal by taking the app down rather than by a status
+/// word, which makes this check the only one able to produce a diagnosable error.
 fn check_transparent_vk_path(path: &Bip32Path) -> bool {
     const HARDENED: u32 = 0x8000_0000;
     const BIP44_PURPOSE: u32 = 44;
     let p = path.as_slice();
     p.len() == 3
-        && (p[0] & UNHARDENED_MASK) == BIP44_PURPOSE
-        && (p[1] & UNHARDENED_MASK) == ZCASH_BIP44_COIN_TYPE
+        && p[0] == (BIP44_PURPOSE | HARDENED)
+        && p[1] == (ZCASH_BIP44_COIN_TYPE | HARDENED)
         && p[2] & HARDENED != 0
 }
 

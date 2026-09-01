@@ -180,6 +180,44 @@ def test_get_ufvk_account_mismatch(backend):
     assert len(e.value.data) == 0
 
 
+# The transparent half of a UFVK is derived from the path the host supplies, so its prefix carries
+# the same requirement as every other export path: compared with the hardening bit included. Read
+# with the bit masked off, the first three below are the app's own `44'/133'` prefix, yet they name
+# subtrees the OS will not derive — and it refuses by taking the app down rather than by a status
+# word, so this check is the only one that can produce an answer at all.
+@pytest.mark.parametrize(
+    "transparent_path",
+    [
+        "m/44/133'/0'",
+        "m/44'/133/0'",
+        "m/44/133/0'",
+        "m/32'/133'/0'",  # shielded purpose where the transparent tree is required
+        "m/44'/133'/0",  # account not hardened
+        "m/44'/133'/0'/0",  # deeper than the account path this mode accepts
+    ],
+    ids=[
+        "unhardened_purpose",
+        "unhardened_coin_type",
+        "unhardened_prefix",
+        "shielded_purpose",
+        "unhardened_account",
+        "too_deep",
+    ],
+)
+def test_get_ufvk_rejects_out_of_prefix_transparent_path(backend, transparent_path):
+    with pytest.raises(ExceptionRAPDU) as e:
+        backend.exchange(
+            cla=CLA,
+            ins=InsType.GET_VK,
+            p1=P1.P1_GET_VK_FIRST,
+            p2=GetVkMode.UFVK,
+            data=pack_derivation_path("m/32'/133'/0'") + pack_derivation_path(transparent_path),
+        )
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert len(e.value.data) == 0
+
+
 # A path outside the app's two declared prefixes must come back as a status word. Leaving it to the
 # OS is not equivalent: the derivation syscall aborts the app rather than answering, and the caller
 # cannot tell a refusal from a crash.
