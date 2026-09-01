@@ -278,29 +278,18 @@ def test_pczt_ironwood_v2_replay_in_session_rejected(
 
 
 # ---------------------------------------------------------------------------
-# Discrepancy documentation: PCZT_VERSION_1 rejected for V6 transactions.
-#
-# The Python test-client (ZcashCommandSender._build_pczt_header_and_global_payload)
-# automatically selects pczt_version=2 when tx_version==6, matching what the
-# ironwood worktree firmware requires.  This test verifies that if the caller
-# forces pczt_version=1 for a V6 transaction the firmware returns
-# SW_INVALID_TRANSACTION (0x6A80).
-#
-# This is the root cause of the failing APDU in the task context log:
-#   => e05200002250435a54020000000600000098b684d85b16a537...
-#   <= 6a80
-# That APDU uses pczt_version=2 (bytes 5-8 = 02000000) but was sent to the
-# develop-branch build which lacks the zcash_unstable feature and therefore
-# accepts only PCZT_VERSION_1.  Against this ironwood worktree the same
-# pczt_version=2 header is accepted.  Forcing pczt_version=1 on a V6 tx
-# triggers the check at common.rs:96:
-#   if is_v6 && self.pczt_version != PCZT_VERSION_2 { return Err(...) }
+# The PCZT version is bound to the transaction version and the two cannot be
+# mixed: a V5 transaction requires PCZT_VERSION_1, a V6 one PCZT_VERSION_2.
+# `ZcashCommandSender._build_pczt_header_and_global_payload` selects the version
+# from tx_version, so forcing the wrong one is the only way to reach the guard.
+# It lives in the PCZT header parsing (`src/parser/pczt/common.rs`, the
+# `is_v6` / `pczt_version` condition) and answers SW_INVALID_TRANSACTION (0x6A80).
 # ---------------------------------------------------------------------------
 def test_pczt_ironwood_v2_version1_rejected_for_v6(backend):
     """PCZT_VERSION_1 is rejected for a V6 (Ironwood) transaction header.
 
-    The ironwood worktree firmware accepts PCZT_VERSION_2 for V6 and
-    PCZT_VERSION_1 for V5 — versions cannot be mixed.
+    The firmware accepts PCZT_VERSION_2 for V6 and PCZT_VERSION_1 for V5 — versions
+    cannot be mixed.
     """
     client = ZcashCommandSender(backend)
 

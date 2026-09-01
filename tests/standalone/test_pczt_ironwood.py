@@ -1021,8 +1021,8 @@ def test_pczt_ironwood_sign_replay_in_session_rejected(
 # session (deterministic RNG starting point, Speculos default seed).  Constant regardless of
 # the Ironwood anchor because NU6.3 excludes the anchor from the sighash — only the
 # authorising-data digest includes it, not the sighash.
-# Generated with zcash_unstable; the empty Orchard component uses the V6 personalization
-# b"ZTxIdOrchardH_v6" (ZIP 229), not the V5 b"ZTxIdOrchardHash".
+# The empty Orchard component uses the V6 personalization b"ZTxIdOrchardH_v6" (ZIP 229),
+# not the V5 b"ZTxIdOrchardHash".
 _EXPECTED_V6_IRONWOOD_SIG = bytes.fromhex(
     "824a4cf72c60ec42e5269a8b725449f53938ea2dabbe6875296857c234cffebe"
     "526f19bc1c102aadad8970c5e11fbfeb9ed0032563d071e6b2ccada7c4c4431c"
@@ -1527,8 +1527,8 @@ def test_pczt_ironwood_display_private_transfer(
     With no external output the firmware's reveal_self_outputs path triggers: the internal
     change note is exposed so the user can review the value before signing.
 
-    This also exercises the zcash_unstable-gated path that folds ironwood_spend_value_sum
-    into from_private, preventing the TransferType from being misclassified as PublicToPublic.
+    This also exercises the path that folds ironwood_spend_value_sum into from_private,
+    preventing the TransferType from being misclassified as PublicToPublic.
 
     Note: _mixed_real_and_dummy_ironwood_bundle() is intentionally synthetic — the fee
     (290000 zats) is 29× the output (10000 zats). This tests the reveal_self_outputs path
