@@ -286,12 +286,15 @@ pub fn spendauth_randomized_signing_key(
 /// it skips the SDK-point → `pallas::Point` conversion that
 /// [`spendauth_randomized_signing_key`] performs (and which the caller does not
 /// need when only comparing `rk` bytes), lowering the concurrent BN footprint.
+///
+/// Both scalars are taken by reference, for the reason given on [`spendauth_signing_key`]: passing
+/// them by value copies the secret into a parameter slot that no owner wipes.
 pub fn spendauth_randomized_verification_key_bytes(
-    scalar_bytes_le: [u8; 32],
-    randomizer_bytes_le: [u8; 32],
+    scalar_bytes_le: &[u8; 32],
+    randomizer_bytes_le: &[u8; 32],
 ) -> Result<[u8; 32], Error> {
-    let scalar_bytes_be = canonical_scalar_bytes_be(&scalar_bytes_le)?;
-    let randomizer_bytes_be = canonical_scalar_bytes_be(&randomizer_bytes_le)?;
+    let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
+    let randomizer_bytes_be = canonical_scalar_bytes_be(randomizer_bytes_le)?;
 
     // Scope the Bn objects so they are freed before the point multiplication,
     // keeping the concurrent Bn count low (same rationale as
@@ -711,8 +714,8 @@ mod tests {
         f: || {
             let scalar = wide_canonical_scalar(0x11);
             let randomizer = wide_canonical_scalar(0x42);
-            let light =
-                spendauth_randomized_verification_key_bytes(scalar, randomizer).map_err(|_| ())?;
+            let light = spendauth_randomized_verification_key_bytes(&scalar, &randomizer)
+                .map_err(|_| ())?;
             let full = spendauth_randomized_signing_key(&scalar, &randomizer).map_err(|_| ())?;
             if light != full.verification_key_bytes() {
                 return Err(());
@@ -732,7 +735,7 @@ mod tests {
         f: || {
             use ff::{Field, PrimeField};
             let scalar: [u8; 32] = (pallas::Scalar::ZERO - pallas::Scalar::from(5u64)).to_repr();
-            let light = spendauth_randomized_verification_key_bytes(scalar, scalar_from_u8(10))
+            let light = spendauth_randomized_verification_key_bytes(&scalar, &scalar_from_u8(10))
                 .map_err(|_| ())?;
             let expected = spendauth_signing_key(&scalar_from_u8(5)).map_err(|_| ())?;
             if light != expected.verification_key_bytes() {

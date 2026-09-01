@@ -110,10 +110,15 @@ impl SpendingKey {
         &self.0
     }
 
-    /// Derives the spend authorizing key corresponding to this spending key.
+    /// Builds a spending key from already-derived key bytes, refusing one whose spend authorizing
+    /// key would be zero.
+    ///
+    /// Takes the key by reference: passing it by value copies the seed-derived secret into a
+    /// parameter slot that no owner wipes, whereas the copy the returned `SpendingKey` owns is
+    /// cleared by its `Drop`.
     #[cfg(feature = "ledger")]
-    pub fn ledger_from_bytes(sk: [u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
-        let sk = SpendingKey(sk);
+    pub fn ledger_from_bytes(sk: &[u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
+        let sk = SpendingKey(*sk);
         let ask = SpendAuthorizingKey::ledger_derive_inner(&sk)?;
 
         if ask.is_zero().into() {
@@ -194,12 +199,12 @@ impl SpendAuthorizingKey {
         &self,
         randomizer: &pallas::Scalar,
     ) -> Result<[u8; 32], ledger_zcash_crypto::Error> {
-        let scalar_bytes: [u8; 32] = (&self.0).into();
-        let randomizer_bytes: [u8; 32] = randomizer.to_repr();
+        let scalar_bytes: Zeroizing<[u8; 32]> = Zeroizing::new((&self.0).into());
+        let randomizer_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(randomizer.to_repr());
         Ok(
             ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
-                scalar_bytes,
-                randomizer_bytes,
+                &scalar_bytes,
+                &randomizer_bytes,
             )?,
         )
     }
@@ -838,7 +843,7 @@ impl KeyAgreementPrivateKey {
     /// Ledger-SDK equivalent of [`Self::address`].
     #[cfg(feature = "ledger")]
     fn address_ledger(&self, d: Diversifier) -> Result<Address, ledger_zcash_crypto::Error> {
-        let ivk = self.0.to_repr();
+        let ivk = Zeroizing::new(self.0.to_repr());
         let g_d = ledger_zcash_crypto::diversify_hash_ledger(d.as_array())?;
         let pk_d = ledger_zcash_crypto::orchard_pk_d(&ivk, &g_d)?;
 

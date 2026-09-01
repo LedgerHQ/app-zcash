@@ -195,7 +195,8 @@ pub fn orchard_pk_d(ivk: &[u8; 32], g_d: &[u8; 32]) -> Result<[u8; 32], Error> {
 
     let mut pk_d = pallas_point_from_bytes(g_d)?;
     let ivk_bytes = Zeroizing::new(ivk.to_repr());
-    pk_d.rnd_scalarmul(&canonical_scalar_bytes_be(&ivk_bytes)?)?;
+    let ivk_bytes_be = Zeroizing::new(canonical_scalar_bytes_be(&ivk_bytes)?);
+    pk_d.rnd_scalarmul(&ivk_bytes_be[..])?;
     pallas_point_to_bytes(&pk_d)
 }
 
@@ -208,7 +209,7 @@ pub fn orchard_value_commitment_bytes(value: i64, rcv: &[u8; 32]) -> Result<[u8;
     let mut sum = value_commitment_value_term(value)?;
 
     if *rcv != [0; 32] {
-        let rcv_be = canonical_scalar_bytes_be(rcv)?;
+        let rcv_be = Zeroizing::new(canonical_scalar_bytes_be(rcv)?);
         let rcv_term = pallas_basepoint_mul(
             &ORCHARD_VALUE_COMMITMENT_RANDOMNESS_BASEPOINT_BYTES,
             &rcv_be,

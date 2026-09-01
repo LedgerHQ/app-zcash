@@ -1,7 +1,7 @@
 # Ledger delta for the vendored `orchard` crate.
 #
 # Base: crates.io package orchard 0.15.5 (git 29d1d55db62153dcaeef8ef631c8991c53ed1248)
-# Apply from vendor/orchard with: patch -p1 < ../patches/orchard_dep.patch
+# Apply from vendor/orchard with: patch -p1 -E < ../patches/orchard_dep.patch
 #
 # Regenerate: fetch the base artifact, then diff it against the vendored tree.
 #
@@ -135,14 +135,19 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  impl ConstantTimeEq for SpendingKey {
      fn ct_eq(&self, other: &Self) -> Choice {
          self.to_bytes().ct_eq(other.to_bytes())
-@@ -93,6 +110,19 @@
+@@ -93,6 +110,24 @@
          &self.0
      }
  
-+    /// Derives the spend authorizing key corresponding to this spending key.
++    /// Builds a spending key from already-derived key bytes, refusing one whose spend authorizing
++    /// key would be zero.
++    ///
++    /// Takes the key by reference: passing it by value copies the seed-derived secret into a
++    /// parameter slot that no owner wipes, whereas the copy the returned `SpendingKey` owns is
++    /// cleared by its `Drop`.
 +    #[cfg(feature = "ledger")]
-+    pub fn ledger_from_bytes(sk: [u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
-+        let sk = SpendingKey(sk);
++    pub fn ledger_from_bytes(sk: &[u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
++        let sk = SpendingKey(*sk);
 +        let ask = SpendAuthorizingKey::ledger_derive_inner(&sk)?;
 +
 +        if ask.is_zero().into() {
@@ -155,7 +160,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Derives the Orchard spending key for the given seed, coin type, and account.
      pub fn from_zip32_seed(
          seed: &[u8],
-@@ -129,12 +159,83 @@
+@@ -129,12 +164,83 @@
          to_scalar(PrfExpand::ORCHARD_ASK.with(&sk.0))
      }
  
@@ -194,12 +199,12 @@ diff -ruN a/src/keys.rs b/src/keys.rs
 +        &self,
 +        randomizer: &pallas::Scalar,
 +    ) -> Result<[u8; 32], ledger_zcash_crypto::Error> {
-+        let scalar_bytes: [u8; 32] = (&self.0).into();
-+        let randomizer_bytes: [u8; 32] = randomizer.to_repr();
++        let scalar_bytes: Zeroizing<[u8; 32]> = Zeroizing::new((&self.0).into());
++        let randomizer_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(randomizer.to_repr());
 +        Ok(
 +            ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
-+                scalar_bytes,
-+                randomizer_bytes,
++                &scalar_bytes,
++                &randomizer_bytes,
 +            )?,
 +        )
 +    }
@@ -239,7 +244,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl From<&SpendingKey> for SpendAuthorizingKey {
-@@ -248,6 +349,15 @@
+@@ -248,6 +354,15 @@
  }
  
  impl NullifierDerivingKey {
@@ -255,7 +260,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      pub(crate) fn prf_nf(&self, rho: pallas::Base) -> pallas::Base {
          prf_nf(self.0, rho)
      }
-@@ -284,6 +394,15 @@
+@@ -284,6 +399,15 @@
  }
  
  impl CommitIvkRandomness {
@@ -271,7 +276,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the inner scalar value.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn inner(&self) -> pallas::Scalar {
-@@ -344,6 +463,17 @@
+@@ -344,6 +468,17 @@
  }
  
  impl FullViewingKey {
@@ -289,7 +294,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the nullifier deriving key for this full viewing key.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn nk(&self) -> &NullifierDerivingKey {
-@@ -379,6 +509,22 @@
+@@ -379,6 +514,22 @@
          )
      }
  
@@ -312,7 +317,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the payment address for this key at the given index.
      pub fn address_at(&self, j: impl Into<DiversifierIndex>, scope: Scope) -> Address {
          self.to_ivk(scope).address_at(j)
-@@ -480,6 +626,65 @@
+@@ -480,6 +631,65 @@
              Scope::Internal => OutgoingViewingKey::from_fvk(&self.derive_internal()),
          }
      }
@@ -378,7 +383,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  /// A key that provides the capability to derive a sequence of diversifiers.
-@@ -576,6 +781,23 @@
+@@ -576,6 +786,23 @@
          let ivk = KeyAgreementPrivateKey::derive_inner(fvk).unwrap();
          KeyAgreementPrivateKey(ivk.into())
      }
@@ -402,7 +407,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl KeyAgreementPrivateKey {
-@@ -612,6 +834,19 @@
+@@ -612,6 +839,19 @@
          let pk_d = DiversifiedTransmissionKey::derive(&prepared_ivk, &d);
          Address::from_parts(d, pk_d)
      }
@@ -410,7 +415,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
 +    /// Ledger-SDK equivalent of [`Self::address`].
 +    #[cfg(feature = "ledger")]
 +    fn address_ledger(&self, d: Diversifier) -> Result<Address, ledger_zcash_crypto::Error> {
-+        let ivk = self.0.to_repr();
++        let ivk = Zeroizing::new(self.0.to_repr());
 +        let g_d = ledger_zcash_crypto::diversify_hash_ledger(d.as_array())?;
 +        let pk_d = ledger_zcash_crypto::orchard_pk_d(&ivk, &g_d)?;
 +
@@ -422,7 +427,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  /// A key that provides the capability to detect and decrypt incoming notes from the block
-@@ -640,6 +875,15 @@
+@@ -640,6 +880,15 @@
              ivk: KeyAgreementPrivateKey::from_fvk(fvk),
          }
      }
@@ -438,7 +443,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl IncomingViewingKey {
-@@ -680,6 +924,16 @@
+@@ -680,6 +929,16 @@
          self.address(self.dk.get(j))
      }
  
@@ -455,7 +460,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the payment address for this key corresponding to the given diversifier.
      pub fn address(&self, d: Diversifier) -> Address {
          self.ivk.address(d)
-@@ -741,6 +995,12 @@
+@@ -741,6 +1000,12 @@
      fn from_fvk(fvk: &FullViewingKey) -> Self {
          fvk.derive_dk_ovk().1
      }
@@ -468,7 +473,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl From<[u8; 32]> for OutgoingViewingKey {
-@@ -785,6 +1045,13 @@
+@@ -785,6 +1050,13 @@
          NonIdentityPallasPoint::from_bytes(bytes).map(DiversifiedTransmissionKey)
      }
  

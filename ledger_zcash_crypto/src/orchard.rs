@@ -451,17 +451,21 @@ fn key_agreement(
 ) -> Result<[u8; HASH_SIZE], Error> {
     let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
     let mut point = pallas_point_from_bytes(point_bytes)?;
-    point.rnd_scalarmul(&scalar_bytes_be)?;
+    point.rnd_scalarmul(&scalar_bytes_be[..])?;
     pallas_point_to_bytes(&point)
 }
 
-fn canonical_scalar_bytes_be(bytes_le: &[u8; HASH_SIZE]) -> Result<[u8; HASH_SIZE], Error> {
+/// Returns the bytes wrapped in [`Zeroizing`]: every caller passes a secret scalar, and wrapping
+/// unconditionally avoids having to decide per call site.
+fn canonical_scalar_bytes_be(
+    bytes_le: &[u8; HASH_SIZE],
+) -> Result<Zeroizing<[u8; HASH_SIZE]>, Error> {
     let scalar = pallas_scalar_from_repr(*bytes_le)?;
     if bool::from(scalar.is_zero()) {
         return Err(Error::MalformedPallasScalar);
     }
 
-    let mut bytes_be = [0u8; HASH_SIZE];
+    let mut bytes_be = Zeroizing::new([0u8; HASH_SIZE]);
     reverse_copy(&mut bytes_be, bytes_le);
     Ok(bytes_be)
 }
