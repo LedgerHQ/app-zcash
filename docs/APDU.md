@@ -20,6 +20,30 @@ String responses are encoded as:
 PCZT command payload framing is documented separately in
 [PCZT_APDU.md](./PCZT_APDU.md).
 
+## Status words
+
+Beyond `0x9000`, these are the app-specific codes a host has to map. Each is
+stated again with the command that returns it.
+
+| Status word | Name | Meaning |
+| --- | --- | --- |
+| `0x6986` | `ConditionsOfUseNotSatisfied` | The request contradicts what the user approved — chiefly a change output whose account is not the one being spent. |
+| `0xB007` | `BadState` | The command has no meaning in the current phase: a continuation opened before the review, or any round resuming a finished transaction. |
+| `0x6A80` | `IncorrectData` | Malformed payload, or a derivation path outside the shape the command accepts. |
+| `0x6A84` | `NotEnoughMemorySpace` | An allocation the device refused: retained memo text past its per-transaction budget, or an Orchard derivation past the per-run cap. |
+| `0x6B00` | `WrongP1P2` | The P1/P2 combination has no meaning for this command. |
+| `0x6F03` | `RngFailure` | The hardware random number generator reported a failure. No signature is produced. |
+| `0x6985` | `Deny` | The user rejected the review. |
+
+Under swap, refusals reach the host as `IncorrectData`: the Exchange app maps
+every application error code onto it, so the finer codes this app defines serve
+its own logs rather than host discrimination.
+
+`0x6901` `CmdNotAccepted` comes from the device SDK, not from this app. From SDK
+1.37 the legacy I/O layer refuses a frame it takes for an APDU while a review is
+on screen, and it can answer the first display command of a session. A host does
+better to tolerate and retry it than to surface it as a failure.
+
 ## Accepted derivation paths
 
 The app is installed with two BIP32 prefixes: `44'/133'` for the transparent tree
@@ -62,7 +86,9 @@ Zcash deviations:
   to decide which outputs to display for approval. The change path must be a five-component
   BIP-44 path with purpose, coin type and account hardened and the address index unhardened,
   and its account must be the one the signing path spends from — otherwise the app parses the
-  transaction but refuses to sign it.
+  transaction but refuses to sign it, with `ConditionsOfUseNotSatisfied` (`0x6986`) on the
+  `0x48` that asks for the signature. Change is filtered out of the review, so an output
+  returning to another account would otherwise be paid without ever being displayed.
 - **The review runs on the first `HASH_SIGN`, not at the end of `HASH_INPUT_FINALIZE_FULL`.**
   `locktime` and `expiry_height` only reach the device with the eleven-byte header that
   `HASH_SIGN` carries, so reviewing earlier would ask the user to approve a transaction whose
@@ -72,7 +98,7 @@ Zcash deviations:
   user refusal is now the first `0x48` rather than the last `0x4A`.
 - A `HASH_INPUT_START` continuation (`P2 = 0x80`) is refused before the review has happened or
   after the transaction has completed, and no legacy round may resume a transaction the device
-  has already finished. Both answer `BadState`.
+  has already finished. Both answer `BadState` (`0xB007`).
 
 ## INS_GET_WALLET_PUBLIC_KEY
 
@@ -132,10 +158,12 @@ with an empty response.
   Both P2 modes require the Orchard path to be exactly the three-component ZIP-32
   account form `m/32'/<coin_type>'/<account>'`, with purpose and coin type
   hardened and the account hardened; the transparent path of the unified mode must
-  likewise be a three-component account path under purpose `44`. Anything else
-  returns `IncorrectData`. The restriction applies to both modes, not only the
-  unified one: a viewing key exposes an account's entire shielded history, and the
-  confirmation screen shows the key bytes rather than the path it came from.
+  likewise be the three-component account form `m/44'/<coin_type>'/<account>'`,
+  with purpose and coin type compared hardening bit included and the account
+  hardened. The two accounts must match. Anything else returns `IncorrectData`.
+  The restriction applies to both modes, not only the unified one: a viewing key
+  exposes an account's entire shielded history, and the confirmation screen shows
+  the key bytes rather than the path it came from.
 - Response:
   - P2 `0x00`: string response containing the UFVK.
   - P2 `0x01`: raw Orchard FVK bytes.
@@ -147,6 +175,10 @@ the first two response bytes encode the total UTF-8 string length.
 The command displays the requested viewing key on the device before returning
 the first response chunk, naming the account the key belongs to alongside it.
 User rejection returns `Deny` with an empty response.
+
+Both P2 modes derive an Orchard key, so this command draws on the same
+per-run derivation cap as `INS_GET_SHIELD_ADDR` and answers
+`NotEnoughMemorySpace` (`0x6A84`) past it.
 
 ## INS_GET_SHIELD_ADDR
 
@@ -167,7 +199,9 @@ User rejection returns `Deny` with an empty response.
 If P1 is `0x01` and the user rejects the address, the command returns `Deny`
 with an empty response.
 
-P1 `0x01` combined with P2 `0x01` returns `WrongP1P2`. A raw Orchard receiver
+P1 `0x01` combined with P2 `0x01` returns `WrongP1P2` (`0x6B00`), before any
+derivation, so a request destined for rejection consumes no Secure Element
+resources. A raw Orchard receiver
 has no encoding the holder could read back against their own wallet, so there
 is no screen this mode could show, and answering a request for the user's
 confirmation without asking for it is what the refusal prevents.
@@ -270,11 +304,15 @@ layout.
 The full PCZT payload must have been received and finalized before this command
 is accepted. Each transparent input can be signed only once.
 
-If the payload declared a change output, its account must be the one this input
-spends from; otherwise the command returns `ConditionsOfUseNotSatisfied` and no
-signature is produced. Change is filtered out of the review, so an output
-returning to another account would otherwise be hidden from the user while
-still being paid.
+If the payload declared a transparent change output, its account must be the one
+this input spends from; otherwise the command returns
+`ConditionsOfUseNotSatisfied` (`0x6986`) and no signature is produced. Change is
+filtered out of the review, so an output returning to another account would
+otherwise be hidden from the user while still being paid.
+
+The same check guards every command that releases a signature over the approved
+digest — `INS_PCZT_SIGN_ORCHARD`, `INS_PCZT_SIGN_IRONWOOD` and legacy
+`HASH_SIGN` — since any one of them alone is enough to redirect the change.
 
 ## INS_PCZT_SIGN_ORCHARD
 
@@ -286,6 +324,12 @@ still being paid.
 
 The full PCZT payload must have been received and finalized before this command
 is accepted. Each Orchard action can be signed only once.
+
+If the payload declared a transparent change output, its account must be the one
+this action spends from; otherwise the command returns
+`ConditionsOfUseNotSatisfied` (`0x6986`) and no signature is produced. A shielded
+spend can pay transparent change, and that change is filtered out of the review,
+so the account binding is checked here as it is on the transparent path.
 
 ## INS_PCZT_IRONWOOD_ACTION
 
@@ -319,3 +363,8 @@ layout.
 
 The full PCZT payload must have been received and finalized before this command
 is accepted. Each Ironwood action can be signed only once.
+
+If the payload declared a transparent change output, its account must be the one
+this action spends from; otherwise the command returns
+`ConditionsOfUseNotSatisfied` (`0x6986`) and no signature is produced — the same
+binding as on the Orchard and transparent signing paths.
