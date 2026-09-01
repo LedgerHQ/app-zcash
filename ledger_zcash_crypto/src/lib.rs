@@ -195,7 +195,7 @@ pub fn orchard_pk_d(ivk: &[u8; 32], g_d: &[u8; 32]) -> Result<[u8; 32], Error> {
 
     let mut pk_d = pallas_point_from_bytes(g_d)?;
     let ivk_bytes = Zeroizing::new(ivk.to_repr());
-    let ivk_bytes_be = Zeroizing::new(canonical_scalar_bytes_be(&ivk_bytes)?);
+    let ivk_bytes_be = canonical_scalar_bytes_be(&ivk_bytes)?;
     pk_d.rnd_scalarmul(&ivk_bytes_be[..])?;
     pallas_point_to_bytes(&pk_d)
 }
@@ -209,7 +209,7 @@ pub fn orchard_value_commitment_bytes(value: i64, rcv: &[u8; 32]) -> Result<[u8;
     let mut sum = value_commitment_value_term(value)?;
 
     if *rcv != [0; 32] {
-        let rcv_be = Zeroizing::new(canonical_scalar_bytes_be(rcv)?);
+        let rcv_be = canonical_scalar_bytes_be(rcv)?;
         let rcv_term = pallas_basepoint_mul(
             &ORCHARD_VALUE_COMMITMENT_RANDOMNESS_BASEPOINT_BYTES,
             &rcv_be,
@@ -502,15 +502,18 @@ pub fn to_pallas_base_bytes(
     reduce_uniform_le_bytes_mod_pallas(uniform_le, CurveDomainParam::Field)
 }
 
+/// Returns the bytes wrapped in [`Zeroizing`], as [`to_pallas_base_bytes`] above does: the only
+/// caller chain reaching this helper carries secret scalars, so the buffer is wiped where it is
+/// built rather than only where it is bound.
 fn canonical_pallas_element_bytes_be(
     bytes_le: &[u8; 32],
     modulus_param: CurveDomainParam,
     malformed_error: Error,
-) -> Result<[u8; 32], Error> {
-    let mut bytes_be = [0u8; PALLAS_BYTES];
+) -> Result<Zeroizing<[u8; 32]>, Error> {
+    let mut bytes_be = Zeroizing::new([0u8; PALLAS_BYTES]);
     bytes::reverse_copy(&mut bytes_be, bytes_le);
 
-    let element = Bn::alloc_init(&bytes_be)?;
+    let element = Bn::alloc_init(&bytes_be[..])?;
     let mut modulus = Bn::alloc(PALLAS_BYTES)?;
     CurvesId::Pallas.domain_parameter_bn(modulus_param, &mut modulus)?;
 
@@ -521,7 +524,7 @@ fn canonical_pallas_element_bytes_be(
     Ok(bytes_be)
 }
 
-fn canonical_scalar_bytes_be(bytes_le: &[u8; 32]) -> Result<[u8; 32], Error> {
+fn canonical_scalar_bytes_be(bytes_le: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>, Error> {
     canonical_pallas_element_bytes_be(
         bytes_le,
         CurveDomainParam::Order,
