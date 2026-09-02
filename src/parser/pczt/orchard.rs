@@ -807,6 +807,16 @@ impl PcztParser {
         // Claimed before the address below is encoded: the budget bounds that allocation.
         if !is_change {
             claim_displayed_shielded_output(ctx.tx_info)?;
+        } else {
+            // Kept off the review, so it has to be bound to the account being spent. The path is
+            // the one the host declared for this action, which is also what selected the internal
+            // IVK that classified the output as change.
+            let path = self
+                .current_action
+                .path
+                .as_ref()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+            record_hidden_shielded_change_account(ctx.tx_info, path)?;
         }
 
         let address =

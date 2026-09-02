@@ -2094,3 +2094,95 @@ def test_pczt_review_does_not_unlock_legacy_signing(
     with pytest.raises(ExceptionRAPDU) as e:
         client.exchange_raw(_LEGACY_NON_RESETTING_APDUS[apdu_name])
     assert e.value.status == Errors.SW_BAD_STATE
+
+
+def test_pczt_hidden_shielded_change_in_another_account_yields_no_signature(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A hidden shielded change output must belong to the account the transaction spends from.
+
+    The transparent-change sibling
+    (`test_pczt_change_in_another_account_yields_no_signature`) asserts that each signing handler
+    calls `check_change_returns_to_signing_account`. It cannot reach this case: the guard only
+    compares when a change account was recorded, and only a transparent change output used to
+    record one. A shielded output decrypted under the internal IVK is kept off the review just the
+    same, and the IVK follows the path the host declared for the action — so the host chose which
+    account the hidden value landed in, while the screen showed the external recipient and a
+    correct fee.
+
+    Here the shielded change belongs to account 0 and the transparent input being signed to
+    account 1. The device must release no signature.
+    """
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=100000,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        # Account 1, while the shielded change below returns to account 0.
+        signing_path="m/44'/133'/1'/0/2",
+    )
+    # External recipient, so the shielded change stays off the review instead of being revealed as
+    # a self-transfer.
+    TRANSPARENT_OUTPUTS = [
+        PcztTransparentOutput(
+            value=90000,
+            script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+        ),
+    ]
+    CHANGE_ORCHARD_ACTION = {
+        "cv_net": "33ef48fc34e684c82ff9ee9d88cdc9761bb45fd3361ae04b5da2328f712d2703",
+        "nullifier": "808981a1e1e1116c5d73810a3c09a2ab8051fc9fe192470866e5853004aaaf13",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0300000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1700000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "85b20955b27f6e8a2ad94f5a4926ac434ef441349c778ad549a22c4ea7141630",
+        "ephemeral_key": "1590a0d7151f0d62b21fc28978222f5efb0b9ea0b0dff95a6c2e210f44e226bd",
+        "enc_ciphertext": "07a29fbda6c36bafeb6b2b3dce86af1662d0775082e76122de2c84216ec97e5c850767b7dc136af4dd2e36ef19200e60a99dfcda4e87f912c0d4f81cd471aa3521fba18b38755489c71576e4aa2707b7ee93be1e8e7442fdbaf76861df11c0d3b92626570cb1cf2b4c863a85e473523c2a20d2b82e90b6fa4b03f6dbceee469819ce888ffabbd87b54b081bd2ccc4292a3494a454b9fc5496b561e78158a59e0311c8125574a43f8d3d82fc080fbf107561bda0b5eead7ed896ec5c58449354bb4feb2e9e4c9e04e75e5bcf933a9e00ccbc69ac1aa5d6510aca854fb4cb838027f301bfee6197e2b884ddc66c673d425048408f36c7c932c50fc889cee6a6d94b78ecb4872e7568e58d30d9bb9e424ee883abc437f5f6336e0c5a2a72beebcdc38a75e62ffb1c1c9f059a65b7cd3c04d985b6d611bba777e6378656170e60439b941e2b6c2fd4a25cc6f142593cee329880aea4cb0e7a8d3f885aafd1d1b79016636757628dafcacddddc861381123bdb2705823d79c1008c7e13bed7bd7b0f6fbd2567e691f94acc13b62be4509a907e89bbae9f2e50af92434f5d7f63ad183b8d4f7b328303f55220a0e364212ede963a0bdb753b7849ad9d2692aceec476dcda50c35b4c68fd48854626bf2fdd1b80480132f0dc57a4d84aa84a34306b8ff683e4602b52fa1cc254174f4aba9fb6b0a28323880fa23d7144a124192954e2ae8c95d79b248f4f855f2e1d7c9cff0eda6f81ade2d8204a186a8ea6b8910badd07a2ddff0d830cb6501b768bf827088a951aeab13bb7c006430a2aba8ffc6f236abaa9c9",  # noqa: E501
+        "out_ciphertext": "69368b3bc476a79d8c7783b2f8c73fb738016bb7b0345f300920855807168ae39991f2f15ecb065a9d883bafa431e2ca44fd42e064fd08b158bd1576d9be47afa2818de7a9d4dd000421a39e72d4bb32",  # noqa: E501
+        "rcv": "3f00000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2b00000000000000000000000000000000000000000000000000000000000000",
+        "recipient": "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a",
+        "spend_value": 0,
+        "value": 5000,
+    }
+    ORCHARD_BUNDLE = PcztOrchardBundle(
+        actions=[_strict_orchard_action(CHANGE_ORCHARD_ACTION)],
+        flags=3,
+        value_balance=-5000,
+        anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PcztGlobal(),
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=TRANSPARENT_OUTPUTS,
+        orchard_bundle=ORCHARD_BUNDLE,
+    ):
+        # Walked without comparing screens: what this test asserts is that no signature leaves the
+        # device, and the review it walks past is the same shape the transparent-to-Orchard tests
+        # already pin against golden snapshots. A snapshot set of its own, on five devices, would
+        # guard nothing this test is about.
+        scenario = NavigationScenarioData(
+            scenario_navigator.device,
+            scenario_navigator.backend,
+            UseCase.TX_REVIEW,
+            True,
+        )
+        if scenario_navigator.device.touchable:
+            scenario.validation = scenario.validation[:-1]
+        scenario_navigator.navigator.navigate_until_text(
+            navigate_instruction=scenario.navigation,
+            validation_instructions=scenario.validation,
+            text=scenario.pattern,
+            screen_change_after_last_instruction=False,
+        )
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        client.pczt_sign_transparent(input_index=0)
+
+    assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+    assert not error.value.data

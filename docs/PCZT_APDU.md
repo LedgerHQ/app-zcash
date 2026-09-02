@@ -56,6 +56,13 @@ components.
   no display and do not count, so this bounds the review rather than the spend:
   a bundle may spend 32 notes while showing one recipient, which is the shape a
   send produces.
+- The **change note is bound to the account being spent**. A shielded output that
+  decrypts under the internal viewing key, and a transparent output whose declared
+  path the app recognises as its own, both record the account they return to, and
+  every command that releases a signature refuses unless that account is the one it
+  signs for. Two change outputs naming different accounts are refused with
+  `IncorrectData` while the payload is parsed: whichever one a signing command
+  matched, the other would stay hidden.
 - A transparent `script_pubkey` is at most 252 bytes. Every transparent input's
   script is retained for the whole session, so the bound is what keeps ten of
   them inside the device heap. 252 is also the largest value a one-byte

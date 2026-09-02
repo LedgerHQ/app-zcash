@@ -45,12 +45,11 @@ use crate::parser::orchard_decipher::{
 use crate::parser::{HASH_SIZE, ORCHARD_MEMO_SIZE};
 use crate::tx::{Hashers, TransferType, TxInfo, TxOutput, TxOutputMemo, TxPool, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _};
-use crate::utils::check_output_displayable;
 use crate::utils::{
     Bip44CheckMode, CheckDispOutput, HexSlice,
     base58_address::{Base58Address, ToBase58Address},
     bip32_path::Bip32Path,
-    check_bip44_compliance, derivation_account,
+    check_bip44_compliance, check_output_displayable, derivation_account,
     extended_public_key::ExtendedPublicKey,
     hashers::ToHash160,
 };
@@ -100,6 +99,40 @@ const MEMO_HASH_DISPLAY_LEN: usize = 2 * HASH_SIZE;
 /// of walking into the allocator. It is set to hold two maximum-length memos verbatim, well above
 /// what a transaction built by a wallet carries and well below where the heap gives out.
 const MAX_RETAINED_MEMO_BYTES: usize = 2 * ORCHARD_MEMO_SIZE;
+
+/// Bind a hidden shielded change output to the account the transaction spends from.
+///
+/// A shielded output that decrypts under the internal IVK is kept off the review, and that IVK is
+/// derived from the path the host declared for the action — so on its own, nothing stops the host
+/// from naming an account of its choosing and having the value land there unseen. Recording the
+/// account is what arms [`check_change_returns_to_signing_account`], which every path that releases
+/// a signature calls: the hidden change has to belong to the account being spent, or no signature
+/// leaves the device.
+///
+/// Shares `TxInfo::change_account` with the transparent change output, and carries the same conflict
+/// rule for the same reason: two change outputs naming different accounts are refused outright,
+/// since whichever one the signing check matched, the other would stay hidden.
+fn record_hidden_shielded_change_account(
+    tx_info: &mut TxInfo,
+    path: &Bip32Path,
+) -> Result<(), ParserError> {
+    let Some(account) = derivation_account(path) else {
+        error!("Shielded change path carries no account");
+        return Err(ParserError::from_str(
+            "Shielded change path carries no account",
+        ));
+    };
+
+    match tx_info.change_account {
+        Some(previous) if previous != account => Err(ParserError::from_str(
+            "PCZT change outputs declare different accounts",
+        )),
+        _ => {
+            tx_info.change_account = Some(account);
+            Ok(())
+        }
+    }
+}
 
 /// Claim room for one more shielded output on the review, refusing once the budget is spent.
 ///

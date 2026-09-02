@@ -304,11 +304,14 @@ layout.
 The full PCZT payload must have been received and finalized before this command
 is accepted. Each transparent input can be signed only once.
 
-If the payload declared a transparent change output, its account must be the one
-this input spends from; otherwise the command returns
-`ConditionsOfUseNotSatisfied` (`0x6986`) and no signature is produced. Change is
+If the payload declared a change output, its account must be the one this input
+spends from; otherwise the command returns `ConditionsOfUseNotSatisfied`
+(`0x6986`) and no signature is produced. Two kinds of output count as change: a
+transparent one whose declared path the device recognises as its own, and a
+shielded one that decrypts under the account's internal viewing key. Both are
 filtered out of the review, so an output returning to another account would
-otherwise be hidden from the user while still being paid.
+otherwise be hidden from the user while still being paid. Two change outputs
+naming different accounts are refused while the payload is parsed.
 
 The same check guards every command that releases a signature over the approved
 digest — `INS_PCZT_SIGN_ORCHARD`, `INS_PCZT_SIGN_IRONWOOD` and legacy
@@ -325,11 +328,12 @@ digest — `INS_PCZT_SIGN_ORCHARD`, `INS_PCZT_SIGN_IRONWOOD` and legacy
 The full PCZT payload must have been received and finalized before this command
 is accepted. Each Orchard action can be signed only once.
 
-If the payload declared a transparent change output, its account must be the one
-this action spends from; otherwise the command returns
+If the payload declared a change output, transparent or shielded, its account
+must be the one this action spends from; otherwise the command returns
 `ConditionsOfUseNotSatisfied` (`0x6986`) and no signature is produced. A shielded
-spend can pay transparent change, and that change is filtered out of the review,
-so the account binding is checked here as it is on the transparent path.
+spend can pay transparent change, and an Orchard output decrypting under the
+internal viewing key is change of the account whose path this action declares, so
+the account binding is checked here as it is on the transparent path.
 
 ## INS_PCZT_IRONWOOD_ACTION
 
@@ -364,7 +368,8 @@ layout.
 The full PCZT payload must have been received and finalized before this command
 is accepted. Each Ironwood action can be signed only once.
 
-If the payload declared a transparent change output, its account must be the one
-this action spends from; otherwise the command returns
+If the payload declared a change output, transparent or shielded, its account
+must be the one this action spends from; otherwise the command returns
 `ConditionsOfUseNotSatisfied` (`0x6986`) and no signature is produced — the same
-binding as on the Orchard and transparent signing paths.
+binding as on the Orchard and transparent signing paths, and an Ironwood output
+decrypting under the internal viewing key is change just as an Orchard one is.

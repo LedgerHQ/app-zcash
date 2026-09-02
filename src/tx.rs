@@ -226,9 +226,12 @@ pub struct TxInfo {
 /// a single unchecked path is enough to redirect the whole change amount. It lives here, beside the
 /// account it reads, so that a new signing path has one rule to adopt rather than one to copy.
 ///
-/// The shielded outputs need no equivalent check — a note counts as change only when it decrypts
-/// under the viewing key derived from the very spending key that signs the action, and the parser
-/// already refuses a second shielded action declaring another path.
+/// A hidden shielded output records its account the same way, so this one check covers both pools.
+/// That record is what makes the check bite at all on a transaction whose only hidden change is
+/// shielded: nothing else sets the account, and an unset account passes. It is not enough that a
+/// note counts as change only when it decrypts under the viewing key derived from the key signing
+/// the action — that key sits at a path the host chose, so the account it names has to be compared
+/// with the account being spent like any other.
 pub fn check_change_returns_to_signing_account(
     tx_info: &TxInfo,
     path: &Bip32Path,

@@ -23,7 +23,8 @@ Security release addressing the findings of an external code security scan of 3.
 - Require the hardening BIP-44 mandates on a change path, and the app's own hardened prefixes on
   an exported derivation path
 - Refuse to sign when a change output returns to a different account than the one being spent,
-  on both the legacy and the PCZT paths
+  on both the legacy and the PCZT paths, and whether that output is transparent or a shielded
+  note the review never shows
 - Bound the input script size the legacy signing parser will allocate for
 - Bound the Orchard derivations of one run, which the Secure Element does not reclaim before the
   next power cycle

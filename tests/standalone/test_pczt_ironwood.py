@@ -1642,6 +1642,64 @@ def test_pczt_ironwood_display_shield(
     assert len(auth_sig) >= 70
 
 
+def test_pczt_ironwood_change_in_another_account_yields_no_signature(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The Ironwood half of the shielded change-account binding.
+
+    Same rule as `test_pczt_hidden_shielded_change_in_another_account_yields_no_signature` in
+    `test_pczt.py`, on the second call site: an Ironwood output decrypted under the internal IVK
+    records the account of the path the host declared for its action, and the transparent input
+    signed here belongs to another one, so no signature may leave the device.
+
+    The shield bundle carries no external output, so this transaction's change is revealed on
+    screen rather than kept off it. That does not weaken the case: the account is recorded while
+    parsing, before the review decides what to show, which is why the guard still refuses. What
+    this pins is that the Ironwood parser reaches the binding at all.
+    """
+    foreign_account_input = PcztTransparentInput(
+        prevout_txid=_TRANSPARENT_INPUT_11K.prevout_txid,
+        prevout_index=_TRANSPARENT_INPUT_11K.prevout_index,
+        value=_TRANSPARENT_INPUT_11K.value,
+        script_pubkey=_TRANSPARENT_INPUT_11K.script_pubkey,
+        sequence=_TRANSPARENT_INPUT_11K.sequence,
+        # Account 1, while the Ironwood change below returns to account 0.
+        signing_path="m/44'/133'/1'/0/0",
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[foreign_account_input],
+        transparent_outputs=[],
+        ironwood_bundle=_ironwood_shield_bundle(),
+    ):
+        # Walked without comparing screens: the assertion is that no signature leaves the device,
+        # and test_pczt_ironwood_display_shield already pins this review's shape against goldens.
+        scenario = NavigationScenarioData(
+            scenario_navigator.device,
+            scenario_navigator.backend,
+            UseCase.TX_REVIEW,
+            True,
+        )
+        if scenario_navigator.device.touchable:
+            scenario.validation = scenario.validation[:-1]
+        scenario_navigator.navigator.navigate_until_text(
+            navigate_instruction=scenario.navigation,
+            validation_instructions=scenario.validation,
+            text=scenario.pattern,
+            screen_change_after_last_instruction=False,
+        )
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        client.pczt_sign_transparent(input_index=0)
+
+    assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+    assert not error.value.data
+
+
 # ---------------------------------------------------------------------------
 # PCZT v2 header and NoteVersion::V3 output handling
 # ---------------------------------------------------------------------------
