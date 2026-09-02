@@ -32,11 +32,18 @@ from application_client.pczt import (
     PcztGlobal,
     PcztOrchardAction,
     PcztOrchardBundle,
+    PcztTransparentInput,
     PcztTransparentOutput,
+    pczt_transaction_bytes,
 )
 from application_client.zcash_command_sender import (
+    MAX_PCZT_TRANSPARENT_INPUTS,
     Errors,
     ZcashCommandSender,
+)
+from application_client.zcash_response_unpacker import unpack_get_public_key_response
+from application_client.zcash_verify_sign import (
+    check_tx_v5_signature_validity,
 )
 from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
@@ -315,6 +322,7 @@ class HeapProbe(NamedTuple):
     largest_free_block: int
     max_orchard_actions: int
     max_ironwood_actions: int
+    max_transparent_inputs: int
 
 
 def _heap_probe(client: ZcashCommandSender) -> HeapProbe | None:
@@ -330,12 +338,98 @@ def _heap_probe(client: ZcashCommandSender) -> HeapProbe | None:
             return None
         raise
 
-    assert len(response.data) == 8
+    assert len(response.data) == 10
     return HeapProbe(
         largest_free_block=int.from_bytes(response.data[0:4], byteorder="big"),
         max_orchard_actions=int.from_bytes(response.data[4:6], byteorder="big"),
         max_ironwood_actions=int.from_bytes(response.data[6:8], byteorder="big"),
+        max_transparent_inputs=int.from_bytes(response.data[8:10], byteorder="big"),
     )
+
+
+# ── The transparent pool ───────────────────────────────────────────────────────
+#
+# An input costs more than a shielded action, and differently: besides its record it retains its
+# `script_pubkey` for the whole session, because the per-input signature digest consumes it. That is
+# why the input bound was once sized against MAX_PCZT_SCRIPT_SIZE, a host being free to declare 252
+# bytes for every input it sends.
+#
+# An input script is now refused unless it is the 25-byte P2PKH shape, so the retained cost per input
+# is fixed rather than host-chosen and one regime is left to drive: the script a Ledger-derived UTXO
+# actually carries. The declared script is still never compared against the derivation's public key,
+# which is read and discarded, so that shape check is the only thing bounding what an input retains.
+
+# 25-byte P2PKH, the form every Ledger-derived transparent UTXO takes.
+_P2PKH_SCRIPT = bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac")
+# Mirrors MAX_PCZT_SCRIPT_SIZE in src/consts.rs.
+_MAX_PCZT_SCRIPT_SIZE = 252
+_TRANSPARENT_SIGNING_PATH = "m/44'/133'/0'/0/2"
+_TRANSPARENT_INPUT_VALUE = 100_000
+_TRANSPARENT_OUTPUT_VALUE = 50_000
+
+# The bound itself lives in the shared client, so the P1/P2 rejection test and this one cannot drift
+# apart from each other or from src/consts.rs.
+_SHIPPED_MAX_TRANSPARENT_INPUTS = MAX_PCZT_TRANSPARENT_INPUTS
+
+# Counts driven for the transparent pool: the shipped bound, a spread below it, and counts a raise
+# would have to clear. Derived from the bound rather than written out, so that moving the bound
+# cannot leave the list stating a relation to it that no longer holds — written out, a raise to the
+# top of the list silently drives the same count twice and nothing above it.
+_TRANSPARENT_INPUT_COUNTS = sorted(
+    {
+        1,
+        2,
+        _SHIPPED_MAX_TRANSPARENT_INPUTS // 4,
+        _SHIPPED_MAX_TRANSPARENT_INPUTS // 2,
+        _SHIPPED_MAX_TRANSPARENT_INPUTS,
+        _SHIPPED_MAX_TRANSPARENT_INPUTS + 8,
+        _SHIPPED_MAX_TRANSPARENT_INPUTS * 3 // 2,
+    }
+)
+
+
+def _transparent_input(script: bytes) -> PcztTransparentInput:
+    return PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=_TRANSPARENT_INPUT_VALUE,
+        script_pubkey=script,
+        sequence=bytes.fromhex("00000000"),
+        signing_path=_TRANSPARENT_SIGNING_PATH,
+    )
+
+
+def _drive_transparent(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    input_count: int,
+    script: bytes,
+) -> HeapProbe | None:
+    """Parse, review and sign a t→t transaction of `input_count` inputs; report the heap it left."""
+    client = ZcashCommandSender(backend)
+    transparent_inputs = [_transparent_input(script) for _ in range(input_count)]
+    transparent_outputs = [
+        PcztTransparentOutput(
+            value=_TRANSPARENT_OUTPUT_VALUE,
+            script_pubkey=_P2PKH_SCRIPT,
+        )
+    ]
+
+    with client.send_pczt(
+        pczt_global=PcztGlobal(),
+        transparent_inputs=transparent_inputs,
+        transparent_outputs=transparent_outputs,
+    ):
+        _approve_review(scenario_navigator)
+
+    # Sampled before signing: the parser state is released once the last signature leaves.
+    probe = _heap_probe(client)
+
+    for input_index in range(input_count):
+        signature = client.pczt_sign_transparent(input_index=input_index).data
+        assert len(signature) > 0, f"input {input_index} of {input_count}"
+
+    return probe
 
 
 class Shape(StrEnum):
@@ -347,6 +441,8 @@ class Shape(StrEnum):
     CONSOLIDATION = "consolidation"
     # One recipient, one hidden change note, the rest spends: what a z→z send builds.
     Z_TO_Z = "z-to-z"
+    # Transparent inputs carrying the script a Ledger-derived UTXO really has.
+    TRANSPARENT_P2PKH = "transparent-p2pkh"
 
 
 def _drive_bundle(
@@ -568,3 +664,110 @@ def test_heap_probe_absent_unless_measuring(backend):
         return
 
     pytest.skip(f"application built with the heap_probe feature (answered {len(response.data)} bytes)")
+
+
+@pytest.mark.parametrize("input_count", _TRANSPARENT_INPUT_COUNTS)
+def test_pczt_transparent_inputs_with_real_scripts(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    input_count: int,
+    record_property,
+):
+    """`input_count` transparent inputs carrying the 25-byte script a Ledger UTXO really has.
+
+    The realistic ceiling: this is what an account's own UTXOs cost, so it is the count a raise of
+    the input bound would buy a user.
+    """
+    probe = _heap_probe(ZcashCommandSender(backend))
+    if probe is None:
+        pytest.skip("application built without the heap_probe feature")
+    if input_count > probe.max_transparent_inputs:
+        pytest.skip(f"application bounds transparent inputs at {probe.max_transparent_inputs}")
+
+    probe = _drive_transparent(backend, scenario_navigator, input_count, _P2PKH_SCRIPT)
+    _report(record_property, input_count, Shape.TRANSPARENT_P2PKH, probe)
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        # The shape a real host could plausibly send: a t3 address pays to this.
+        pytest.param(bytes.fromhex("a914") + bytes(20) + bytes.fromhex("87"), id="p2sh"),
+        # 25 bytes like the accepted shape, so only the prefix and postfix separate them.
+        pytest.param(bytes.fromhex("76a915") + bytes(20) + bytes.fromhex("88ac"), id="wrong-push"),
+        pytest.param(bytes.fromhex("76a914") + bytes(20) + bytes.fromhex("88ad"), id="wrong-postfix"),
+        pytest.param(bytes.fromhex("76a914") + bytes(19) + bytes.fromhex("88ac"), id="one-byte-short"),
+        # The most a host may declare, and therefore the most an accepted input would retain.
+        pytest.param(bytes(_MAX_PCZT_SCRIPT_SIZE), id="max-declarable"),
+    ],
+)
+def test_pczt_transparent_input_script_must_be_p2pkh(backend, script: bytes):
+    """An input scriptPubKey that is not the 25-byte P2PKH shape is refused.
+
+    Two reasons, and the cases cover both. It is the only shape the app can sign for — a P2SH input
+    would need a redeem script the wire format does not carry — so accepting one would sign over
+    something no key the app derives can spend. And the script is retained for the whole session,
+    the per-input signature digest consuming it, so a host free to declare MAX_PCZT_SCRIPT_SIZE
+    bytes per input would decide how much of the heap a transaction claims, which is what the input
+    bound would then have to be sized against.
+
+    The near-misses are the point of testing more than one script: at 25 bytes the length alone
+    accepts them, so the prefix and the postfix are what refuse a script the device would otherwise
+    retain and sign over. Nothing else ties an input to the app — the declared derivation public key
+    is read and discarded, never compared against the script.
+    """
+    client = ZcashCommandSender(backend)
+    client._send_pczt_header(PcztGlobal())
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        client._send_pczt_transparent_inputs([_transparent_input(script)])
+
+    assert error.value.status == Errors.SW_INVALID_TRANSACTION
+    assert not error.value.data
+
+
+def test_pczt_transparent_inputs_at_the_shipped_bound(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The shipped bound worth of transparent inputs parses, reviews and signs correctly.
+
+    The sweep above needs the `heap_probe` feature and so never runs on a build that ships: without
+    this, the count the app actually offers a user is covered only by a measurement instrument. Each
+    signature is verified against the digest the transaction defines, so a device that answered
+    every request while miscomputing one input's digest under the memory pressure of a full
+    transaction fails here rather than passing on a non-empty reply.
+    """
+    client = ZcashCommandSender(backend)
+    public_key, _, _ = unpack_get_public_key_response(
+        client.get_public_key(path=_TRANSPARENT_SIGNING_PATH).data
+    )
+
+    transparent_inputs = [
+        _transparent_input(_P2PKH_SCRIPT) for _ in range(_SHIPPED_MAX_TRANSPARENT_INPUTS)
+    ]
+    transparent_outputs = [
+        PcztTransparentOutput(
+            value=_TRANSPARENT_OUTPUT_VALUE,
+            script_pubkey=_P2PKH_SCRIPT,
+        )
+    ]
+    tx_bytes = pczt_transaction_bytes(PcztGlobal(), transparent_inputs, transparent_outputs)
+    input_amounts = [txin.value for txin in transparent_inputs]
+
+    with client.send_pczt(
+        pczt_global=PcztGlobal(),
+        transparent_inputs=transparent_inputs,
+        transparent_outputs=transparent_outputs,
+    ):
+        _approve_review(scenario_navigator)
+
+    for input_index in range(_SHIPPED_MAX_TRANSPARENT_INPUTS):
+        signature = client.pczt_sign_transparent(input_index=input_index).data[:-1]
+        assert check_tx_v5_signature_validity(
+            public_key,
+            signature,
+            tx_bytes,
+            input_index=input_index,
+            input_amounts=input_amounts,
+        ), f"input {input_index} of {_SHIPPED_MAX_TRANSPARENT_INPUTS}"

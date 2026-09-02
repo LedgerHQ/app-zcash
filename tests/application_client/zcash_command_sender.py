@@ -41,6 +41,12 @@ MAX_APDU_LEN: int = 255
 # cannot hold the test process forever.
 MAX_VK_CONTINUATIONS: int = 4
 
+# Mirrors MAX_PCZT_TRANSPARENT_INPUTS_NUMBER in src/consts.rs. The signing instruction carries the
+# input index in P2, so this is also the first index the dispatcher refuses — which is what makes it
+# the value a P1/P2 rejection test has to use rather than a literal that silently becomes valid the
+# next time the bound moves.
+MAX_PCZT_TRANSPARENT_INPUTS: int = 32
+
 CLA: int = 0xE0
 
 # P2PKH script of the UTXO that `forge_and_get_trusted_input` pays to, and therefore the script

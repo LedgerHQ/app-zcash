@@ -25,6 +25,10 @@ Security release addressing the findings of an external code security scan of 3.
 - Refuse to sign when a change output returns to a different account than the one being spent,
   on both the legacy and the PCZT paths, and whether that output is transparent or a shielded
   note the review never shows
+- Refuse a transparent input whose scriptPubKey is not the 25-byte P2PKH shape, the only one the
+  app can sign for, rather than signing over a script no key it derives can spend
+- Raise the transparent input bound to a count measured on the smallest device, which pinning that
+  shape makes affordable by fixing what each input retains
 - Bound the input script size the legacy signing parser will allocate for
 - Bound the Orchard derivations of one run, which the Secure Element does not reclaim before the
   next power cycle

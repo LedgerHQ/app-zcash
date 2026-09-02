@@ -30,6 +30,15 @@ impl PcztParser {
         self.transparent_input_count = input_count;
         self.transparent_input_parsed_count = 0;
         self.transparent_inputs.clear();
+
+        // Reserved before the per-input allocations begin, for the reason the shielded bundles
+        // reserve theirs: growing by doubling mid-parse asks for a contiguous block twice the size
+        // of the one it replaces, at the point the parse has fragmented the heap most. It also makes
+        // a count the device cannot hold a status word here rather than an allocator panic, which
+        // exits the application instead of reporting anything.
+        self.transparent_inputs
+            .try_reserve_exact(input_count)
+            .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
         self.current_input_script_pubkey.clear();
         self.outputs_reviewed = false;
         self.pczt_finished = false;
@@ -478,6 +487,21 @@ impl PcztParser {
         }
 
         let script_bytes = mem::take(&mut self.script_bytes);
+
+        // An input is spent by a signature over its own scriptPubKey, and the only key this app
+        // derives on the transparent tree pays to a P2PKH hash. Any other shape is one it cannot
+        // produce a valid signature for — a P2SH input would need a redeem script the wire format
+        // does not carry — so accepting it would sign something unspendable.
+        //
+        // Refusing here is also what keeps the input bound affordable: the script is retained for
+        // the whole session, because the per-input signature digest consumes it. Pinned to the
+        // 25-byte P2PKH shape, the retained cost per input is fixed; left at MAX_PCZT_SCRIPT_SIZE it
+        // is ten times that, and the bound has to shrink to pay for a shape no account can spend.
+        if !output_script_is_regular(&script_bytes) {
+            error!("PCZT transparent input scriptPubKey is not P2PKH");
+            return Err(ParserError::from_sw(AppSW::IncorrectData));
+        }
+
         write_transparent_script(ctx.hashers.scripts_hasher.as_writer(), &script_bytes)?;
         debug!(
             "PCZT transparent input #{} scriptPubKey: {}",

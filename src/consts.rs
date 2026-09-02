@@ -22,8 +22,20 @@ pub const ZCASH_BIP44_COIN_TYPE: u32 = 133;
 #[cfg(feature = "testnet")]
 pub const ZCASH_BIP44_COIN_TYPE: u32 = 1;
 
-// Limit the number of PCZT transparent inputs due to device memory constraints.
-pub const MAX_PCZT_TRANSPARENT_INPUTS_NUMBER: usize = 10;
+// Transparent inputs one transaction may spend.
+//
+// An input costs more than a shielded action and differently: besides its record it retains its
+// scriptPubKey for the whole session, the per-input signature digest consuming it. That is why this
+// bound was once paired with MAX_PCZT_SCRIPT_SIZE — ten scripts of 252 bytes being what fits.
+//
+// The pairing is gone: an input script is now refused unless it is the 25-byte P2PKH shape, the only
+// one this app can sign for, so the retained cost per input is fixed rather than host-chosen. What
+// the bound has to fit is measured, not assumed — 32 inputs parse, review and sign on Nano X, with
+// the run failing well above.
+#[cfg(not(feature = "capacity_probe"))]
+pub const MAX_PCZT_TRANSPARENT_INPUTS_NUMBER: usize = 32;
+#[cfg(feature = "capacity_probe")]
+pub const MAX_PCZT_TRANSPARENT_INPUTS_NUMBER: usize = MAX_PCZT_ADDRESSABLE_ACTIONS_NUMBER;
 // Limit the number of PCZT transparent outputs due to device memory constraints.
 pub const MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER: usize = 10;
 // Notes one shielded bundle may spend. Measured on the smallest device rather than chosen: a

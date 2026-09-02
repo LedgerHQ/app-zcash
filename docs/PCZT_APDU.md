@@ -45,7 +45,7 @@ components.
   bytes.
 - `bip32_derivation` and `zip32_derivation` fields MUST each fit in, and be sent
   as, one APDU packet.
-- The current app limits are: at most 10 transparent inputs, at most 10
+- The current app limits are: at most 32 transparent inputs, at most 10
   transparent outputs, at most 32 Orchard actions, and at most 32 Ironwood
   actions. A bundle declaring more is refused at its count packet, before any
   per-action field is read.
@@ -63,10 +63,16 @@ components.
   signs for. Two change outputs naming different accounts are refused with
   `IncorrectData` while the payload is parsed: whichever one a signing command
   matched, the other would stay hidden.
-- A transparent `script_pubkey` is at most 252 bytes. Every transparent input's
-  script is retained for the whole session, so the bound is what keeps ten of
-  them inside the device heap. 252 is also the largest value a one-byte
-  CompactSize encodes, which is the limit the host applies on its own side.
+- A transparent `script_pubkey` is at most 252 bytes — the largest value a
+  one-byte CompactSize encodes, which is the limit the host applies on its own
+  side.
+- An **input**'s `script_pubkey` must additionally be the 25-byte P2PKH shape
+  (`76 a9 14 <hash160> 88 ac`); any other form is refused with `IncorrectData`.
+  Two reasons: it is the only shape the app can sign for, a P2SH input needing a
+  redeem script this format does not carry; and the script is retained for the
+  whole session, the per-input signature digest consuming it, so pinning the
+  shape is what makes the retained cost per input fixed rather than
+  host-chosen. Output scripts keep accepting P2PKH and P2SH.
 
 ## PCZT_HEADER
 

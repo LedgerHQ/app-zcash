@@ -52,6 +52,7 @@ use crate::utils::{
     check_bip44_compliance, check_output_displayable, derivation_account,
     extended_public_key::ExtendedPublicKey,
     hashers::ToHash160,
+    output_script_is_regular,
 };
 use crate::zip32::{
     OrchardAsk, OrchardFvk, derive_orchard_fvk_and_ask_from_sk, derive_orchard_fvk_from_sk,
