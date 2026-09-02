@@ -29,7 +29,8 @@ use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
 use crate::consts::MAX_PCZT_IRONWOOD_ACTIONS_NUMBER;
 use crate::consts::{
-    MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_SCRIPT_SIZE, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
+    MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_SCRIPT_SIZE,
+    MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
     MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
 };
 use crate::parser::compute::{
@@ -88,17 +89,35 @@ const MEMO_HASH_DISPLAY_LEN: usize = 2 * HASH_SIZE;
 
 /// Bytes of memo text one transaction may keep for its review, across both shielded pools.
 ///
-/// Every recoverable, non-change shielded output may carry a 512-byte memo, and each pool allows
-/// ten actions: kept verbatim, that is ten kilobytes claimed on a heap of eight, next to the
-/// addresses, the output records and the note ciphertext. The allocation that cannot be served
-/// does not surface as a parse error — the allocator panics and the panic handler exits the app,
-/// so the host takes down the transaction in progress at will.
+/// Every recoverable, non-change shielded output may carry a 512-byte memo, and the host decides
+/// how many such outputs there are: kept verbatim, a few of them claim more than the whole heap,
+/// next to the addresses, the output records and the note ciphertext. The allocation that cannot be
+/// served does not surface as a parse error — the allocator panics and the panic handler exits the
+/// app, so the host takes down the transaction in progress at will.
 ///
 /// The budget is what makes the review's footprint independent of what the host sends: past it a
 /// memo is rendered as its hash, and past even that the parser refuses with a status word instead
 /// of walking into the allocator. It is set to hold two maximum-length memos verbatim, well above
 /// what a transaction built by a wallet carries and well below where the heap gives out.
 const MAX_RETAINED_MEMO_BYTES: usize = 2 * ORCHARD_MEMO_SIZE;
+
+/// Claim room for one more shielded output on the review, refusing once the budget is spent.
+///
+/// Call this before anything is allocated for the output — the address encoding included — since
+/// refusing after the allocation would leave the parser holding what the budget exists to prevent.
+///
+/// Shared by both shielded pools for the same reason the memo rendering is: Ironwood repeats
+/// Orchard's note format, so a per-pool copy of a budget is a budget that comes apart.
+fn claim_displayed_shielded_output(tx_info: &mut TxInfo) -> Result<(), ParserError> {
+    if tx_info.displayed_shielded_outputs >= MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER {
+        error!("Shielded displayed-output budget exhausted");
+        return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+    }
+
+    tx_info.displayed_shielded_outputs += 1;
+
+    Ok(())
+}
 
 /// Render a shielded output's memo for the review, within the transaction's retention budget.
 ///

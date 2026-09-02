@@ -71,6 +71,17 @@ testnet = []
 # Enables debug logging
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
 
+# Answers how much heap the allocator can still serve, over an instruction of its own. For capacity
+# measurement runs only — never enable it on a build that reaches a user, for the reason stated in
+# `src/heap_probe.rs`.
+heap_probe = []
+
+# Raises the shielded bundle bounds to what the signing instructions can address, so that a run
+# finds the action count the device stops at instead of the one the shipped bound stops at. A build
+# carrying this accepts bundles no measurement has cleared yet, so it is a measurement instrument
+# and never a shippable configuration.
+capacity_probe = []
+
 legacy_path = []
 
 [package.metadata.ledger]

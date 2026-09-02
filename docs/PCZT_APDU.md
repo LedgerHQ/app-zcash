@@ -46,8 +46,16 @@ components.
 - `bip32_derivation` and `zip32_derivation` fields MUST each fit in, and be sent
   as, one APDU packet.
 - The current app limits are: at most 10 transparent inputs, at most 10
-  transparent outputs, at most 10 Orchard actions, and at most 10 Ironwood
-  actions.
+  transparent outputs, at most 32 Orchard actions, and at most 32 Ironwood
+  actions. A bundle declaring more is refused at its count packet, before any
+  per-action field is read.
+- Independently of the action counts, at most **4 shielded outputs across both
+  shielded pools may be displayed** to the user — that is, outputs that decrypt
+  under the account's viewing key and are not the change note. The parser refuses
+  the fifth with `NotEnoughMemorySpace`. Dummy outputs and the change note carry
+  no display and do not count, so this bounds the review rather than the spend:
+  a bundle may spend 32 notes while showing one recipient, which is the shape a
+  send produces.
 - A transparent `script_pubkey` is at most 252 bytes. Every transparent input's
   script is retained for the whole session, so the bound is what keeps ten of
   them inside the device heap. 252 is also the largest value a one-byte

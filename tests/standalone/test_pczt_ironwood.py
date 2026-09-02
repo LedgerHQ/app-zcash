@@ -1250,16 +1250,17 @@ def test_pczt_ironwood_wrong_out_ciphertext_length_rejected(backend):
 
 
 def test_pczt_ironwood_max_actions_exceeded_rejected(backend):
-    """An Ironwood bundle with 11 actions (> MAX_PCZT_IRONWOOD_ACTIONS_NUMBER = 10) is rejected.
+    """An Ironwood bundle with 33 actions (> MAX_PCZT_IRONWOOD_ACTIONS_NUMBER = 32) is rejected.
 
-    The device checks the action count immediately on the header packet; 11 actions returns
-    SW_INVALID_TRANSACTION before any action field is parsed.
+    The device checks the action count immediately on the header packet; 33 actions returns
+    SW_INVALID_TRANSACTION before any action field is parsed. The bound itself is a measured
+    capacity — tests/standalone/test_pczt_action_capacity.py drives the counts up to it.
     """
     client = ZcashCommandSender(backend)
     oversize_bundle = PcztIronwoodBundle(
-        actions=[_valid_ironwood_action()] * 11,
+        actions=[_valid_ironwood_action()] * 33,
         flags=3,
-        value_balance=300000 * 11,
+        value_balance=300000 * 33,
         anchor=bytes(32),
     )
 
@@ -1499,8 +1500,8 @@ def test_pczt_ironwood_rk_mismatch_rejected(backend):
     reason="Unreachable by construction, so there is nothing to exercise. read_ironwood_value "
     "bounds every spend and output value to MAX_MONEY (2.1e15 zatoshis) via "
     "Zatoshis::from_nonnegative_i64_le_bytes, and MAX_PCZT_IRONWOOD_ACTIONS_NUMBER caps a "
-    "bundle at 10 actions, so the largest sum finish_current_ironwood_action can accumulate "
-    "is 2.1e16 — three orders of magnitude below u64::MAX. The checked_add on the running "
+    "bundle at 32 actions, so the largest sum finish_current_ironwood_action can accumulate "
+    "is 6.7e16 — two orders of magnitude below u64::MAX. The checked_add on the running "
     "sums is defence in depth behind that range check, not an untested path: a host cannot "
     "supply a value large enough to reach it."
 )

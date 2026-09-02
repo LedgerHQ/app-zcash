@@ -840,10 +840,12 @@ def test_pczt_sign_tx_v5_transparent_input_no_replay(
 def test_pczt_sign_tx_orchard_action_count_limit(
     backend,
 ):
-    # Regression test: the Orchard action count is bounded by MAX_ORCHARD_ACTIONS (10),
-    # mirroring the transparent input/output limits. A bundle declaring more actions must
-    # be rejected at the action-count check, before any per-action allocation grows the
-    # signing-records vector (heap-exhaustion guard on a ~24 KB-RAM device).
+    # Regression test: the Orchard action count is bounded by
+    # MAX_PCZT_ORCHARD_ACTIONS_NUMBER. A bundle declaring more actions must be rejected at
+    # the action-count check, before any per-action allocation grows the signing-records
+    # vector (heap-exhaustion guard on a ~24 KB-RAM device). The bound is a measured
+    # capacity, not a round number — see tests/standalone/test_pczt_action_capacity.py,
+    # which drives the counts up to it and past it.
     PCZT_GLOBAL = PcztGlobal()
     TRANSPARENT_INPUT = PcztTransparentInput(
         prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
@@ -877,9 +879,9 @@ def test_pczt_sign_tx_orchard_action_count_limit(
             rcv=bytes(32),
         )
 
-    # MAX_PCZT_ORCHARD_ACTIONS_NUMBER is 10; declare one more to trip the bound.
+    # MAX_PCZT_ORCHARD_ACTIONS_NUMBER is 32; declare one more to trip the bound.
     too_many_actions = PcztOrchardBundle(
-        actions=[_dummy_orchard_action() for _ in range(11)],
+        actions=[_dummy_orchard_action() for _ in range(33)],
         flags=0,
         value_balance=0,
         anchor=bytes(32),

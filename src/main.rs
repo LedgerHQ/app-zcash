@@ -26,11 +26,15 @@ mod handlers {
     pub mod get_trusted_input;
     pub mod get_version;
     pub mod get_vk;
+    #[cfg(feature = "heap_probe")]
+    pub mod heap_probe;
     pub mod pczt;
     pub mod sign_tx;
 }
 
 mod consts;
+#[cfg(feature = "heap_probe")]
+mod heap_probe;
 mod parser;
 mod rng;
 mod settings;
@@ -57,6 +61,8 @@ use ledger_device_sdk::{
 use tx::TxContext;
 use zeroize::Zeroizing;
 
+#[cfg(feature = "heap_probe")]
+use crate::consts::INS_HEAP_PROBE;
 use crate::consts::{
     INS_GET_SHIELD_ADDR, MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
     P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
@@ -68,6 +74,8 @@ use crate::consts::{
 use crate::consts::{
     INS_PCZT_IRONWOOD_ACTION, INS_PCZT_SIGN_IRONWOOD, MAX_PCZT_IRONWOOD_ACTIONS_NUMBER,
 };
+#[cfg(feature = "heap_probe")]
+use crate::handlers::heap_probe::handler_heap_probe;
 use crate::handlers::pczt::{handler_pczt_ironwood_action, handler_pczt_sign_ironwood};
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
@@ -205,6 +213,8 @@ pub enum Instruction {
     PcztInvalid {
         sw: AppSW,
     },
+    #[cfg(feature = "heap_probe")]
+    HeapProbe,
 }
 
 impl TryFrom<ApduHeader> for Instruction {
@@ -333,6 +343,8 @@ impl TryFrom<ApduHeader> for Instruction {
                     sw: AppSW::WrongP1P2,
                 })
             }
+            #[cfg(feature = "heap_probe")]
+            (INS_HEAP_PROBE, 0, 0) => Ok(Instruction::HeapProbe),
             // A routed instruction lands here on an unmatched P1/P2; an unrouted one never had
             // P1/P2 semantics, so its reply does not depend on them.
             (
@@ -587,6 +599,8 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
             ctx.pczt_parser.reset();
             Err(*sw)
         }
+        #[cfg(feature = "heap_probe")]
+        Instruction::HeapProbe => handler_heap_probe(comm),
     }
 }
 

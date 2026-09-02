@@ -113,6 +113,10 @@ class InsType(IntEnum):
     PCZT_SIGN_ORCHARD = 0x57
     PCZT_IRONWOOD_ACTION = 0x58
     PCZT_SIGN_IRONWOOD = 0x59
+    # Answered only by a build carrying the `heap_probe` cargo feature, which no released
+    # application does. A build without it refuses this instruction, and a test relying on it
+    # must treat that refusal as the expected answer rather than a failure.
+    HEAP_PROBE = 0xF0
 
 
 class GetVkMode(IntEnum):
@@ -943,6 +947,20 @@ class ZcashCommandSender:
             ins=InsType.PCZT_SIGN_TRANSPARENT,
             p1=P1.P1_FIRST,
             p2=input_index,
+            data=b"",
+        )
+
+    def heap_probe(self) -> RAPDU:
+        """Largest block the device allocator can still serve, as a big-endian u32.
+
+        Raises through the backend when the application was built without the `heap_probe`
+        feature, which is how a released build answers.
+        """
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.HEAP_PROBE,
+            p1=0,
+            p2=0,
             data=b"",
         )
 

@@ -181,6 +181,12 @@ pub struct TxInfo {
     /// Bounds what the shielded outputs can claim on the heap: the host decides how many memos
     /// there are and how long each one is, and the review holds them all at once.
     pub retained_memo_bytes: usize,
+    /// Shielded outputs already accepted for display, across both shielded pools.
+    ///
+    /// Counted rather than derived from `outputs` so the budget is spent before an address is
+    /// encoded: what it bounds is the allocation, so it cannot be read from the allocations already
+    /// made. Change outputs are excluded — only one is ever accepted, and it is kept off the review.
+    pub displayed_shielded_outputs: usize,
     pub is_change_found: bool,
     pub change_pk_hash: Option<[u8; 20]>,
     /// Account component of the change path the host declared, hardening bit included.

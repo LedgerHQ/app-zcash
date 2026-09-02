@@ -41,6 +41,15 @@ impl PcztParser {
 
         self.reset_orchard_bundle_state(action_count);
 
+        // Reserved up front, while the heap is least fragmented and before the per-action
+        // allocations begin: growing this vector by doubling mid-bundle asks for a contiguous block
+        // twice the size of the one it replaces, at the point the parse has carved the heap up the
+        // most. Reserving also makes a bundle the device cannot hold fail with a status word here,
+        // rather than through the allocator, whose exhaustion exits the application instead.
+        self.orchard_signing_records
+            .try_reserve_exact(action_count)
+            .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
+
         if action_count == 0 {
             self.finalize_orchard_actions(ctx)?;
         } else {
@@ -793,6 +802,11 @@ impl PcztParser {
     ) -> Result<(), ParserError> {
         if is_change && ctx.tx_info.is_change_found {
             return Err(ParserError::from_str("Multiple change outputs detected"));
+        }
+
+        // Claimed before the address below is encoded: the budget bounds that allocation.
+        if !is_change {
+            claim_displayed_shielded_output(ctx.tx_info)?;
         }
 
         let address =
