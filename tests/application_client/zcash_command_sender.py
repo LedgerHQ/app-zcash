@@ -33,6 +33,20 @@ MAGIC_TRUSTED_INPUT: int = 0x32
 
 MAX_APDU_LEN: int = 255
 
+# The device streams a viewing key in chunks of MAX_APDU_LEN (VK_RESPONSE_CHUNK_LEN in
+# src/handlers/get_vk.rs), the first response carrying the two big-endian length bytes ahead of
+# the first chunk. A unified viewing key runs a little over 300 bytes, so one continuation is the
+# real case and the Orchard-only mode needs none. This ceiling is several times that, high enough
+# never to trip on a longer key, and exists so a device announcing a response it will not deliver
+# cannot hold the test process forever.
+MAX_VK_CONTINUATIONS: int = 4
+
+# Mirrors MAX_PCZT_TRANSPARENT_INPUTS_NUMBER in src/consts.rs. The signing instruction carries the
+# input index in P2, so this is also the first index the dispatcher refuses — which is what makes it
+# the value a P1/P2 rejection test has to use rather than a literal that silently becomes valid the
+# next time the bound moves.
+MAX_PCZT_TRANSPARENT_INPUTS: int = 32
+
 CLA: int = 0xE0
 
 # P2PKH script of the UTXO that `forge_and_get_trusted_input` pays to, and therefore the script
@@ -105,6 +119,10 @@ class InsType(IntEnum):
     PCZT_SIGN_ORCHARD = 0x57
     PCZT_IRONWOOD_ACTION = 0x58
     PCZT_SIGN_IRONWOOD = 0x59
+    # Answered only by a build carrying the `heap_probe` cargo feature, which no released
+    # application does. A build without it refuses this instruction, and a test relying on it
+    # must treat that refusal as the expected answer rather than a failure.
+    HEAP_PROBE = 0xF0
 
 
 class GetVkMode(IntEnum):
@@ -135,6 +153,7 @@ class Errors(IntEnum):
     SW_BAD_STATE = 0xB007
     SW_SIGNATURE_FAIL = 0xB008
     SW_INVALID_TRANSACTION = 0x6A80
+    SW_NOT_ENOUGH_MEMORY_SPACE = 0x6A84
 
 
 def split_message(message: bytes, max_size: int) -> list[bytes]:
@@ -213,11 +232,14 @@ class ZcashCommandSender:
         path: str,
         mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS,
         transparent_path: str | None = None,
+        display: bool = False,
     ) -> RAPDU:
+        # Synchronous even with `display`, for the modes that answer the flag without a screen.
+        # A mode that does show one needs `get_shielded_address_with_confirmation` instead.
         return self.backend.exchange(
             cla=CLA,
             ins=InsType.GET_SHIELDED_ADDRESS,
-            p1=P1.P1_FIRST,
+            p1=P1.P1_GET_PUBLIC_KEY_DISPLAY if display else P1.P1_FIRST,
             p2=mode,
             data=self._pack_derivation_paths(path, transparent_path),
         )
@@ -232,9 +254,23 @@ class ZcashCommandSender:
             return response
 
         total_response_len = 2 + int.from_bytes(response.data[:2], byteorder="big")
+        max_response_len = 2 + MAX_APDU_LEN * (MAX_VK_CONTINUATIONS + 1)
+        if total_response_len > max_response_len:
+            raise ValueError(
+                f"Device announced a {total_response_len}-byte viewing-key response, "
+                f"beyond the {max_response_len} bytes this collector will assemble"
+            )
+
         response_data = bytearray(response.data)
+        continuations = 0
 
         while len(response_data) < total_response_len:
+            if continuations >= MAX_VK_CONTINUATIONS:
+                raise ValueError(
+                    f"Viewing-key response still short of the announced {total_response_len} "
+                    f"bytes after {continuations} continuations"
+                )
+
             continuation = self.backend.exchange(
                 cla=CLA,
                 ins=InsType.GET_VK,
@@ -242,8 +278,17 @@ class ZcashCommandSender:
                 p2=mode,
                 data=b"",
             )
+            # A continuation that carries nothing would leave the accumulated length where it
+            # was, so the loop would keep asking. The backend's raise policy already stops a
+            # non-success status, but an empty success is silent and has to be caught here.
+            if not continuation.data:
+                raise ValueError(
+                    f"Viewing-key continuation returned no data, {len(response_data)} of {total_response_len} bytes collected"
+                )
+
             response_data.extend(continuation.data)
             response = continuation
+            continuations += 1
 
         return ApduResponse(status=response.status, data=bytes(response_data))
 
@@ -362,11 +407,10 @@ class ZcashCommandSender:
                 data=script + sequence,
             )
 
-    @contextmanager
     def _hash_input_finalize_outputs(
         self,
         change_path: str | None = None,
-    ) -> Generator[None, None, None]:
+    ) -> None:
         # Send outputs chunks
         outputs: list[dict] = self.tx_chunks["outputs"]  # type: ignore
         outputs_num = len(outputs)
@@ -400,31 +444,32 @@ class ZcashCommandSender:
         script = outputs[-1]["script"]
         script_len = len(script)
 
-        with self.backend.exchange_async(
+        self.backend.exchange(
             cla=CLA,
             ins=InsType.HASH_INPUT_FINALIZE_FULL,
             p1=P1.P1_FINALIZE_FULL_MORE,
             p2=P2.P2_FINALIZE_FULL_DEFAULT,
             data=outputs_num_bytes + value + script_len.to_bytes(1, byteorder="big") + script,
-        ) as response:
-            yield response
+        )
 
-    @contextmanager
     def hash_input(
         self,
         transaction: bytes,
         trusted_inputs: list[bytes],
         change_path: str | None = None,
-    ) -> Generator[None, None, None]:
+    ) -> None:
+        """Stream the transaction's inputs and outputs.
+
+        Nothing is displayed at this point: the legacy review runs on the header APDU that
+        `hash_sign_header` sends, once the transaction's validity window is known too.
+        """
         self.tx_chunks = split_tx_v5_for_hash_input(transaction)
         self.trusted_inputs = trusted_inputs
         self.pczt_transparent_inputs = []
         self.pczt_transparent_outputs = []
 
         self._send_trusted_inputs_and_header(continue_hashing=False)
-
-        with self._hash_input_finalize_outputs(change_path) as response:
-            yield response
+        self._hash_input_finalize_outputs(change_path)
 
     def _pczt_optional_u32(self, value: int | None) -> bytes:
         if value is None:
@@ -911,6 +956,20 @@ class ZcashCommandSender:
             data=b"",
         )
 
+    def heap_probe(self) -> RAPDU:
+        """Largest block the device allocator can still serve, as a big-endian u32.
+
+        Raises through the backend when the application was built without the `heap_probe`
+        feature, which is how a released build answers.
+        """
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.HEAP_PROBE,
+            p1=0,
+            p2=0,
+            data=b"",
+        )
+
     def pczt_sign_orchard(
         self,
         action_index: int = 0,
@@ -984,9 +1043,20 @@ class ZcashCommandSender:
             ) as response:
                 yield response
 
-    def hash_sign(self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01) -> RAPDU:
-        # Send extra header data
-        self.backend.exchange(
+    @contextmanager
+    def hash_sign_header(
+        self,
+        locktime: int,
+        expiry: int,
+        sighash_type: int = 0x01,
+    ) -> Generator[None, None, None]:
+        """Send the transaction header, which is what triggers the legacy review.
+
+        Exposed separately from `hash_sign` because the review happens here: the header carries the
+        locktime and the expiry height, so this is the first point at which the whole transaction is
+        known to the device.
+        """
+        with self.backend.exchange_async(
             cla=CLA,
             ins=InsType.HASH_SIGN,
             p1=P1.P1_FIRST,
@@ -995,8 +1065,11 @@ class ZcashCommandSender:
             + locktime.to_bytes(4, byteorder="big")
             + sighash_type.to_bytes(1, byteorder="big")
             + expiry.to_bytes(4, byteorder="big"),
-        )
+        ) as response:
+            yield response
 
+    def hash_sign(self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01) -> RAPDU:
+        """Sign one input. The header must already have been sent and approved."""
         self._send_trusted_inputs_and_header(continue_hashing=True)
 
         return self.backend.exchange(

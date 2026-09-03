@@ -2,6 +2,7 @@ use crate::{
     AppSW,
     consts::TRUSTED_INPUT_SIZE,
     parser::{LegacyParserCtx, LegacyParserMode, ParserSourceError},
+    rng,
     settings::Settings,
     tx::TxContext,
     utils::{Endianness, HexSlice, read_u32},
@@ -10,7 +11,6 @@ use ledger_device_sdk::{
     hmac::{HMACInit, sha2::Sha2_256 as HmacSha256},
     io::Comm,
     log::{debug, error, info},
-    random::rand_bytes,
 };
 
 const MAGIC_TRUSTED_INPUT: u8 = 0x32;
@@ -31,9 +31,17 @@ pub fn handler_get_trusted_input(
         return Err(AppSW::BadState);
     }
 
+    // Likewise once a transaction is finished: its outputs and hashers stay in place, and a
+    // completed PCZT no longer reports an active session, so a continuation would build on the
+    // previous transaction's state instead of a fresh one.
+    if !first && ctx.is_finished() {
+        error!("Trusted-input continuation resuming a finished transaction");
+        return Err(AppSW::BadState);
+    }
+
     if first {
         info!("Reset TX context");
-        ctx.reset(LegacyParserMode::TrustedInput);
+        ctx.reset_for_new_transaction(LegacyParserMode::TrustedInput)?;
 
         let transaction_trusted_input_idx = read_u32(data, Endianness::Big, false)?;
         data = &data[4..];
@@ -66,11 +74,11 @@ pub fn handler_get_trusted_input(
             return Err(AppSW::IncorrectData);
         }
 
-        let mut rng = [0u8; 4];
-        rand_bytes(&mut rng);
+        let mut nonce = [0u8; 4];
+        rng::fill_bytes(&mut nonce)?;
 
         comm.append(&[MAGIC_TRUSTED_INPUT, 0x00]);
-        comm.append(&rng[2..]);
+        comm.append(&nonce[2..]);
         comm.append(&ctx.trusted_input_info.tx_id);
         comm.append(
             ctx.trusted_input_info

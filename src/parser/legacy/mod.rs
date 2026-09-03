@@ -32,12 +32,11 @@ use crate::parser::{compute, reader::ByteReader};
 use crate::settings::Settings;
 use crate::swap;
 use crate::tx::{
-    Hashers, SupportedTxVersion, TransferType, TrustedInputInfo, TxInfo, TxOutput, TxPool,
-    TxSigningState,
+    Hashers, SupportedTxVersion, TrustedInputInfo, TxInfo, TxOutput, TxPool, TxSigningState,
 };
+use crate::utils::base58_address::Base58Address;
 use crate::utils::blake2b_256_pers::{AsWriter, AsWriterB as _, Blake2b256Personalization};
 use crate::utils::{CheckDispOutput, HexSlice, check_output_displayable, secure_memcmp};
-use crate::{app_ui::sign::ui_display_tx, utils::base58_address::Base58Address};
 use crate::{
     consts::{MAX_OUTPUTS_NUMBER, MAX_SCRIPT_SIZE, TRUSTED_INPUT_TOTAL_SIZE},
     utils::base58_address::ToBase58Address,

@@ -45,13 +45,34 @@ components.
   bytes.
 - `bip32_derivation` and `zip32_derivation` fields MUST each fit in, and be sent
   as, one APDU packet.
-- The current app limits are: at most 10 transparent inputs, at most 10
-  transparent outputs, at most 10 Orchard actions, and at most 10 Ironwood
-  actions.
-- A transparent `script_pubkey` is at most 252 bytes. Every transparent input's
-  script is retained for the whole session, so the bound is what keeps ten of
-  them inside the device heap. 252 is also the largest value a one-byte
-  CompactSize encodes, which is the limit the host applies on its own side.
+- The current app limits are: at most 32 transparent inputs, at most 10
+  transparent outputs, at most 32 Orchard actions, and at most 32 Ironwood
+  actions. A bundle declaring more is refused at its count packet, before any
+  per-action field is read.
+- Independently of the action counts, at most **4 shielded outputs across both
+  shielded pools may be displayed** to the user — that is, outputs that decrypt
+  under the account's viewing key and are not the change note. The parser refuses
+  the fifth with `NotEnoughMemorySpace`. Dummy outputs and the change note carry
+  no display and do not count, so this bounds the review rather than the spend:
+  a bundle may spend 32 notes while showing one recipient, which is the shape a
+  send produces.
+- The **change note is bound to the account being spent**. A shielded output that
+  decrypts under the internal viewing key, and a transparent output whose declared
+  path the app recognises as its own, both record the account they return to, and
+  every command that releases a signature refuses unless that account is the one it
+  signs for. Two change outputs naming different accounts are refused with
+  `IncorrectData` while the payload is parsed: whichever one a signing command
+  matched, the other would stay hidden.
+- A transparent `script_pubkey` is at most 252 bytes — the largest value a
+  one-byte CompactSize encodes, which is the limit the host applies on its own
+  side.
+- An **input**'s `script_pubkey` must additionally be the 25-byte P2PKH shape
+  (`76 a9 14 <hash160> 88 ac`); any other form is refused with `IncorrectData`.
+  Two reasons: it is the only shape the app can sign for, a P2SH input needing a
+  redeem script this format does not carry; and the script is retained for the
+  whole session, the per-input signature digest consuming it, so pinning the
+  shape is what makes the retained cost per input fixed rather than
+  host-chosen. Output scripts keep accepting P2PKH and P2SH.
 
 ## PCZT_HEADER
 

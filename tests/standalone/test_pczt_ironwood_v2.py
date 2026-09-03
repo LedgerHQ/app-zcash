@@ -65,12 +65,8 @@ _RK_ALPHA_1 = bytes.fromhex("e95982b73ab0c2137ec354cce448a75ef39ec0cbdf6907be6df
 # Verified: NullifierDerive(fvk_from_spend_key(m/32'/133'/0'), spend_note) ==
 #           _NULLIFIER, and cv_net == Commitment(rcv=_RCV, value=300000-0).
 # ---------------------------------------------------------------------------
-_INTERNAL_RECIPIENT = bytes.fromhex(
-    "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a"
-)
-_SPEND_RECIPIENT = bytes.fromhex(
-    "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02"
-)
+_INTERNAL_RECIPIENT = bytes.fromhex("ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a")
+_SPEND_RECIPIENT = bytes.fromhex("4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02")
 _CV_NET = bytes.fromhex("00b3324110776396d31646041679fd6530d57c353c6be0a93a0cd55b30aa6d8b")
 _NULLIFIER = bytes.fromhex("ed37cc733c228dc3dda2cf088ba646f9d204adc9d8d6f95ec36126eb742c3a10")
 # V3 note commitment: recipient _INTERNAL_RECIPIENT, value 0, nullifier _NULLIFIER,
@@ -224,16 +220,12 @@ def test_pczt_ironwood_v2_two_actions_sign_both(
     # Sign action 0 (first real spend).  The parser is NOT reset because
     # action 1 still awaits its signature (ironwood_signed_count=1 < real_spend_count=2).
     sig_action_0 = client.pczt_sign_ironwood(action_index=0).data
-    assert len(sig_action_0) == 64, (
-        f"Expected 64-byte spendAuthSig for action 0, got {len(sig_action_0)}"
-    )
+    assert len(sig_action_0) == 64, f"Expected 64-byte spendAuthSig for action 0, got {len(sig_action_0)}"
 
     # Sign action 1 (second real spend).  The parser is reset here because all
     # real spends are now signed (ironwood_signed_count=2 == real_spend_count=2).
     sig_action_1 = client.pczt_sign_ironwood(action_index=1).data
-    assert len(sig_action_1) == 64, (
-        f"Expected 64-byte spendAuthSig for action 1, got {len(sig_action_1)}"
-    )
+    assert len(sig_action_1) == 64, f"Expected 64-byte spendAuthSig for action 1, got {len(sig_action_1)}"
 
 
 # ---------------------------------------------------------------------------
@@ -274,9 +266,7 @@ def test_pczt_ironwood_v2_replay_in_session_rejected(
 
     # First sign of action 0 succeeds; action 1 is still unsigned.
     sig_0 = client.pczt_sign_ironwood(action_index=0).data
-    assert len(sig_0) == 64, (
-        f"Expected 64-byte spendAuthSig for action 0, got {len(sig_0)}"
-    )
+    assert len(sig_0) == 64, f"Expected 64-byte spendAuthSig for action 0, got {len(sig_0)}"
 
     # Replay of action 0 while action 1 is still pending must be rejected.
     # ensure_signature_digest_for_ironwood sees action.signed==True and returns
@@ -288,29 +278,18 @@ def test_pczt_ironwood_v2_replay_in_session_rejected(
 
 
 # ---------------------------------------------------------------------------
-# Discrepancy documentation: PCZT_VERSION_1 rejected for V6 transactions.
-#
-# The Python test-client (ZcashCommandSender._build_pczt_header_and_global_payload)
-# automatically selects pczt_version=2 when tx_version==6, matching what the
-# ironwood worktree firmware requires.  This test verifies that if the caller
-# forces pczt_version=1 for a V6 transaction the firmware returns
-# SW_INVALID_TRANSACTION (0x6A80).
-#
-# This is the root cause of the failing APDU in the task context log:
-#   => e05200002250435a54020000000600000098b684d85b16a537...
-#   <= 6a80
-# That APDU uses pczt_version=2 (bytes 5-8 = 02000000) but was sent to the
-# develop-branch build which lacks the zcash_unstable feature and therefore
-# accepts only PCZT_VERSION_1.  Against this ironwood worktree the same
-# pczt_version=2 header is accepted.  Forcing pczt_version=1 on a V6 tx
-# triggers the check at common.rs:96:
-#   if is_v6 && self.pczt_version != PCZT_VERSION_2 { return Err(...) }
+# The PCZT version is bound to the transaction version and the two cannot be
+# mixed: a V5 transaction requires PCZT_VERSION_1, a V6 one PCZT_VERSION_2.
+# `ZcashCommandSender._build_pczt_header_and_global_payload` selects the version
+# from tx_version, so forcing the wrong one is the only way to reach the guard.
+# It lives in the PCZT header parsing (`src/parser/pczt/common.rs`, the
+# `is_v6` / `pczt_version` condition) and answers SW_INVALID_TRANSACTION (0x6A80).
 # ---------------------------------------------------------------------------
 def test_pczt_ironwood_v2_version1_rejected_for_v6(backend):
     """PCZT_VERSION_1 is rejected for a V6 (Ironwood) transaction header.
 
-    The ironwood worktree firmware accepts PCZT_VERSION_2 for V6 and
-    PCZT_VERSION_1 for V5 — versions cannot be mixed.
+    The firmware accepts PCZT_VERSION_2 for V6 and PCZT_VERSION_1 for V5 — versions
+    cannot be mixed.
     """
     client = ZcashCommandSender(backend)
 
@@ -349,9 +328,7 @@ def test_pczt_ironwood_v2_empty_bundle_accepted(
         pczt_global=PCZT_V6_GLOBAL,
         transparent_inputs=[_TRANSPARENT_INPUT_600K],
         transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
-        ironwood_bundle=PcztIronwoodBundle(
-            actions=[], flags=0, value_balance=0, anchor=bytes(32)
-        ),
+        ironwood_bundle=PcztIronwoodBundle(actions=[], flags=0, value_balance=0, anchor=bytes(32)),
     ):
         _review_approve(scenario_navigator, "test_pczt_ironwood_v2_empty_bundle_accepted")
 

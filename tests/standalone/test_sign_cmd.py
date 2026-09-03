@@ -1,5 +1,6 @@
 # pylint: disable=C0301
 
+import hashlib
 import struct
 
 import pytest
@@ -8,7 +9,7 @@ from application_client.zcash_response_unpacker import (
     unpack_get_public_key_response,
     unpack_trusted_input_response,
 )
-from application_client.zcash_utils import write_varint
+from application_client.zcash_utils import ripemd160, write_varint
 from application_client.zcash_verify_sign import (
     check_tx_v5_signature_validity,
     nu5_txid_digests,
@@ -125,7 +126,10 @@ def test_sign_tx_v5_simple(backend, scenario_navigator: NavigateWithScenario):
     public_key, _, _ = unpack_get_public_key_response(response)
 
     # Start hashing TX
-    with client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input]):
+    client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input])
+
+    # Review covers the header too, so it happens on the first HASH_SIGN APDU
+    with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE):
         scenario_navigator.review_approve()
 
     # Finalize and sign
@@ -199,7 +203,9 @@ def test_sign_tx_v5_nu6_2_trusted_input_and_tx(backend, scenario_navigator: Navi
     response = client.get_public_key(path=path).data
     public_key, _, _ = unpack_get_public_key_response(response)
 
-    with client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input]):
+    client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input])
+
+    with client.hash_sign_header(locktime=locktime, expiry=expiry, sighash_type=sighash_type):
         scenario_navigator.review_approve()
 
     resp = client.hash_sign(
@@ -230,6 +236,7 @@ def test_sign_tx_v5_nu6_2_trusted_input_and_tx(backend, scenario_navigator: Navi
             sighash_type=sighash_type,
         )
 
+
 def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: NavigateWithScenario):
     locktime = 0
     expiry = 0
@@ -244,16 +251,20 @@ def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: Navi
         locktime=locktime,
         expiry=expiry,
         branch_id=NU6_3_BRANCH_ID,
-        inputs=[{
-            "prev_txid": bytes.fromhex("11" * 32),
-            "prev_vout": 0,
-            "script": bytes.fromhex("6a"),
-            "sequence": 0xFFFFFFFF,
-        }],
-        outputs=[{
-            "value": input_amount,
-            "script": input_script_pubkey,
-        }],
+        inputs=[
+            {
+                "prev_txid": bytes.fromhex("11" * 32),
+                "prev_vout": 0,
+                "script": bytes.fromhex("6a"),
+                "sequence": 0xFFFFFFFF,
+            }
+        ],
+        outputs=[
+            {
+                "value": input_amount,
+                "script": input_script_pubkey,
+            }
+        ],
     )
     prevout_txid = nu5_txid_digests(prevout_tx_bytes)["final_digest"]
 
@@ -261,33 +272,39 @@ def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: Navi
         locktime=locktime,
         expiry=expiry,
         branch_id=NU6_3_BRANCH_ID,
-        inputs=[{
-            "prev_txid": prevout_txid,
-            "prev_vout": 0,
-            "script": input_script_pubkey,
-            "sequence": 0,
-        }],
-        outputs=[{
-            "value": send_amount,
-            "script": output_script_pubkey,
-        }],
+        inputs=[
+            {
+                "prev_txid": prevout_txid,
+                "prev_vout": 0,
+                "script": input_script_pubkey,
+                "sequence": 0,
+            }
+        ],
+        outputs=[
+            {
+                "value": send_amount,
+                "script": output_script_pubkey,
+            }
+        ],
     )
 
     assert prevout_tx_bytes[8:12] == struct.pack("<I", NU6_3_BRANCH_ID)
-    assert tx_bytes[8:12]         == struct.pack("<I", NU6_3_BRANCH_ID)
+    assert tx_bytes[8:12] == struct.pack("<I", NU6_3_BRANCH_ID)
 
     client = ZcashCommandSender(backend)
 
     trusted_input = client.get_trusted_input(prevout_tx_bytes, 0).data
     trusted_txid, trusted_input_idx, trusted_amount, _, _ = unpack_trusted_input_response(trusted_input)
-    assert trusted_txid      == prevout_txid
+    assert trusted_txid == prevout_txid
     assert trusted_input_idx == 0
-    assert trusted_amount    == input_amount
+    assert trusted_amount == input_amount
 
     response = client.get_public_key(path=path).data
     public_key, _, _ = unpack_get_public_key_response(response)
 
-    with client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input]):
+    client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input])
+
+    with client.hash_sign_header(locktime=locktime, expiry=expiry, sighash_type=sighash_type):
         scenario_navigator.review_approve()
 
     resp = client.hash_sign(
@@ -317,6 +334,7 @@ def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: Navi
             input_amounts=[input_amount],
             sighash_type=sighash_type,
         )
+
 
 def test_sign_tx_v5_change(backend, scenario_navigator):
     LOCKTIME = 0x00
@@ -358,10 +376,130 @@ def test_sign_tx_v5_change(backend, scenario_navigator):
     response = client.get_public_key(path=path).data
     public_key, _, _ = unpack_get_public_key_response(response)
 
-    with client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input], change_path=change_path):
+    client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input], change_path=change_path)
+
+    with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE):
         scenario_navigator.review_approve()
 
     # Finalize and sign
+    resp = client.hash_sign(path=path, locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE).data
+    signature = resp[:-1]
+
+    assert check_tx_v5_signature_validity(public_key, signature, TX_BYTES, input_index=0, input_amounts=[81630485])
+
+
+def test_legacy_change_in_another_account_yields_no_signature(backend, scenario_navigator):
+    """Change declared in an account other than the one being spent is refused at signing.
+
+    The review hides change outputs, so an output the host presents as change of a foreign account
+    leaves the screen with no trace of the value going there. The two accounts are only both known
+    once the signing path arrives, so the refusal lands there — with no signature emitted, since a
+    released signature cannot be recalled.
+    """
+    LOCKTIME = 0x00
+    EXPIRY = 0x00
+    SIGHASH_TYPE = 0x01
+    PREVOUT_TX_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c200000000f9081a000198cd6cd9559cd98109ad0622f899bc38805f11648e4f985ebe344b8238f87b13010000006b48304502210095104ae9d53a95105be4ba5a31caddff2ae83ced24b21ab4aec6d735d568fad102206e054b158047529bb736c810902ea7fc8d92f3f604c1b2a8bb0b92f0e6c016a8012102010a560c7325827df0212bca20f5cf6556b1345991b6b64b469c616e758230a5ffffffff021595dd04000000001976a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88aca245117c140000001976a914c8b56e00740e62449a053c15bdd4809f720b5cb588ac000000"
+    )
+
+    path = "m/44'/133'/0'/0/0"
+    # Change one account over. Same seed, so the device does own it — which is exactly what makes
+    # the output pass for change and disappear from the review.
+    foreign_change_path = "m/44'/133'/1'/1/0"
+
+    client = ZcashCommandSender(backend)
+
+    # The change output has to hash to the foreign path's key, otherwise it would simply be shown as
+    # a regular output and the review would never hide it.
+    foreign_pubkey, _, _ = unpack_get_public_key_response(client.get_public_key(path=foreign_change_path).data)
+    compressed = bytes([0x02 + (foreign_pubkey[64] & 1)]) + foreign_pubkey[1:33]
+    foreign_pk_hash = ripemd160(hashlib.sha256(compressed).digest())
+
+    TX_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c2"
+        + LOCKTIME.to_bytes(4, byteorder="big").hex()
+        + EXPIRY.to_bytes(4, byteorder="big").hex()  # header
+        + "01"
+        + "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+        + "00000000"  # hash + prevout idx
+        + "19"
+        + "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac00000000"  # input scriptPubKey + sequence
+        + "02"
+        + "005a620200000000"  # output amount
+        + "19"
+        + "76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"  # output scriptPubKey
+        + "c11b7b0200000000"  # change output amount
+        + "19"
+        + "76a914"
+        + foreign_pk_hash.hex()
+        + "88ac"  # change output paying the foreign account
+        + "000000"  # empty sapling and orchard
+    )
+
+    trusted_input = client.get_trusted_input(PREVOUT_TX_BYTES, 0).data
+
+    client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input], change_path=foreign_change_path)
+
+    # The review runs and shows the external output alone: the foreign-account output is hidden, so
+    # the user has nothing to refuse on. Approval here is the attacker's premise, not the defence.
+    with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE):
+        scenario_navigator.review_approve()
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        client.hash_sign(path=path, locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE)
+
+    assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+    assert not error.value.data
+
+
+def test_sign_tx_v5_self_transfer_shows_its_output(backend, scenario_navigator):
+    """A transaction paying only its own change address still shows that output.
+
+    The review filters change out, so a transaction whose every output is change would otherwise be
+    presented with no output at all: no destination, no amount, only the fee.
+    """
+    LOCKTIME = 0x00
+    EXPIRY = 0x00
+    SIGHASH_TYPE = 0x01
+    PREVOUT_TX_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c200000000f9081a000198cd6cd9559cd98109ad0622f899bc38805f11648e4f985ebe344b8238f87b13010000006b48304502210095104ae9d53a95105be4ba5a31caddff2ae83ced24b21ab4aec6d735d568fad102206e054b158047529bb736c810902ea7fc8d92f3f604c1b2a8bb0b92f0e6c016a8012102010a560c7325827df0212bca20f5cf6556b1345991b6b64b469c616e758230a5ffffffff021595dd04000000001976a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88aca245117c140000001976a914c8b56e00740e62449a053c15bdd4809f720b5cb588ac000000"
+    )
+
+    # Single output, paying the very address the change path derives.
+    TX_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c2"
+        + LOCKTIME.to_bytes(4, byteorder="big").hex()
+        + EXPIRY.to_bytes(4, byteorder="big").hex()  # header
+        + "01"
+        + "58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"
+        + "00000000"  # hash + prevout idx
+        + "19"
+        + "76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac00000000"  # input scriptPubKey + sequence
+        + "01"
+        + "958ddd0400000000"  # output amount
+        + "19"
+        + "76a914adee44a1e8d1bbfd9e000bdcc4d99849abe339f588ac"  # change output scriptPubKey
+        + "000000"  # empty sapling and orchard
+    )
+
+    path = "m/44'/133'/0'/0/0"
+    change_path = "m/44'/133'/0'/1/0"
+
+    trusted_input_idx = 0
+
+    client = ZcashCommandSender(backend)
+
+    trusted_input = client.get_trusted_input(PREVOUT_TX_BYTES, trusted_input_idx).data
+
+    response = client.get_public_key(path=path).data
+    public_key, _, _ = unpack_get_public_key_response(response)
+
+    client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input], change_path=change_path)
+
+    with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE):
+        scenario_navigator.review_approve()
+
     resp = client.hash_sign(path=path, locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE).data
     signature = resp[:-1]
 
@@ -399,8 +537,10 @@ def test_sign_tx_refuse(backend, scenario_navigator):
     trusted_input = client.get_trusted_input(PREVOUT_TX_BYTES, trusted_input_idx).data
 
     # Start hashing TX
+    client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input])
+
     with pytest.raises(ExceptionRAPDU) as e:
-        with client.hash_input(transaction=TX_BYTES, trusted_inputs=[trusted_input]):
+        with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY):
             scenario_navigator.review_reject()
 
     # Assert that we have received a refusal
@@ -463,15 +603,15 @@ def test_sign_tx_v5_old(backend, scenario_navigator):
     sw, _ = transport.exchange_raw("e04480050400000000")
     assert sw == 0x9000
 
-    # Send outputs and review
-    with transport.exchange_async_raw("e04a80002301958ddd04000000001976a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"):
+    # Send outputs
+    sw, _ = transport.exchange_raw("e04a80002301958ddd04000000001976a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac")
+    assert sw == 0x9000
+
+    # Send extra header data, which carries the validity window and triggers the review
+    with transport.exchange_async_raw("e04800000b0000000000000100000000"):
         scenario_navigator.review_approve()
 
     sw = transport.get_async_response().status
-    assert sw == 0x9000
-
-    # Send extra header data
-    sw, _ = transport.exchange_raw("e04800000b0000000000000100000000")
     assert sw == 0x9000
 
     # Send trusted inputs for final hash computation
@@ -612,14 +752,15 @@ def test_sign_tx_v5_mult_inputs_old(backend, scenario_navigator):
     sw, _ = transport.exchange_raw("e04480801d76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac00000000")
     assert sw == 0x9000
 
-    # Send outputs and review
-    with transport.exchange_async_raw("e04a8000230117222605000000001976a9147340a80cad7353cff25bad918e73837c2e2863eb88ac"):
+    # Send outputs
+    sw, _ = transport.exchange_raw("e04a8000230117222605000000001976a9147340a80cad7353cff25bad918e73837c2e2863eb88ac")
+    assert sw == 0x9000
+
+    # The extra header data carries the validity window and triggers the review
+    with transport.exchange_async_raw("e04800000b0000000000000100000000"):
         scenario_navigator.review_approve()
 
     sw = transport.get_async_response().status
-    assert sw == 0x9000
-
-    sw, _ = transport.exchange_raw("e04800000b0000000000000100000000")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04400800d050000800a27a726b4d0d6c201")
     assert sw == 0x9000
@@ -706,13 +847,14 @@ def test_sign_tx_v5_mult_outputs_old(backend, scenario_navigator):
     )
     assert sw == 0x9000
 
-    with transport.exchange_async_raw("e04a800013f31771790b77502f55895a396a64e74da588ac"):
+    sw, _ = transport.exchange_raw("e04a800013f31771790b77502f55895a396a64e74da588ac")
+    assert sw == 0x9000
+
+    # The extra header data carries the validity window and triggers the review
+    with transport.exchange_async_raw("e04800000b0000000000000100000000"):
         scenario_navigator.review_approve()
 
     sw = transport.get_async_response().status
-    assert sw == 0x9000
-
-    sw, _ = transport.exchange_raw("e04800000b0000000000000100000000")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04400800d050000800a27a726b4d0d6c201")
     assert sw == 0x9000
@@ -776,13 +918,14 @@ def test_sign_tx_with_v4_nu6_input(backend, scenario_navigator):
     )
     assert sw == 0x9000
 
-    with transport.exchange_async_raw("e04a8000138ff6367f0ea6763f1c1d865329af0715ac88ac"):
+    sw, _ = transport.exchange_raw("e04a8000138ff6367f0ea6763f1c1d865329af0715ac88ac")
+    assert sw == 0x9000
+
+    # The extra header data carries the validity window and triggers the review
+    with transport.exchange_async_raw("e04800000b0000000000000100000000"):
         scenario_navigator.review_approve()
 
     sw = transport.get_async_response().status
-    assert sw == 0x9000
-
-    sw, _ = transport.exchange_raw("e04800000b0000000000000100000000")
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e04400800d050000800a27a7265510e7c801")
     assert sw == 0x9000
@@ -959,6 +1102,15 @@ def _open_legacy_change_info_state(transport) -> None:
         pytest.param("058000002c80000085800000650000000100000000", id="account_over_ceiling"),
         # Address index 50001, one past the accepted ceiling.
         pytest.param("058000002c8000008580000002000000010000c351", id="address_index_over_ceiling"),
+        # The three components BIP-44 hardens, each turned unhardened in turn. Compared with the
+        # hardening bit masked off they read as the valid path itself, yet they derive unrelated
+        # keys — so the output would be dropped from the review as change of an address the wallet
+        # does not own.
+        pytest.param("050000002c80000085800000020000000100000000", id="unhardened_purpose"),
+        pytest.param("058000002c00000085800000020000000100000000", id="unhardened_coin_type"),
+        pytest.param("058000002c80000085000000020000000100000000", id="unhardened_account"),
+        # The converse: the address index hardened where BIP-44 leaves it plain.
+        pytest.param("058000002c80000085800000020000000180000000", id="hardened_address_index"),
     ],
 )
 def test_legacy_change_info_rejects_non_change_path(backend, change_path):
@@ -977,9 +1129,7 @@ def test_legacy_change_info_rejects_non_change_path(backend, change_path):
     _open_legacy_change_info_state(transport)
 
     with pytest.raises(ExceptionRAPDU) as e:
-        transport.exchange_raw(
-            "e04aff00" + f"{len(bytes.fromhex(change_path)):02x}" + change_path
-        )
+        transport.exchange_raw("e04aff00" + f"{len(bytes.fromhex(change_path)):02x}" + change_path)
 
     assert e.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
 
@@ -997,3 +1147,62 @@ def test_legacy_change_info_accepts_the_vector_change_path(backend):
         "e04aff00" + f"{len(bytes.fromhex(_LEGACY_VALID_CHANGE_PATH)):02x}" + _LEGACY_VALID_CHANGE_PATH
     )
     assert sw == 0x9000
+
+
+def test_legacy_continuation_rejects_a_round_before_the_review(backend):
+    """A signing continuation must not restart hashing while the review round is still open.
+
+    HASH_INPUT_START with P1_FIRST + P2_CONTINUE is the signing round: it deliberately keeps the
+    output amounts and change classification the review round accumulated, and only replaces the
+    input parser. But while ``is_tx_parsed_once`` is still false, parsing the header also
+    re-initialises the V5 hashers, which empties the outputs digest.
+
+    A host could exploit that split: declare output 1 as change, send this APDU, then finalize with
+    output 2 alone. The fee shown to the user would be computed from outputs 1 and 2 with output 1
+    filtered out as change, while the signature would commit to output 2 only — so the value of
+    output 1 would go to the miner instead of back to the user.
+
+    The same shape sent at its legitimate point, after the review is approved, is exercised by the
+    multi-input tests above, which is what keeps this from passing by rejecting every continuation.
+    """
+    transport = ZcashCommandSender(backend)
+
+    # Leaves the app mid review round: one input hashed, outputs not yet finalized or approved.
+    _open_legacy_change_info_state(transport)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw("e04400800d050000800a27a726b4d0d6c201")
+
+    assert e.value.status == Errors.SW_BAD_STATE
+
+
+def test_legacy_signing_input_script_size_is_bounded(backend):
+    """An inflated script size on a signing input is refused rather than allocated.
+
+    The size is a CompactSize the host writes, and the parser reserves that many bytes as soon as it
+    reads it. The heap is a fixed arena of a few kilobytes, so an oversized value does not come back
+    as a parse error: the allocation cannot be served and the app exits, losing the transaction in
+    progress. The sibling readers — the trusted-input parser and the output parser — already cap the
+    size; this one did not.
+
+    The same packet with its real 25-byte script is sent by every legacy signing test above, which is
+    what keeps this from passing by refusing all input scripts.
+    """
+    transport = ZcashCommandSender(backend)
+
+    for apdu in _LEGACY_TRUSTED_INPUT_ROUND:
+        sw, _ = transport.exchange_raw(apdu)
+        assert sw == 0x9000
+
+    sw, trusted_input = transport.exchange_raw("e042800009000000000400000000")
+    assert sw == 0x9000
+
+    sw, _ = transport.exchange_raw("e04400050d050000800a27a726b4d0d6c201")
+    assert sw == 0x9000
+
+    # The valid input packet, with its `19` script size swapped for a CompactSize announcing one
+    # megabyte — two orders of magnitude over the whole heap.
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw("e04480053f0138" + trusted_input.hex() + "fe00001000")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION

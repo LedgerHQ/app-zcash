@@ -34,7 +34,10 @@ def ripemd160(data: bytes) -> bytes:
 
 
 def write_varint(n: int) -> bytes:
-    if n < 0xFC:
+    # 0xFC is the last value a single byte may carry: 0xFD, 0xFE and 0xFF are the prefixes of the
+    # extended forms. The bound is `< 0xFD`, and `_write_compactsize` in zcash_verify_sign.py, which
+    # re-encodes independently to check a signature, uses that one.
+    if n < 0xFD:
         return n.to_bytes(1, byteorder="little")
 
     if n <= UINT16_MAX:
@@ -85,14 +88,25 @@ def read_uint(buf: BytesIO, bit_len: int, byteorder: Literal["big", "little"] = 
 
 
 def read_compactsize(buf, i):
+    if i >= len(buf):
+        raise ValueError(f"Can't read a CompactSize prefix at offset {i} of {len(buf)} bytes!")
+
     b = buf[i]
     if b < 0xFD:
         return b, i + 1
-    if b == 0xFD:
-        return int.from_bytes(buf[i + 1 : i + 3], "little"), i + 3
-    if b == 0xFE:
-        return int.from_bytes(buf[i + 1 : i + 5], "little"), i + 5
-    return int.from_bytes(buf[i + 1 : i + 9], "little"), i + 9
+
+    width = {0xFD: 2, 0xFE: 4}.get(b, 8)
+    start = i + 1
+    end = start + width
+
+    # Slicing past the end yields a short slice that int.from_bytes converts without complaint,
+    # and the offset would then advance as if the whole field had been read. Every later field is
+    # read from the wrong position and still produces plausible numbers, so a truncated buffer
+    # turns into wrong values rather than an error.
+    if end > len(buf):
+        raise ValueError(f"Can't read a {width}-byte CompactSize at offset {start} of {len(buf)} bytes!")
+
+    return int.from_bytes(buf[start:end], "little"), end
 
 
 def t_address_from_pubkey(pub_key: bytes) -> str:

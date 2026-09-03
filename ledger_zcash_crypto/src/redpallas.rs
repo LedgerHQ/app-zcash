@@ -12,6 +12,7 @@ use ledger_device_sdk::{
     },
 };
 use pasta_curves::pallas;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::{
     bytes::reverse_copy,
@@ -84,7 +85,10 @@ impl SpendAuthVerificationKey {
 }
 
 /// RedPallas spend-auth signing key representation.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+///
+/// Deliberately not `Copy`/`Clone`: `bytes` is a secret scalar, and an implicit copy would leave a
+/// duplicate behind that no `Drop` can reach. Nor `Debug`/`PartialEq`, so the secret cannot reach a
+/// log through `{:?}` and cannot be compared in non-constant time.
 pub struct SpendAuthSigningKey {
     bytes: [u8; 32],
     verification_key: SpendAuthVerificationKey,
@@ -93,6 +97,12 @@ pub struct SpendAuthSigningKey {
 impl SpendAuthSigningKey {
     pub fn verification_key_bytes(&self) -> [u8; 32] {
         self.verification_key.bytes
+    }
+}
+
+impl Drop for SpendAuthSigningKey {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
     }
 }
 
@@ -150,7 +160,8 @@ impl From<&BindingVerificationKey> for [u8; 32] {
 }
 
 /// RedPallas binding signing key representation.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+///
+/// Not `Copy`/`Clone`/`Debug`/`PartialEq`, for the same reasons as [`SpendAuthSigningKey`].
 pub struct BindingSigningKey {
     bytes: [u8; 32],
     verification_key: BindingVerificationKey,
@@ -163,6 +174,12 @@ impl BindingSigningKey {
 
     pub fn verification_key(&self) -> BindingVerificationKey {
         self.verification_key
+    }
+}
+
+impl Drop for BindingSigningKey {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
     }
 }
 
@@ -186,23 +203,29 @@ impl From<&BindingSigningKey> for BindingVerificationKey {
 
 /// Creates a RedPallas spend-authorizing signing key from canonical
 /// scalar bytes.
-pub fn spendauth_signing_key(scalar_bytes_le: [u8; 32]) -> Result<SpendAuthSigningKey, Error> {
-    let scalar_bytes_be = canonical_scalar_bytes_be(&scalar_bytes_le)?;
+///
+/// By reference: taken by value, the parameter is a copy of a secret scalar sitting in a plain
+/// array that no `Drop` reaches, so it would outlive the call in this frame. Callers keep the one
+/// copy that exists, and are expected to hold it in [`Zeroizing`].
+pub fn spendauth_signing_key(scalar_bytes_le: &[u8; 32]) -> Result<SpendAuthSigningKey, Error> {
+    let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
     let verification_key = spendauth_verification_key_from_scalar_be(&scalar_bytes_be)?;
 
     Ok(SpendAuthSigningKey {
-        bytes: scalar_bytes_le,
+        bytes: *scalar_bytes_le,
         verification_key,
     })
 }
 
 /// Creates a RedPallas binding signing key from canonical scalar bytes.
-pub fn binding_signing_key(scalar_bytes_le: [u8; 32]) -> Result<BindingSigningKey, Error> {
-    let scalar_bytes_be = canonical_scalar_bytes_be(&scalar_bytes_le)?;
+///
+/// By reference, for the reason given on [`spendauth_signing_key`].
+pub fn binding_signing_key(scalar_bytes_le: &[u8; 32]) -> Result<BindingSigningKey, Error> {
+    let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
     let verification_key = binding_verification_key_from_scalar_be(&scalar_bytes_be)?;
 
     Ok(BindingSigningKey {
-        bytes: scalar_bytes_le,
+        bytes: *scalar_bytes_le,
         verification_key,
     })
 }
@@ -211,12 +234,16 @@ pub fn binding_signing_key(scalar_bytes_le: [u8; 32]) -> Result<BindingSigningKe
 /// `(scalar + randomizer) mod q` with Ledger SDK big-number primitives,
 /// then deriving the corresponding verification key with Ledger SDK Pallas
 /// point multiplication.
+///
+/// By reference, for the reason given on [`spendauth_signing_key`]. The randomizer is `alpha`,
+/// which the app hands to the host, so only the scalar is secret — both are taken the same way to
+/// keep one calling convention on this pair.
 pub fn spendauth_randomized_signing_key(
-    scalar_bytes_le: [u8; 32],
-    randomizer_bytes_le: [u8; 32],
+    scalar_bytes_le: &[u8; 32],
+    randomizer_bytes_le: &[u8; 32],
 ) -> Result<SpendAuthSigningKey, Error> {
-    let scalar_bytes_be = canonical_scalar_bytes_be(&scalar_bytes_le)?;
-    let randomizer_bytes_be = canonical_scalar_bytes_be(&randomizer_bytes_le)?;
+    let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
+    let randomizer_bytes_be = canonical_scalar_bytes_be(randomizer_bytes_le)?;
 
     // Scope the Bn objects so they are freed before calling spendauth_signing_key.
     // Without this block, scalar/randomizer/order/randomized remain alive across
@@ -228,8 +255,8 @@ pub fn spendauth_randomized_signing_key(
 
         let sum = Bn::alloc(32)?;
         {
-            let scalar = Bn::alloc_init(&scalar_bytes_be)?;
-            let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
+            let scalar = Bn::alloc_init(&scalar_bytes_be[..])?;
+            let randomizer = Bn::alloc_init(&randomizer_bytes_be[..])?;
             sum.mod_add(&scalar, &randomizer, &order)?;
         }
 
@@ -242,15 +269,15 @@ pub fn spendauth_randomized_signing_key(
         let randomized = Bn::alloc(32)?;
         randomized.reduce(&sum, &order)?;
 
-        let mut randomized_bytes_be = [0u8; 32];
-        randomized.export(&mut randomized_bytes_be)?;
+        let mut randomized_bytes_be = Zeroizing::new([0u8; 32]);
+        randomized.export(&mut randomized_bytes_be[..])?;
 
-        let mut randomized_bytes_le = [0u8; 32];
+        let mut randomized_bytes_le = Zeroizing::new([0u8; 32]);
         reverse_copy(&mut randomized_bytes_le, &randomized_bytes_be);
         randomized_bytes_le
     };
 
-    spendauth_signing_key(randomized_bytes_le)
+    spendauth_signing_key(&randomized_bytes_le)
 }
 
 /// Computes only the *bytes* of the randomized RedPallas spend-auth verification
@@ -259,12 +286,15 @@ pub fn spendauth_randomized_signing_key(
 /// it skips the SDK-point → `pallas::Point` conversion that
 /// [`spendauth_randomized_signing_key`] performs (and which the caller does not
 /// need when only comparing `rk` bytes), lowering the concurrent BN footprint.
+///
+/// Both scalars are taken by reference, for the reason given on [`spendauth_signing_key`]: passing
+/// them by value copies the secret into a parameter slot that no owner wipes.
 pub fn spendauth_randomized_verification_key_bytes(
-    scalar_bytes_le: [u8; 32],
-    randomizer_bytes_le: [u8; 32],
+    scalar_bytes_le: &[u8; 32],
+    randomizer_bytes_le: &[u8; 32],
 ) -> Result<[u8; 32], Error> {
-    let scalar_bytes_be = canonical_scalar_bytes_be(&scalar_bytes_le)?;
-    let randomizer_bytes_be = canonical_scalar_bytes_be(&randomizer_bytes_le)?;
+    let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
+    let randomizer_bytes_be = canonical_scalar_bytes_be(randomizer_bytes_le)?;
 
     // Scope the Bn objects so they are freed before the point multiplication,
     // keeping the concurrent Bn count low (same rationale as
@@ -275,8 +305,8 @@ pub fn spendauth_randomized_verification_key_bytes(
 
         let sum = Bn::alloc(32)?;
         {
-            let scalar = Bn::alloc_init(&scalar_bytes_be)?;
-            let randomizer = Bn::alloc_init(&randomizer_bytes_be)?;
+            let scalar = Bn::alloc_init(&scalar_bytes_be[..])?;
+            let randomizer = Bn::alloc_init(&randomizer_bytes_be[..])?;
             sum.mod_add(&scalar, &randomizer, &order)?;
         }
 
@@ -289,8 +319,8 @@ pub fn spendauth_randomized_verification_key_bytes(
         let randomized = Bn::alloc(32)?;
         randomized.reduce(&sum, &order)?;
 
-        let mut randomized_bytes_be = [0u8; 32];
-        randomized.export(&mut randomized_bytes_be)?;
+        let mut randomized_bytes_be = Zeroizing::new([0u8; 32]);
+        randomized.export(&mut randomized_bytes_be[..])?;
         randomized_bytes_be
     };
 
@@ -346,9 +376,9 @@ fn redpallas_sign(
     let challenge_bytes_le = redpallas_hstar(&[&r_bytes, pk_bytes, msg])?;
     let challenge_bytes_be = canonical_scalar_bytes_be(&challenge_bytes_le)?;
 
-    let nonce = Bn::alloc_init(&nonce_bytes_be)?;
-    let challenge = Bn::alloc_init(&challenge_bytes_be)?;
-    let scalar = Bn::alloc_init(&scalar_bytes_be)?;
+    let nonce = Bn::alloc_init(&nonce_bytes_be[..])?;
+    let challenge = Bn::alloc_init(&challenge_bytes_be[..])?;
+    let scalar = Bn::alloc_init(&scalar_bytes_be[..])?;
     let mut order = Bn::alloc(32)?;
     CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
@@ -380,11 +410,16 @@ fn redpallas_sign(
     Ok(signature)
 }
 
-fn canonical_scalar_bytes_be(scalar_bytes_le: &[u8; 32]) -> Result<[u8; 32], Error> {
-    let mut scalar_bytes_be = [0u8; 32];
+/// Reverses a little-endian scalar into the big-endian form the SDK big-number API expects, after
+/// checking it is canonical.
+///
+/// Returns the bytes wrapped in [`Zeroizing`]: most callers pass a secret scalar (a signing key, a
+/// randomizer or a nonce), and wrapping unconditionally avoids having to decide per call site.
+fn canonical_scalar_bytes_be(scalar_bytes_le: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>, Error> {
+    let mut scalar_bytes_be = Zeroizing::new([0u8; 32]);
     reverse_copy(&mut scalar_bytes_be, scalar_bytes_le);
 
-    let scalar = Bn::alloc_init(&scalar_bytes_be)?;
+    let scalar = Bn::alloc_init(&scalar_bytes_be[..])?;
     let mut order = Bn::alloc(32)?;
     CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
@@ -443,34 +478,40 @@ fn basepoint_mul_from_scalar_be(
     Ok((encode_pallas_point_bytes(&x_be, sign), point))
 }
 
-fn redpallas_hstar(chunks: &[&[u8]]) -> Result<[u8; 32], Error> {
+/// Computes the RedPallas `H^star` hash-to-scalar.
+///
+/// The result is [`Zeroizing`] because on the nonce call the digest *is* the nonce, and recovering
+/// it from a signature's `s` would disclose the signing key.
+fn redpallas_hstar(chunks: &[&[u8]]) -> Result<Zeroizing<[u8; 32]>, Error> {
     let mut personalization = REDPALLAS_HSTAR_PERSONALIZATION;
-    let mut output = [0u8; 64];
+    let mut output = Zeroizing::new([0u8; 64]);
     let mut hasher = Blake2b_512::new_with_salt_and_perso(None, Some(&mut personalization))?;
 
     for chunk in chunks {
         hasher.update(chunk)?;
     }
-    hasher.finalize(&mut output)?;
+    hasher.finalize(&mut output[..])?;
 
     reduce_uniform_le_bytes_mod_pallas_order(&output)
 }
 
-fn reduce_uniform_le_bytes_mod_pallas_order(uniform_le: &[u8; 64]) -> Result<[u8; 32], Error> {
-    let mut uniform_be = [0u8; 64];
+fn reduce_uniform_le_bytes_mod_pallas_order(
+    uniform_le: &[u8; 64],
+) -> Result<Zeroizing<[u8; 32]>, Error> {
+    let mut uniform_be = Zeroizing::new([0u8; 64]);
     reverse_copy(&mut uniform_be, uniform_le);
 
-    let wide = Bn::alloc_init(&uniform_be)?;
+    let wide = Bn::alloc_init(&uniform_be[..])?;
     let mut order = Bn::alloc(32)?;
     CurvesId::Pallas.domain_parameter_bn(CurveDomainParam::Order, &mut order)?;
 
     let reduced = Bn::alloc(32)?;
     reduced.reduce(&wide, &order)?;
 
-    let mut reduced_bytes_be = [0u8; 32];
-    reduced.export(&mut reduced_bytes_be)?;
+    let mut reduced_bytes_be = Zeroizing::new([0u8; 32]);
+    reduced.export(&mut reduced_bytes_be[..])?;
 
-    let mut reduced_bytes_le = [0u8; 32];
+    let mut reduced_bytes_le = Zeroizing::new([0u8; 32]);
     reverse_copy(&mut reduced_bytes_le, &reduced_bytes_be);
 
     Ok(reduced_bytes_le)
@@ -589,8 +630,9 @@ mod tests {
         name: "randomize_with_zero_is_identity",
         f: || {
             let scalar = scalar_from_u8(9);
-            let randomized = spendauth_randomized_signing_key(scalar, [0u8; 32]).map_err(|_| ())?;
-            let plain = spendauth_signing_key(scalar).map_err(|_| ())?;
+            let randomized =
+                spendauth_randomized_signing_key(&scalar, &[0u8; 32]).map_err(|_| ())?;
+            let plain = spendauth_signing_key(&scalar).map_err(|_| ())?;
             if !signing_keys_eq(&randomized, &plain) {
                 return Err(());
             }
@@ -606,9 +648,10 @@ mod tests {
         name: "randomize_matches_scalar_sum",
         f: || {
             // 5 + 7 = 12, all far below the field order => (a + r) mod q == a + r.
-            let randomized = spendauth_randomized_signing_key(scalar_from_u8(5), scalar_from_u8(7))
-                .map_err(|_| ())?;
-            let expected = spendauth_signing_key(scalar_from_u8(12)).map_err(|_| ())?;
+            let randomized =
+                spendauth_randomized_signing_key(&scalar_from_u8(5), &scalar_from_u8(7))
+                    .map_err(|_| ())?;
+            let expected = spendauth_signing_key(&scalar_from_u8(12)).map_err(|_| ())?;
             if !signing_keys_eq(&randomized, &expected) {
                 return Err(());
             }
@@ -629,7 +672,7 @@ mod tests {
         f: || {
             let scalar = wide_canonical_scalar(0x11);
             let randomizer = wide_canonical_scalar(0x42);
-            spendauth_randomized_signing_key(scalar, randomizer).map_err(|_| ())?;
+            spendauth_randomized_signing_key(&scalar, &randomizer).map_err(|_| ())?;
             Ok(())
         },
     };
@@ -650,8 +693,8 @@ mod tests {
             let scalar: [u8; 32] = (pallas::Scalar::ZERO - pallas::Scalar::from(5u64)).to_repr();
             let randomizer = scalar_from_u8(10);
             let randomized =
-                spendauth_randomized_signing_key(scalar, randomizer).map_err(|_| ())?;
-            let expected = spendauth_signing_key(scalar_from_u8(5)).map_err(|_| ())?;
+                spendauth_randomized_signing_key(&scalar, &randomizer).map_err(|_| ())?;
+            let expected = spendauth_signing_key(&scalar_from_u8(5)).map_err(|_| ())?;
             if !signing_keys_eq(&randomized, &expected) {
                 return Err(());
             }
@@ -671,9 +714,9 @@ mod tests {
         f: || {
             let scalar = wide_canonical_scalar(0x11);
             let randomizer = wide_canonical_scalar(0x42);
-            let light =
-                spendauth_randomized_verification_key_bytes(scalar, randomizer).map_err(|_| ())?;
-            let full = spendauth_randomized_signing_key(scalar, randomizer).map_err(|_| ())?;
+            let light = spendauth_randomized_verification_key_bytes(&scalar, &randomizer)
+                .map_err(|_| ())?;
+            let full = spendauth_randomized_signing_key(&scalar, &randomizer).map_err(|_| ())?;
             if light != full.verification_key_bytes() {
                 return Err(());
             }
@@ -692,9 +735,9 @@ mod tests {
         f: || {
             use ff::{Field, PrimeField};
             let scalar: [u8; 32] = (pallas::Scalar::ZERO - pallas::Scalar::from(5u64)).to_repr();
-            let light = spendauth_randomized_verification_key_bytes(scalar, scalar_from_u8(10))
+            let light = spendauth_randomized_verification_key_bytes(&scalar, &scalar_from_u8(10))
                 .map_err(|_| ())?;
-            let expected = spendauth_signing_key(scalar_from_u8(5)).map_err(|_| ())?;
+            let expected = spendauth_signing_key(&scalar_from_u8(5)).map_err(|_| ())?;
             if light != expected.verification_key_bytes() {
                 return Err(());
             }
@@ -714,7 +757,8 @@ mod tests {
         name: "sign_produces_canonical_s",
         f: || {
             use ff::PrimeField;
-            let signing_key = spendauth_signing_key(wide_canonical_scalar(0x33)).map_err(|_| ())?;
+            let signing_key =
+                spendauth_signing_key(&wide_canonical_scalar(0x33)).map_err(|_| ())?;
             let random = [0x24u8; 80];
             for msg_fill in [0x01u8, 0x5a, 0xa5, 0xfe] {
                 let sig = spendauth_sign(&signing_key, &random, &[msg_fill; 32]).map_err(|_| ())?;

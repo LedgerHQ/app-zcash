@@ -1,5 +1,6 @@
 # pylint: disable=C0301
 
+import hashlib
 import struct
 
 import pytest
@@ -20,6 +21,7 @@ from application_client.zcash_command_sender import (
     ZcashCommandSender,
 )
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
+from application_client.zcash_utils import ripemd160
 from application_client.zcash_verify_sign import (
     check_tx_v5_signature_validity,
 )
@@ -130,9 +132,7 @@ def _assert_pczt_orchard_sign_digest(
     client = ZcashCommandSender(backend)
     transparent_inputs = [] if transparent_input is None else [transparent_input]
     input_amounts = [txin.value for txin in transparent_inputs]
-    expected_auth_sigs = (
-        [expected_auth_sigs] if isinstance(expected_auth_sigs, bytes) else expected_auth_sigs
-    )
+    expected_auth_sigs = [expected_auth_sigs] if isinstance(expected_auth_sigs, bytes) else expected_auth_sigs
     if prevout_tx is not None:
         # Temporary RNG alignment with the legacy HASH_SIGN flow.
         _ = client.get_trusted_input(prevout_tx, 0).data
@@ -157,18 +157,13 @@ def _assert_pczt_orchard_sign_digest(
         orchard_bundle,
     )
     transparent_sigs = [
-        client.pczt_sign_transparent(input_index=input_index).data
-        for input_index, _ in enumerate(transparent_inputs)
+        client.pczt_sign_transparent(input_index=input_index).data for input_index, _ in enumerate(transparent_inputs)
     ]
     auth_sigs = _sign_all_orchard_actions(client, orchard_bundle)
 
-    assert [sig.hex() for sig in auth_sigs] == [
-        sig.hex() for sig in expected_auth_sigs
-    ], [sig.hex() for sig in auth_sigs]
+    assert [sig.hex() for sig in auth_sigs] == [sig.hex() for sig in expected_auth_sigs], [sig.hex() for sig in auth_sigs]
 
-    for input_index, (_txin, transparent_sig) in enumerate(
-        zip(transparent_inputs, transparent_sigs, strict=True)
-    ):
+    for input_index, (_txin, transparent_sig) in enumerate(zip(transparent_inputs, transparent_sigs, strict=True)):
         assert check_tx_v5_signature_validity(
             transparent_public_keys[input_index],
             transparent_sig[:-1],
@@ -237,6 +232,109 @@ def test_pczt_sign_tx_v5_simple(
         input_index=0,
         input_amounts=[TRANSPARENT_INPUT.value],
     )
+
+
+def test_legacy_round_after_a_completed_pczt_is_rejected(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A legacy round must not resume the state a finished PCZT left behind.
+
+    Completing a PCZT marks the transaction finished and resets the PCZT parser, but its outputs,
+    hashers and the legacy parsers stay in place. The guard the legacy handlers use against
+    cross-protocol mixing is `pczt_parser.is_session_active()`, which reports nothing once the
+    session has run to completion, so a HASH_INPUT_START that does not reset the context was
+    accepted: the legacy output parser would append its outputs to those the PCZT had already
+    displayed, and the next review would list outputs the new signature does not cover.
+
+    The transaction signed here is the one from `test_pczt_sign_tx_v5_simple`, whose review
+    snapshots it therefore shares. Starting a fresh legacy transaction with P1_FIRST stays
+    available, and the tests above cover it.
+    """
+    PCZT_GLOBAL = PcztGlobal()
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    TRANSPARENT_OUTPUT = PcztTransparentOutput(
+        value=81628565,
+        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=[TRANSPARENT_OUTPUT],
+    ):
+        _review_approve(scenario_navigator, "test_sign_tx_v5_simple")
+
+    # The single input is now signed, so the transaction is finished. Completion puts the transient
+    # review-status screen up, and an APDU sent while it is showing times out, so wait for the app
+    # to settle back on its home screen first.
+    client.pczt_sign_transparent(input_index=0)
+    backend.wait_for_home_screen()
+
+    # HASH_INPUT_START with P1_NEXT: the shape that continues a round instead of starting one.
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.exchange_raw("e04480050400000000")
+
+    assert e.value.status == Errors.SW_BAD_STATE
+
+
+def test_trusted_input_continuation_after_a_completed_pczt_is_rejected(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The same guard, reached through GET_TRUSTED_INPUT instead of the signing instruction.
+
+    `handler_get_trusted_input` refuses a continuation once the transaction is finished, and the
+    test above only exercises the sibling guard in the signing handler. Both entry points parse
+    into the same hashers, so a continuation accepted here would extend a finished transaction's
+    digest just as one accepted there would — covering only one of the two would leave the guard
+    that stands in front of the trusted-input parser asserted by nothing.
+
+    Shares the review snapshots of `test_sign_tx_v5_simple`, whose transaction this signs. A first
+    packet, `P1_FIRST`, legitimately starts a fresh round and resets the context; that path stays
+    open and `test_trusted_input_cmd.py` covers it.
+    """
+    PCZT_GLOBAL = PcztGlobal()
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    TRANSPARENT_OUTPUT = PcztTransparentOutput(
+        value=81628565,
+        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=[TRANSPARENT_OUTPUT],
+    ):
+        _review_approve(scenario_navigator, "test_sign_tx_v5_simple")
+
+    client.pczt_sign_transparent(input_index=0)
+    backend.wait_for_home_screen()
+
+    # GET_TRUSTED_INPUT with P1 = 0x80: a continuation, carrying the one-byte output count that a
+    # legitimate continuation would send next.
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.exchange_raw("e04280000102")
+
+    assert e.value.status == Errors.SW_BAD_STATE
 
 
 def test_pczt_sign_tx_v5_p2sh_output(
@@ -366,6 +464,66 @@ def test_pczt_sign_tx_v5_change(
         input_index=0,
         input_amounts=[TRANSPARENT_INPUT.value],
     )
+
+
+def test_pczt_transparent_change_in_another_account_yields_no_signature(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A transparent change output in another account than the input yields no signature.
+
+    Change is removed from the review, so an output the host declares as change of a foreign account
+    leaves nothing on screen naming where that value goes. The transparent outputs are parsed before
+    any Orchard bundle, so the account being spent is not always known then: the refusal lands at
+    signing, where both are, and before any signature exists.
+    """
+    PCZT_GLOBAL = PcztGlobal()
+    PATH = "m/44'/133'/0'/0/0"
+    # One account over. Same seed, so the device does own the address — which is precisely what lets
+    # the output pass for change and disappear from the review.
+    FOREIGN_CHANGE_PATH = "m/44'/133'/1'/1/0"
+
+    client = ZcashCommandSender(backend)
+
+    foreign_pubkey = client._compressed_pubkey_from_path(FOREIGN_CHANGE_PATH)
+    foreign_pk_hash = ripemd160(hashlib.sha256(foreign_pubkey).digest())
+
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path=PATH,
+    )
+    RECIPIENT_OUTPUT = PcztTransparentOutput(
+        value=40000000,
+        script_pubkey=bytes.fromhex("76a9147d352e6e9a926965c677327443d86cb0bdf8b1e988ac"),
+    )
+    CHANGE_OUTPUT = PcztTransparentOutput(
+        value=41622465,
+        script_pubkey=bytes.fromhex("76a914") + foreign_pk_hash + bytes.fromhex("88ac"),
+        signing_path=FOREIGN_CHANGE_PATH,
+    )
+    TRANSPARENT_OUTPUTS = [RECIPIENT_OUTPUT, CHANGE_OUTPUT]
+
+    # The review shows the recipient alone: the foreign-account output is hidden, so the user has
+    # nothing to refuse on. Approving is the attacker's premise, not the defence.
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=TRANSPARENT_OUTPUTS,
+    ):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_transparent_change_in_another_account_yields_no_signature",
+        )
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        client.pczt_sign_transparent(input_index=0)
+
+    assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+    assert not error.value.data
 
 
 def test_pczt_sign_tx_v5_change_hash_not_sticky(
@@ -682,10 +840,12 @@ def test_pczt_sign_tx_v5_transparent_input_no_replay(
 def test_pczt_sign_tx_orchard_action_count_limit(
     backend,
 ):
-    # Regression test: the Orchard action count is bounded by MAX_ORCHARD_ACTIONS (10),
-    # mirroring the transparent input/output limits. A bundle declaring more actions must
-    # be rejected at the action-count check, before any per-action allocation grows the
-    # signing-records vector (heap-exhaustion guard on a ~24 KB-RAM device).
+    # Regression test: the Orchard action count is bounded by
+    # MAX_PCZT_ORCHARD_ACTIONS_NUMBER. A bundle declaring more actions must be rejected at
+    # the action-count check, before any per-action allocation grows the signing-records
+    # vector (heap-exhaustion guard on a ~24 KB-RAM device). The bound is a measured
+    # capacity, not a round number — see tests/standalone/test_pczt_action_capacity.py,
+    # which drives the counts up to it and past it.
     PCZT_GLOBAL = PcztGlobal()
     TRANSPARENT_INPUT = PcztTransparentInput(
         prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
@@ -719,9 +879,9 @@ def test_pczt_sign_tx_orchard_action_count_limit(
             rcv=bytes(32),
         )
 
-    # MAX_PCZT_ORCHARD_ACTIONS_NUMBER is 10; declare one more to trip the bound.
+    # MAX_PCZT_ORCHARD_ACTIONS_NUMBER is 32; declare one more to trip the bound.
     too_many_actions = PcztOrchardBundle(
-        actions=[_dummy_orchard_action() for _ in range(11)],
+        actions=[_dummy_orchard_action() for _ in range(33)],
         flags=0,
         value_balance=0,
         anchor=bytes(32),
@@ -1240,6 +1400,77 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_with_memo(
     )
 
 
+def test_pczt_memo_is_labelled_with_its_own_output(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A memo on the second of two outputs must name that output, not memos in general.
+
+    The first output carries none, so it contributes no memo field. A label naming only the kind
+    therefore leaves the memo's position among the fields identifying nothing, and a host that moves
+    a memo from one recipient to another draws the very same review. The captures are the assertion
+    here: they record that the field reads as belonging to output #2.
+    """
+    TX_PREVOUT_BYTES = bytes.fromhex(
+        "050000800a27a726b4d0d6c20000000000000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff01a0860100000000001976a91419650e98310b2cc27f00a9d0c4580386553da2e488ac000000"
+    )
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"),
+        prevout_index=0,
+        value=100000,
+        script_pubkey=bytes.fromhex("76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"),
+        sequence=bytes.fromhex("ffffffff"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    # Output #1: transparent, memoless. It is what makes the label meaningful — with a single
+    # memo-bearing output the index could not be wrong.
+    TRANSPARENT_OUTPUTS = [
+        PcztTransparentOutput(
+            value=5000,
+            script_pubkey=bytes.fromhex("76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"),
+        )
+    ]
+    # Output #2: the shielded output of the memo fixture above, unchanged — its ciphertexts decrypt
+    # through the external OVK to the ASCII memo "PCZT Orchard memo test".
+    ORCHARD_ACTION = {
+        "cv_net": "fd87b590de6e73dbf0372fc4e80e4c9a44c6f9b196fd296165276b15f38ca7be",
+        "nullifier": "781c4faf960206510fdc72739267fa193d9e012dbc68998d35539837e520ae2a",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0100000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1500000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "8fa021d7ce7e10ac828106e295d0daaec54ca3101f22054e90a4bb9b61a38000",
+        "ephemeral_key": "7895cdaf491fc7b6754bbe1339eab4f4d142e59fff9cf8d3820217f1e940801b",
+        "enc_ciphertext": "ffebe7c7d7f8e08fd0baffb71f54ca6fad3b8a1b1702be187bcc24f1874a48bc3013c44c8d0aaadfbdbebeb31c3eda96e539d9853c28766cee658408606d473c76b102d20e11eb6a69bc90a1cc543f49d32d30b47241d1632e6dcba30492b6a7bdbaafb9f9dd1e68c2ac12d17b485aed2fb8ba6162f4ec70f8b3c045c4db74fd7861cfb6ce2dc74c2a4219fa429332ed86e891aeca5cf2dfd0517f99fee0f0ddcc5a1a2729bac0626f895a1b572fa8eddaf3b72d2cbb6c1681aeb865740d439b7c90334512faa315207d540eb411dfe8d38b3f6673cb65e12816f42bee50abb966437fa386c34ac54611c86cc093ddee1cfe098903f3be4a8de20de1c48fdbd8ca8a9900eeee734dfff526c39ad353a81de786deb8278bdc870b9d65cc99422e54d0bf7e8e0fcf88a0a701ee59195aaa130b8950bf39bc598520f913af4bf770dfcf37e1ed4d19549759e1642945affbe385eb80497b9652e33a5366667b4fd9c212b061c6c2c47d3f289dee39fea4eba73faf6c91428ca0b97d2be3feb7c0e1ea5ee0250aed9a96d7fe9e91c525f46debe71ddbbc0f8d05576ea27a2249f5b9a341561772b6b480404d5e839af42a56d71f20ad5538214b9925f7931d926017353759398d25a5a2611cf243ff44f732cdc57312b7dfe386118a1e9377f36d7ee312be7ce3c0efa96228a83653a607e00d556f8e04defbb39a2179bb2ed8a0389bb157c75913236e6f9ddf21dcc7108b804c1fa194b2603058e03da7ab3f6ee5dacb4fc3769879d72fc21f68116f0af30414236191a3d962f29d7edab27b8e9ebd96e21f",  # noqa: E501
+        "out_ciphertext": "9964518f9947818c4b75d0aad44fd05bb75a2ed34ff2a915c080e829a150cd8491272ea43bf99db6fc677560484f7667c8ee7307c1acc44873068ef0475b940a62834f31fad9a486f183a5e2d030a01b",  # noqa: E501
+        "rcv": "3d00000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2900000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 0,
+        "value": 90000,
+        "recipient": "4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
+    }
+    ORCHARD_BUNDLE = PcztOrchardBundle(
+        actions=[_strict_orchard_action(ORCHARD_ACTION)],
+        flags=3,
+        value_balance=-90000,
+        anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
+    )
+    PCZT_GLOBAL = PcztGlobal()
+    # Every Orchard spend is dummy padding, signed host-side.
+    EXPECTED_AUTH_SIG: list[bytes] = []
+
+    _assert_pczt_orchard_sign_digest(
+        backend,
+        scenario_navigator,
+        "test_pczt_memo_is_labelled_with_its_own_output",
+        PCZT_GLOBAL,
+        EXPECTED_AUTH_SIG,
+        TRANSPARENT_OUTPUTS,
+        ORCHARD_BUNDLE,
+        transparent_input=TRANSPARENT_INPUT,
+        prevout_tx=TX_PREVOUT_BYTES,
+    )
+
+
 def test_pczt_sign_tx_v5_transparent_to_orchard_with_change(
     backend,
     scenario_navigator: NavigateWithScenario,
@@ -1707,7 +1938,9 @@ def test_pczt_sign_tx_v5_orchard_to_orchard_with_change(
     # Action 1 is the dummy change spend (spend_value == 0), signed host-side;
     # the device produces no spend-auth signature for it.
     EXPECTED_AUTH_SIG = [
-        bytes.fromhex("8e02f26bee1e1a0635692338689b25753059fcc73ba63f8742cd6fcb6a2f972966b8f0f4243826a4a5d413e64d8fdabde9e242c2ac0e4f4bd7ef35b297d6d138"),
+        bytes.fromhex(
+            "8e02f26bee1e1a0635692338689b25753059fcc73ba63f8742cd6fcb6a2f972966b8f0f4243826a4a5d413e64d8fdabde9e242c2ac0e4f4bd7ef35b297d6d138"
+        ),
     ]
 
     _assert_pczt_orchard_sign_digest(
@@ -1798,9 +2031,7 @@ def _apdu(ins: int, p1: int, p2: int, data: bytes) -> str:
 _V5_TX_VERSION_OVERWINTERED = 0x80000005
 _V5_VERSION_GROUP_ID = 0x26A7270A
 _NU6_BRANCH_ID = 0xC8E71055
-_LEGACY_V5_HEADER_NO_INPUTS = struct.pack(
-    "<IIIB", _V5_TX_VERSION_OVERWINTERED, _V5_VERSION_GROUP_ID, _NU6_BRANCH_ID, 0
-)
+_LEGACY_V5_HEADER_NO_INPUTS = struct.pack("<IIIB", _V5_TX_VERSION_OVERWINTERED, _V5_VERSION_GROUP_ID, _NU6_BRANCH_ID, 0)
 
 # HASH_SIGN's extra header data: an unused path size and auth length, then locktime, sighash type
 # and expiry height, all big-endian.
@@ -1817,9 +2048,7 @@ _LEGACY_NON_RESETTING_APDUS = {
         P2.P2_HASH_INPUT_START_SAPLING,
         _LEGACY_V5_HEADER_NO_INPUTS,
     ),
-    "get_trusted_input_next": _apdu(
-        InsType.GET_TRUSTED_INPUT, P1.P1_NEXT, P2.P2_NONE, _LEGACY_V5_HEADER_NO_INPUTS
-    ),
+    "get_trusted_input_next": _apdu(InsType.GET_TRUSTED_INPUT, P1.P1_NEXT, P2.P2_NONE, _LEGACY_V5_HEADER_NO_INPUTS),
 }
 
 
@@ -1865,3 +2094,95 @@ def test_pczt_review_does_not_unlock_legacy_signing(
     with pytest.raises(ExceptionRAPDU) as e:
         client.exchange_raw(_LEGACY_NON_RESETTING_APDUS[apdu_name])
     assert e.value.status == Errors.SW_BAD_STATE
+
+
+def test_pczt_hidden_shielded_change_in_another_account_yields_no_signature(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A hidden shielded change output must belong to the account the transaction spends from.
+
+    The transparent-change sibling
+    (`test_pczt_change_in_another_account_yields_no_signature`) asserts that each signing handler
+    calls `check_change_returns_to_signing_account`. It cannot reach this case: the guard only
+    compares when a change account was recorded, and only a transparent change output used to
+    record one. A shielded output decrypted under the internal IVK is kept off the review just the
+    same, and the IVK follows the path the host declared for the action — so the host chose which
+    account the hidden value landed in, while the screen showed the external recipient and a
+    correct fee.
+
+    Here the shielded change belongs to account 0 and the transparent input being signed to
+    account 1. The device must release no signature.
+    """
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=100000,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        # Account 1, while the shielded change below returns to account 0.
+        signing_path="m/44'/133'/1'/0/2",
+    )
+    # External recipient, so the shielded change stays off the review instead of being revealed as
+    # a self-transfer.
+    TRANSPARENT_OUTPUTS = [
+        PcztTransparentOutput(
+            value=90000,
+            script_pubkey=bytes.fromhex("76a914424242424242424242424242424242424242424288ac"),
+        ),
+    ]
+    CHANGE_ORCHARD_ACTION = {
+        "cv_net": "33ef48fc34e684c82ff9ee9d88cdc9761bb45fd3361ae04b5da2328f712d2703",
+        "nullifier": "808981a1e1e1116c5d73810a3c09a2ab8051fc9fe192470866e5853004aaaf13",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0300000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1700000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "85b20955b27f6e8a2ad94f5a4926ac434ef441349c778ad549a22c4ea7141630",
+        "ephemeral_key": "1590a0d7151f0d62b21fc28978222f5efb0b9ea0b0dff95a6c2e210f44e226bd",
+        "enc_ciphertext": "07a29fbda6c36bafeb6b2b3dce86af1662d0775082e76122de2c84216ec97e5c850767b7dc136af4dd2e36ef19200e60a99dfcda4e87f912c0d4f81cd471aa3521fba18b38755489c71576e4aa2707b7ee93be1e8e7442fdbaf76861df11c0d3b92626570cb1cf2b4c863a85e473523c2a20d2b82e90b6fa4b03f6dbceee469819ce888ffabbd87b54b081bd2ccc4292a3494a454b9fc5496b561e78158a59e0311c8125574a43f8d3d82fc080fbf107561bda0b5eead7ed896ec5c58449354bb4feb2e9e4c9e04e75e5bcf933a9e00ccbc69ac1aa5d6510aca854fb4cb838027f301bfee6197e2b884ddc66c673d425048408f36c7c932c50fc889cee6a6d94b78ecb4872e7568e58d30d9bb9e424ee883abc437f5f6336e0c5a2a72beebcdc38a75e62ffb1c1c9f059a65b7cd3c04d985b6d611bba777e6378656170e60439b941e2b6c2fd4a25cc6f142593cee329880aea4cb0e7a8d3f885aafd1d1b79016636757628dafcacddddc861381123bdb2705823d79c1008c7e13bed7bd7b0f6fbd2567e691f94acc13b62be4509a907e89bbae9f2e50af92434f5d7f63ad183b8d4f7b328303f55220a0e364212ede963a0bdb753b7849ad9d2692aceec476dcda50c35b4c68fd48854626bf2fdd1b80480132f0dc57a4d84aa84a34306b8ff683e4602b52fa1cc254174f4aba9fb6b0a28323880fa23d7144a124192954e2ae8c95d79b248f4f855f2e1d7c9cff0eda6f81ade2d8204a186a8ea6b8910badd07a2ddff0d830cb6501b768bf827088a951aeab13bb7c006430a2aba8ffc6f236abaa9c9",  # noqa: E501
+        "out_ciphertext": "69368b3bc476a79d8c7783b2f8c73fb738016bb7b0345f300920855807168ae39991f2f15ecb065a9d883bafa431e2ca44fd42e064fd08b158bd1576d9be47afa2818de7a9d4dd000421a39e72d4bb32",  # noqa: E501
+        "rcv": "3f00000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2b00000000000000000000000000000000000000000000000000000000000000",
+        "recipient": "ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a",
+        "spend_value": 0,
+        "value": 5000,
+    }
+    ORCHARD_BUNDLE = PcztOrchardBundle(
+        actions=[_strict_orchard_action(CHANGE_ORCHARD_ACTION)],
+        flags=3,
+        value_balance=-5000,
+        anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
+    )
+
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PcztGlobal(),
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=TRANSPARENT_OUTPUTS,
+        orchard_bundle=ORCHARD_BUNDLE,
+    ):
+        # Walked without comparing screens: what this test asserts is that no signature leaves the
+        # device, and the review it walks past is the same shape the transparent-to-Orchard tests
+        # already pin against golden snapshots. A snapshot set of its own, on five devices, would
+        # guard nothing this test is about.
+        scenario = NavigationScenarioData(
+            scenario_navigator.device,
+            scenario_navigator.backend,
+            UseCase.TX_REVIEW,
+            True,
+        )
+        if scenario_navigator.device.touchable:
+            scenario.validation = scenario.validation[:-1]
+        scenario_navigator.navigator.navigate_until_text(
+            navigate_instruction=scenario.navigation,
+            validation_instructions=scenario.validation,
+            text=scenario.pattern,
+            screen_change_after_last_instruction=False,
+        )
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        client.pczt_sign_transparent(input_index=0)
+
+    assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+    assert not error.value.data

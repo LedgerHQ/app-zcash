@@ -49,6 +49,9 @@ def review_approve_ufvk(self):
 # In this test we check that the GET_PUBLIC_KEY works in non-confirmation mode
 def test_get_public_key_no_confirm(backend):
     for path in [
+        # The prefix alone, which is what Ledger Live asks for to build the account xpub. The
+        # prefix check must keep accepting it: it is the shortest path the app answers.
+        "m/44'/133'",
         "m/44'/133'/0'/0/0",
         "m/44'/133'/0/0/0",
         "m/44'/133'/911'/0/0",
@@ -177,6 +180,44 @@ def test_get_ufvk_account_mismatch(backend):
     assert len(e.value.data) == 0
 
 
+# The transparent half of a UFVK is derived from the path the host supplies, so its prefix carries
+# the same requirement as every other export path: compared with the hardening bit included. Read
+# with the bit masked off, the first three below are the app's own `44'/133'` prefix, yet they name
+# subtrees the OS will not derive — and it refuses by taking the app down rather than by a status
+# word, so this check is the only one that can produce an answer at all.
+@pytest.mark.parametrize(
+    "transparent_path",
+    [
+        "m/44/133'/0'",
+        "m/44'/133/0'",
+        "m/44/133/0'",
+        "m/32'/133'/0'",  # shielded purpose where the transparent tree is required
+        "m/44'/133'/0",  # account not hardened
+        "m/44'/133'/0'/0",  # deeper than the account path this mode accepts
+    ],
+    ids=[
+        "unhardened_purpose",
+        "unhardened_coin_type",
+        "unhardened_prefix",
+        "shielded_purpose",
+        "unhardened_account",
+        "too_deep",
+    ],
+)
+def test_get_ufvk_rejects_out_of_prefix_transparent_path(backend, transparent_path):
+    with pytest.raises(ExceptionRAPDU) as e:
+        backend.exchange(
+            cla=CLA,
+            ins=InsType.GET_VK,
+            p1=P1.P1_GET_VK_FIRST,
+            p2=GetVkMode.UFVK,
+            data=pack_derivation_path("m/32'/133'/0'") + pack_derivation_path(transparent_path),
+        )
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert len(e.value.data) == 0
+
+
 # A path outside the app's two declared prefixes must come back as a status word. Leaving it to the
 # OS is not equivalent: the derivation syscall aborts the app rather than answering, and the caller
 # cannot tell a refusal from a crash.
@@ -187,8 +228,22 @@ def test_get_ufvk_account_mismatch(backend):
         "m/44'/0'/0'/0/0",  # Bitcoin coin type
         "m/49'/133'/0'/0/0",  # right coin type, purpose the app does not declare
         "m/133'/0'",  # coin type in the purpose position
+        # The declared prefixes are hardened. Read with the hardening bit masked off these are the
+        # app's own prefixes, yet they name a different subtree the OS will not derive — and it
+        # refuses by taking the app down, so the check has to catch them first.
+        "m/44/133'/0'/0/0",
+        "m/44'/133/0'/0/0",
+        "m/32/133'/0'",
     ],
-    ids=["ethereum", "bitcoin", "undeclared_purpose", "coin_type_as_purpose"],
+    ids=[
+        "ethereum",
+        "bitcoin",
+        "undeclared_purpose",
+        "coin_type_as_purpose",
+        "unhardened_purpose",
+        "unhardened_coin_type",
+        "unhardened_zip32_purpose",
+    ],
 )
 def test_get_public_key_rejects_out_of_prefix_path(backend, path):
     client = ZcashCommandSender(backend)
@@ -276,6 +331,31 @@ def test_get_orchard_fvk_confirm_refused(backend, scenario_navigator):
     assert len(e.value.data) == 0
 
 
+def test_orchard_derivations_are_capped(backend):
+    """The no-display address endpoint derives an Orchard key before any user action can intervene.
+
+    The Secure Element does not reclaim what that derivation consumes until the next power cycle, so
+    a host repeating the request drains the resource and every later derivation fails — including
+    the ones a transaction needs. The budget turns that open drain into a bounded one that reports
+    itself with its own status word rather than with the technical error an exhausted syscall
+    returns.
+
+    Fifty derivations must still go through: a session of normal use stays far below that, and the
+    endpoint would be unusable if the ceiling bit earlier.
+    """
+    client = ZcashCommandSender(backend)
+    path = "m/32'/133'/0'"
+
+    for _ in range(50):
+        client.get_shielded_address(path=path, mode=GetShieldedAddressMode.ORCHARD_RAW_ADDRESS)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.get_shielded_address(path=path, mode=GetShieldedAddressMode.ORCHARD_RAW_ADDRESS)
+
+    assert e.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    assert len(e.value.data) == 0
+
+
 def test_get_orchard_address_raw(backend):
     REF_ORCHARD_ADDRESS_RAW_ACC_0 = bytes.fromhex(
         "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02"
@@ -353,6 +433,27 @@ def test_get_orchard_uaddress_confirm_refused(backend, scenario_navigator):
             scenario_navigator.address_review_reject()
 
     assert e.value.status == Errors.SW_DENY
+    assert len(e.value.data) == 0
+
+
+def test_get_orchard_raw_address_refuses_a_display_request(backend):
+    """A raw receiver cannot be verified on screen, so asking for its verification must not succeed.
+
+    The dispatcher accepts the display P1 for both address modes, but only the unified one has
+    something a user can read back against their wallet. Asked to display a raw receiver, the
+    handler used to return it with no review at all: the host set the bit that requests the user's
+    confirmation and received the derived value without the user ever being asked.
+    """
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.get_shielded_address(
+            path="m/32'/133'/0'",
+            mode=GetShieldedAddressMode.ORCHARD_RAW_ADDRESS,
+            display=True,
+        )
+
+    assert e.value.status == Errors.SW_WRONG_P1P2
     assert len(e.value.data) == 0
 
 

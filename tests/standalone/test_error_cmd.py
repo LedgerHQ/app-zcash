@@ -1,5 +1,11 @@
 import pytest
-from application_client.zcash_command_sender import CLA, P1, Errors, InsType
+from application_client.zcash_command_sender import (
+    CLA,
+    MAX_PCZT_TRANSPARENT_INPUTS,
+    P1,
+    Errors,
+    InsType,
+)
 from ragger.error import ExceptionRAPDU
 
 
@@ -37,7 +43,12 @@ def test_wrong_p1p2(backend):
         backend.exchange(cla=CLA, ins=InsType.GET_VERSION, p1=P1.P1_FIRST, p2=0x02)
     assert e.value.status == Errors.SW_WRONG_P1P2
     with pytest.raises(ExceptionRAPDU) as e:
-        backend.exchange(cla=CLA, ins=InsType.PCZT_SIGN_TRANSPARENT, p1=P1.P1_FIRST, p2=10)
+        backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_SIGN_TRANSPARENT,
+            p1=P1.P1_FIRST,
+            p2=MAX_PCZT_TRANSPARENT_INPUTS,
+        )
     assert e.value.status == Errors.SW_WRONG_P1P2
 
 

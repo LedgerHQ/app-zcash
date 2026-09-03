@@ -130,7 +130,10 @@ class ZcashTests(ExchangeTestRunner):
 
         # Send TX
         # Start hashing TX
-        with client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input_bytes]):
+        client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input_bytes])
+
+        # No review in swap mode: the header is checked against the Exchange parameters
+        with client.hash_sign_header(locktime=LOCKTIME, expiry=EXPIRY, sighash_type=SIGHASH_TYPE):
             pass
 
         # Finalize and sign
@@ -202,6 +205,134 @@ class ZcashPcztTests(ZcashTests):
             input_value=send_amount + fees,
         )
 
+    def perform_final_tx_restart_after_partial_signature(self, destination, send_amount, fees, memo):
+        """Start a second transaction after one signature has already been returned.
+
+        Two transparent inputs leave the app waiting for the second signature once the first has
+        been handed back, which is the only window where the swap session still serves APDUs with a
+        signature already out. The PCZT header resets the transaction state but deliberately keeps
+        `swap_params`, so without a guard the cross-check would clear a second transaction on the
+        strength of the same Exchange trade and the user would pay the approved amount twice, out of
+        different UTXOs.
+
+        The second transaction repeats the shape of the first on purpose: what has to be refused is
+        a second transaction at all, whatever it pays.
+        """
+        client = ZcashCommandSender(self.backend)
+
+        total_value = send_amount + fees
+        first_value = total_value // 2
+        transparent_inputs = [
+            PcztTransparentInput(
+                prevout_txid=PCZT_PREVOUT_TXID,
+                prevout_index=index,
+                value=value,
+                script_pubkey=FORGED_UTXO_SCRIPT_PUBKEY,
+                sequence=PCZT_SEQUENCE,
+                signing_path=ZCASH_PATH,
+            )
+            for index, value in enumerate((first_value, total_value - first_value))
+        ]
+        transparent_outputs = [PcztTransparentOutput(value=send_amount, script_pubkey=script_for_destination(destination))]
+
+        def send() -> None:
+            with client.send_pczt(
+                pczt_global=PcztGlobal(),
+                transparent_inputs=transparent_inputs,
+                transparent_outputs=transparent_outputs,
+            ):
+                # No display to navigate: in swap mode the Exchange cross-check stands in for the
+                # review screen.
+                pass
+
+        send()
+
+        # Sign the first input only, leaving the second one outstanding.
+        client.pczt_sign_transparent(input_index=0)
+
+        send()
+
+    def perform_final_tx_restart_via_trusted_input_after_partial_signature(self, destination, send_amount, fees, memo):
+        """The same second transaction, opened with GET_TRUSTED_INPUT instead of a PCZT header.
+
+        `reset_for_new_transaction` is where the guard lives, and both the PCZT header and the first
+        packet of a trusted-input round call it. The helper above covers the header only. The legacy
+        path is still reached in production through coin-bitcoin's Zcash adapter, so leaving its
+        entry point uncovered would assert the guard on one caller and trust it on the other.
+        """
+        client = ZcashCommandSender(self.backend)
+
+        total_value = send_amount + fees
+        first_value = total_value // 2
+        transparent_inputs = [
+            PcztTransparentInput(
+                prevout_txid=PCZT_PREVOUT_TXID,
+                prevout_index=index,
+                value=value,
+                script_pubkey=FORGED_UTXO_SCRIPT_PUBKEY,
+                sequence=PCZT_SEQUENCE,
+                signing_path=ZCASH_PATH,
+            )
+            for index, value in enumerate((first_value, total_value - first_value))
+        ]
+        transparent_outputs = [PcztTransparentOutput(value=send_amount, script_pubkey=script_for_destination(destination))]
+
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=transparent_inputs,
+            transparent_outputs=transparent_outputs,
+        ):
+            # No display to navigate: in swap mode the Exchange cross-check stands in for the
+            # review screen.
+            pass
+
+        # Sign the first input only, leaving the second one outstanding.
+        client.pczt_sign_transparent(input_index=0)
+
+        # First packet of a trusted-input round: the trusted-input index, a v5 header, one input.
+        # The guard fires before any of it is parsed, so what follows never matters.
+        client.exchange_raw("e04200001100000000050000800a27a726b4d0d6c201")
+
+    def perform_final_tx_restart_via_hash_input_start_after_partial_signature(self, destination, send_amount, fees, memo):
+        """The same second transaction, opened with the legacy HASH_INPUT_START round.
+
+        The third and last caller of `reset_for_new_transaction`. A first packet that does not
+        continue an earlier round (P1 0x00, P2 0x05) makes `resets_context` true, which skips the
+        guards on top of the handler and lands straight on the guarded reset.
+        """
+        client = ZcashCommandSender(self.backend)
+
+        total_value = send_amount + fees
+        first_value = total_value // 2
+        transparent_inputs = [
+            PcztTransparentInput(
+                prevout_txid=PCZT_PREVOUT_TXID,
+                prevout_index=index,
+                value=value,
+                script_pubkey=FORGED_UTXO_SCRIPT_PUBKEY,
+                sequence=PCZT_SEQUENCE,
+                signing_path=ZCASH_PATH,
+            )
+            for index, value in enumerate((first_value, total_value - first_value))
+        ]
+        transparent_outputs = [PcztTransparentOutput(value=send_amount, script_pubkey=script_for_destination(destination))]
+
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=transparent_inputs,
+            transparent_outputs=transparent_outputs,
+        ):
+            # No display to navigate: in swap mode the Exchange cross-check stands in for the
+            # review screen.
+            pass
+
+        # Sign the first input only, leaving the second one outstanding.
+        client.pczt_sign_transparent(input_index=0)
+
+        # First packet of a legacy signing round: a v4 header and one input. The guard fires before
+        # `comm.get_data()` is even reached, so what the packet carries never matters.
+        client.exchange_raw("e0440005050400000001")
+
     def perform_final_tx_two_external_outputs(self, destination, send_amount, fees, memo):
         """Pay the approved amount to two recipients instead of one.
 
@@ -253,3 +384,75 @@ class TestsZcashPcztSeveralExternalOutputs:
             test_class.perform_final_tx = test_class.perform_final_tx_two_external_outputs
             test_class.run_test("swap_valid_1")
         assert e.value.status == ZcashErrors.SW_INVALID_TRANSACTION
+
+
+class ZcashDestinationExtraIdTests(ZcashTests):
+    """Approve a swap whose destination carries an extra ID.
+
+    Chains that need one put the routing or deposit information there rather than in the address.
+    The transaction the device signs here is transparent, so it has nowhere to put it: signing would
+    hand the provider funds it cannot attribute to the trade.
+    """
+
+    valid_destination_memo_1 = "0badc0de"
+
+
+class TestsZcashSwapDestinationExtraId:
+    # Its own name, and so its own snapshots: the Exchange review shows the extra ID, which the
+    # shared golden of `swap_valid_1` does not carry.
+    def test_zcash_swap_destination_extra_id(self, backend, exchange_navigation_helper):
+        with pytest.raises(ExceptionRAPDU) as e:
+            ZcashDestinationExtraIdTests(backend, exchange_navigation_helper).run_test("swap_valid_1")
+        assert e.value.status == ZcashErrors.SW_INVALID_TRANSACTION
+
+
+class ZcashOutOfRangeAmountTests(ZcashTests):
+    """Approve a swap for an amount Zcash cannot represent, then pay its low 64 bits.
+
+    Exchange carries the amount in a sixteen-byte field. Setting a bit above the low eight bytes
+    names a quantity four billion times the whole supply, yet a transaction paying only what those
+    low bytes spell matches it once the high half is dropped. Refusing the request is the only sound
+    answer: there is no transaction the device could sign that honours what was approved.
+    """
+
+    valid_send_amount_1 = 2**64 + ZcashTests.valid_send_amount_1
+
+    def perform_final_tx(self, destination, send_amount, fees, memo):
+        # The transaction carries what the comparison would keep of the approved amount.
+        super().perform_final_tx(destination, send_amount % 2**64, fees, memo)
+
+
+class TestsZcashOutOfRangeSwapAmount:
+    # Its own name, and so its own snapshots: the Exchange review displays the approved amount, which
+    # here is not the one the shared golden of `swap_valid_1` recorded.
+    def test_zcash_out_of_range_swap_amount(self, backend, exchange_navigation_helper):
+        with pytest.raises(ExceptionRAPDU) as e:
+            ZcashOutOfRangeAmountTests(backend, exchange_navigation_helper).run_test("swap_valid_1")
+        assert e.value.status == ZcashErrors.SW_INVALID_TRANSACTION
+
+
+class TestsZcashPcztRestartAfterPartialSignature:
+    # Keeps its own name, and so its own snapshots: like the case above it drives `swap_valid_1` to
+    # a refusal, where that scenario's shared golden records a success.
+    #
+    # The three entry points are parameters of one function rather than three functions, so that
+    # they share that one snapshot set. Ragger keys the snapshot directory on the function name
+    # alone, and the Exchange screens are identical either way — the Zcash app draws nothing in swap
+    # mode, and all three runs refuse at the same point of the same scenario.
+    #
+    # `reset_for_new_transaction` carries the guard and has exactly three callers, one per case
+    # here. The two legacy ones are still reached in production through coin-bitcoin's Zcash
+    # adapter, so asserting the guard on the PCZT caller and trusting it on the others would not do.
+    @pytest.mark.parametrize("restart_entry_point", ["pczt_header", "trusted_input", "hash_input_start"])
+    def test_zcash_pczt_restart_after_partial_signature(self, backend, exchange_navigation_helper, restart_entry_point):
+        # The generic scenarios sign every input and let the app exit, so the window this covers —
+        # a swap session still running with a signature already released — only exists here.
+        with pytest.raises(ExceptionRAPDU) as e:
+            test_class = ZcashPcztTests(backend, exchange_navigation_helper)
+            test_class.perform_final_tx = {
+                "pczt_header": test_class.perform_final_tx_restart_after_partial_signature,
+                "trusted_input": test_class.perform_final_tx_restart_via_trusted_input_after_partial_signature,
+                "hash_input_start": test_class.perform_final_tx_restart_via_hash_input_start_after_partial_signature,
+            }[restart_entry_point]
+            test_class.run_test("swap_valid_1")
+        assert e.value.status == ZcashErrors.SW_BAD_STATE

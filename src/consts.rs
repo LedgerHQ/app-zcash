@@ -22,14 +22,60 @@ pub const ZCASH_BIP44_COIN_TYPE: u32 = 133;
 #[cfg(feature = "testnet")]
 pub const ZCASH_BIP44_COIN_TYPE: u32 = 1;
 
-// Limit the number of PCZT transparent inputs due to device memory constraints.
-pub const MAX_PCZT_TRANSPARENT_INPUTS_NUMBER: usize = 10;
+// Transparent inputs one transaction may spend.
+//
+// An input costs more than a shielded action and differently: besides its record it retains its
+// scriptPubKey for the whole session, the per-input signature digest consuming it. That is why this
+// bound was once paired with MAX_PCZT_SCRIPT_SIZE — ten scripts of 252 bytes being what fits.
+//
+// The pairing is gone: an input script is now refused unless it is the 25-byte P2PKH shape, the only
+// one this app can sign for, so the retained cost per input is fixed rather than host-chosen. What
+// the bound has to fit is measured, not assumed — 32 inputs parse, review and sign on Nano X, with
+// the run failing well above.
+#[cfg(not(feature = "capacity_probe"))]
+pub const MAX_PCZT_TRANSPARENT_INPUTS_NUMBER: usize = 32;
+#[cfg(feature = "capacity_probe")]
+pub const MAX_PCZT_TRANSPARENT_INPUTS_NUMBER: usize = MAX_PCZT_ADDRESSABLE_ACTIONS_NUMBER;
 // Limit the number of PCZT transparent outputs due to device memory constraints.
 pub const MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER: usize = 10;
-// Limit the number of PCZT orchard actions due to device memory constraints.
-pub const MAX_PCZT_ORCHARD_ACTIONS_NUMBER: usize = 10;
-// Limit the number of PCZT ironwood actions due to device memory constraints.
-pub const MAX_PCZT_IRONWOOD_ACTIONS_NUMBER: usize = 10;
+// Notes one shielded bundle may spend. Measured on the smallest device rather than chosen: a
+// transaction of this many actions parses, reviews and signs on Nano X in both shapes a wallet
+// builds — notes gathered to one transparent recipient, and a shielded send with its change note —
+// with the run failing well above it. It has to hold the whole balance of an account that receives
+// often, since sending the maximum spends every note at once.
+//
+// What an action costs is a signing record and one parse; what the *review* costs is bounded
+// separately by MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER, which is why this number can be this
+// high. Conflating the two is what kept it at ten.
+#[cfg(not(feature = "capacity_probe"))]
+pub const MAX_PCZT_ORCHARD_ACTIONS_NUMBER: usize = 32;
+#[cfg(not(feature = "capacity_probe"))]
+pub const MAX_PCZT_IRONWOOD_ACTIONS_NUMBER: usize = 32;
+
+// Shielded outputs one transaction may show the user, across both shielded pools.
+//
+// Every displayed shielded output holds an encoded unified address, an output record and its review
+// fields for as long as the review is on screen, and the host decides how many there are. Past this
+// count the parser refuses with a status word instead of walking into the allocator, whose
+// exhaustion exits the application rather than reporting anything.
+//
+// Four is twice what a send can produce — one recipient, plus the change note on a transfer that
+// shows no external output — and half the count the device was measured to survive, so the budget
+// holds even with memo retention and address encoding at their worst. Raising it moves the review
+// toward the point where the SDK's `nbPairs: fields.len() as u8` truncates and draws an empty review
+// that still collects an approval; a raise therefore belongs with a fix for that, not before it.
+pub const MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER: usize = 4;
+
+// Highest action count the signing instructions can address, P2 carrying the action index in a
+// single byte. A measurement build raises both shielded bounds to it so that a run ends where the
+// device runs out of memory rather than where the shipped bound sits — the bound above is a figure
+// chosen for memory the device was never measured against, and measuring it is what this replaces.
+#[cfg(feature = "capacity_probe")]
+pub const MAX_PCZT_ADDRESSABLE_ACTIONS_NUMBER: usize = 255;
+#[cfg(feature = "capacity_probe")]
+pub const MAX_PCZT_ORCHARD_ACTIONS_NUMBER: usize = MAX_PCZT_ADDRESSABLE_ACTIONS_NUMBER;
+#[cfg(feature = "capacity_probe")]
+pub const MAX_PCZT_IRONWOOD_ACTIONS_NUMBER: usize = MAX_PCZT_ADDRESSABLE_ACTIONS_NUMBER;
 
 pub const ZCASH_CLA: u8 = 0xE0;
 pub const INS_GET_WALLET_PUBLIC_KEY: u8 = 0x40;
@@ -48,6 +94,11 @@ pub const INS_PCZT_ORCHARD_ACTION: u8 = 0x56;
 pub const INS_PCZT_SIGN_ORCHARD: u8 = 0x57;
 pub const INS_PCZT_IRONWOOD_ACTION: u8 = 0x58;
 pub const INS_PCZT_SIGN_IRONWOOD: u8 = 0x59;
+
+// Measurement-only instruction, outside the range the protocol assigns and absent from a released
+// application. See `crate::heap_probe` for why it must stay that way.
+#[cfg(feature = "heap_probe")]
+pub const INS_HEAP_PROBE: u8 = 0xF0;
 
 pub const P1_FIRST: u8 = 0x00;
 pub const P1_NEXT: u8 = 0x80;

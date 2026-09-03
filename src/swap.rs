@@ -98,6 +98,7 @@ pub enum SwapAppErrorCode {
     FailedToDeriveAddress = 0x05,
     UnexpectedExternalOutputCount = 0x06,
     BufferOverflow = 0x07,
+    UnsupportedDestinationExtraId = 0x08,
 }
 
 impl SwapAppErrorCodeTrait for SwapAppErrorCode {
@@ -116,6 +117,23 @@ pub fn check_swap_params(
     fees: u64,
 ) -> Result<(), SwapError<SwapAppErrorCode>> {
     debug!("Swap mode detected");
+
+    // The extra ID is where chains that need one carry the routing or deposit information their
+    // destination address does not hold. Zcash has such a place — the encrypted memo of a shielded
+    // output — but nothing here reads the field, and the swap path signs transparent outputs, which
+    // have no memo at all. Approving a trade that asks for one and signing a transaction that
+    // cannot carry it would send funds the provider has no way to attribute.
+    if params.dest_address_extra_id_len != 0 {
+        error!(
+            "Swap destination carries an extra ID of {} bytes",
+            params.dest_address_extra_id_len
+        );
+        return Err(SwapError::with_message(
+            SwapErrorCommonCode::ErrorWrongDestination,
+            SwapAppErrorCode::UnsupportedDestinationExtraId,
+            "Destination extra ID is not supported".to_string(),
+        ));
+    }
 
     // In swap operation we can only have 1 "external" output
     let external_outputs: Vec<&TxOutput> = outputs.iter().filter(|out| !out.is_change).collect();
@@ -140,6 +158,20 @@ pub fn check_swap_params(
     // Parse amount (u64 from big-endian bytes, right aligned in 16-byte buffer)
     // Amount is stored in AMOUNT_BUF_SIZE (16 bytes) buffer, right-aligned big-endian
     let start = params.amount.len() - 8;
+
+    // The eight low bytes hold every amount Zcash can express — the whole supply is four orders of
+    // magnitude below `u64::MAX` — so anything above them is not an amount this transaction could
+    // ever carry. Reading past them and keeping only the low half would compare the approved value
+    // modulo 2^64, letting a swap approved for an unrepresentable amount be settled by whatever
+    // small amount shares its low bytes.
+    if params.amount[..start].iter().any(|byte| *byte != 0) {
+        error!("Swap amount is not representable: {:?}", params.amount);
+        return Err(SwapError::without_message(
+            SwapErrorCommonCode::ErrorWrongAmount,
+            SwapAppErrorCode::AmountCastFail,
+        ));
+    }
+
     let amount_bytes: [u8; 8] = params.amount[start..].try_into().map_err(|_| {
         SwapError::without_message(
             SwapErrorCommonCode::ErrorWrongAmount,
@@ -164,6 +196,15 @@ pub fn check_swap_params(
     // Validate fees
     // Parse fee (u64 from big-endian bytes, right aligned in 16-byte buffer)
     let start = params.fee_amount.len() - 8;
+
+    if params.fee_amount[..start].iter().any(|byte| *byte != 0) {
+        error!("Swap fee is not representable: {:?}", params.fee_amount);
+        return Err(SwapError::without_message(
+            SwapErrorCommonCode::ErrorWrongFees,
+            SwapAppErrorCode::AmountCastFail,
+        ));
+    }
+
     let fee_bytes: [u8; 8] = params.fee_amount[start..].try_into().map_err(|_| {
         SwapError::without_message(
             SwapErrorCommonCode::ErrorWrongFees,

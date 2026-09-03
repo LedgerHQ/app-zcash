@@ -146,6 +146,15 @@ impl LegacyParser {
         });
 
         let script_size: usize = ok!(CompactSize::read_t(&mut *reader));
+
+        // Bounded before the allocation below, as the three sibling script readers already are. The
+        // heap is a fixed arena, so a size the host inflates does not fail as a parse error but as
+        // an allocation the app cannot serve — it exits, and the transaction in progress is lost.
+        if script_size > MAX_SCRIPT_SIZE {
+            error!("Bad signing input script size: {}", script_size);
+            return Err(ParserError::from_str("Bad input script size"));
+        }
+
         info!("Script size: {}", script_size);
 
         if ctx.tx_state.is_tx_parsed_once {

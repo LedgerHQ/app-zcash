@@ -4,7 +4,7 @@ use ledger_device_sdk::log::{debug, error, info};
 use crate::AppSW;
 use crate::handlers::sign_tx::{append_signature, orchard_spend_auth_signature_with_sk};
 use crate::parser::{LegacyParserMode, ParserError, ParserSourceError, PcztParserCtx};
-use crate::tx::TxContext;
+use crate::tx::{TxContext, check_change_returns_to_signing_account};
 
 fn are_pczt_transparent_signatures_done(ctx: &TxContext) -> bool {
     ctx.tx_signing_state.total_input_count == 0
@@ -71,7 +71,7 @@ fn finish_pczt_if_requested(ctx: &mut TxContext, requested: bool) -> Result<(), 
 
 pub fn handler_pczt_header(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
     info!("Reset TX context for PCZT header parsing");
-    ctx.reset(LegacyParserMode::Signature);
+    ctx.reset_for_new_transaction(LegacyParserMode::Signature)?;
 
     let data = match comm.get_data() {
         Ok(data) => data,
@@ -298,6 +298,10 @@ pub fn handler_pczt_sign_transparent(
         }
     };
 
+    if let Err(sw) = check_change_returns_to_signing_account(&ctx.tx_info, path) {
+        return Err(reset_pczt_parser_with_sw(ctx, sw));
+    }
+
     if let Err(sw) = append_signature(
         comm,
         &ctx.tx_info.signature_digest,
@@ -307,6 +311,7 @@ pub fn handler_pczt_sign_transparent(
     ) {
         return Err(reset_pczt_parser_with_sw(ctx, sw));
     }
+    ctx.note_signature_released();
 
     ctx.tx_signing_state.already_signed_input_count = ctx
         .tx_signing_state
@@ -370,6 +375,10 @@ pub fn handler_pczt_sign_orchard(
         }
     };
 
+    if let Err(sw) = check_change_returns_to_signing_account(&ctx.tx_info, &path) {
+        return Err(reset_pczt_parser_with_sw(ctx, sw));
+    }
+
     // Reuse the session-cached account spending key rather than re-deriving it
     // per action (repeated zip32_orchard_derive exhausts the SE and fails 6f00).
     let sk = match ctx.pczt_parser.orchard_spending_key(&path) {
@@ -382,8 +391,9 @@ pub fn handler_pczt_sign_orchard(
             Ok(auth_sig) => auth_sig,
             Err(sw) => return Err(reset_pczt_parser_with_sw(ctx, sw)),
         };
-    comm.append(&auth_sig);
-
+    // Marked before the signature reaches the response buffer. A reply carries everything already
+    // appended alongside its status word, so appending first would ship the spend authorization
+    // with an error should this fail. The transparent handler orders it the same way.
     let signed_orchard_count = match ctx.pczt_parser.mark_orchard_action_signed(action_index) {
         Ok(signed_orchard_count) => signed_orchard_count,
         Err(e) => {
@@ -391,6 +401,10 @@ pub fn handler_pczt_sign_orchard(
             return Err(map_pczt_parser_error(ctx, e));
         }
     };
+
+    comm.append(&auth_sig);
+    ctx.note_signature_released();
+
     let orchard_signature_count = ctx.pczt_parser.orchard_signature_count();
 
     info!(
@@ -449,6 +463,10 @@ pub fn handler_pczt_sign_ironwood(
         }
     };
 
+    if let Err(sw) = check_change_returns_to_signing_account(&ctx.tx_info, &path) {
+        return Err(reset_pczt_parser_with_sw(ctx, sw));
+    }
+
     // Reuse the session-cached account spending key, as the Orchard signing
     // handler does (repeated zip32_orchard_derive exhausts the SE and fails 6f00).
     let sk = match ctx.pczt_parser.orchard_spending_key(&path) {
@@ -461,8 +479,8 @@ pub fn handler_pczt_sign_ironwood(
             Ok(auth_sig) => auth_sig,
             Err(sw) => return Err(reset_pczt_parser_with_sw(ctx, sw)),
         };
-    comm.append(&auth_sig);
-
+    // Marked before the signature reaches the response buffer, as on the Orchard and transparent
+    // paths: a reply carries everything already appended alongside its status word.
     let signed_ironwood_count = match ctx.pczt_parser.mark_ironwood_action_signed(action_index) {
         Ok(signed_ironwood_count) => signed_ironwood_count,
         Err(e) => {
@@ -470,6 +488,10 @@ pub fn handler_pczt_sign_ironwood(
             return Err(map_pczt_parser_error(ctx, e));
         }
     };
+
+    comm.append(&auth_sig);
+    ctx.note_signature_released();
+
     let ironwood_signature_count = ctx.pczt_parser.ironwood_signature_count();
 
     info!(

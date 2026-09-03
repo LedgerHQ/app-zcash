@@ -4,11 +4,16 @@ default-members = ["."]
 exclude = ["vendor/rust-secp256k1"]
 
 [workspace.dependencies]
-ledger_device_sdk = { version = "1.*", features = ["sys"] }
+# Floor at 1.37: earlier releases accept an APDU while a command is still being processed, so a
+# transport can be answered mid-review. The app does not enable `io_new`, so it runs the legacy I/O
+# path, which is where that release added the guard. Expressed as a requirement rather than left to
+# the lock file, which a regeneration could move on its own.
+ledger_device_sdk = { version = "1.37", features = ["sys"] }
+zeroize = { version = "1.6.0", default-features = false }
 
 [package]
 name = "zcash"
-version = "3.9.2"
+version = "3.9.3"
 authors = ["Ledger"]
 edition = "2024"
 
@@ -28,7 +33,7 @@ zcash_address = { version = "0.13.0", default-features = false }
 
 orchard = { path = "./vendor/orchard", default-features = false, features = ["ledger"] }
 num_enum = { version = "0.7.5", default-features = false }
-zeroize = { version = "1.6.0", default-features = false }
+zeroize = { workspace = true }
 
 [patch.crates-io]
 # Pulled by bitvec (via orchard)
@@ -65,6 +70,17 @@ testnet = []
 
 # Enables debug logging
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
+
+# Answers how much heap the allocator can still serve, over an instruction of its own. For capacity
+# measurement runs only — never enable it on a build that reaches a user, for the reason stated in
+# `src/heap_probe.rs`.
+heap_probe = []
+
+# Raises the shielded bundle bounds to what the signing instructions can address, so that a run
+# finds the action count the device stops at instead of the one the shipped bound stops at. A build
+# carrying this accepts bundles no measurement has cleared yet, so it is a measurement instrument
+# and never a shippable configuration.
+capacity_probe = []
 
 legacy_path = []
 

@@ -14,11 +14,6 @@
 use super::*;
 use crate::tx::TxOutputMemo;
 use ::orchard::bundle::BundleVersion;
-use alloc::string::ToString;
-use ledger_device_sdk::hash::blake2::Blake2b_256;
-
-pub(super) const ZCASH_MEMO_TEXT_MAX_TAG: u8 = 0xF4;
-pub(super) const ZCASH_MEMO_EMPTY_TAG: u8 = 0xF6;
 
 impl PcztParser {
     #[inline(never)]
@@ -45,6 +40,15 @@ impl PcztParser {
         self.pczt_finished = false;
 
         self.reset_orchard_bundle_state(action_count);
+
+        // Reserved up front, while the heap is least fragmented and before the per-action
+        // allocations begin: growing this vector by doubling mid-bundle asks for a contiguous block
+        // twice the size of the one it replaces, at the point the parse has carved the heap up the
+        // most. Reserving also makes a bundle the device cannot hold fail with a status word here,
+        // rather than through the allocator, whose exhaustion exits the application instead.
+        self.orchard_signing_records
+            .try_reserve_exact(action_count)
+            .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
 
         if action_count == 0 {
             self.finalize_orchard_actions(ctx)?;
@@ -774,6 +778,7 @@ impl PcztParser {
     }
 
     fn orchard_output_memo_display(
+        tx_info: &mut TxInfo,
         output: &DecipheredOrchardOutput,
         is_change: bool,
     ) -> Result<Option<TxOutputMemo>, ParserError> {
@@ -785,42 +790,7 @@ impl PcztParser {
             return Ok(None);
         };
 
-        Self::orchard_memo_display(memo)
-    }
-
-    fn orchard_memo_display(memo: &[u8]) -> Result<Option<TxOutputMemo>, ParserError> {
-        if memo.len() != ORCHARD_MEMO_SIZE {
-            return Err(ParserError::from_sw(AppSW::TechnicalProblem));
-        }
-
-        if memo[0] == ZCASH_MEMO_EMPTY_TAG && memo[1..].iter().all(|byte| *byte == 0) {
-            return Ok(None);
-        }
-
-        let Some(memo_len) = memo
-            .iter()
-            .rposition(|byte| *byte != 0)
-            .map(|index| index + 1)
-        else {
-            return Ok(None);
-        };
-
-        if memo[0] <= ZCASH_MEMO_TEXT_MAX_TAG
-            && let Ok(text) = core::str::from_utf8(&memo[..memo_len])
-            && Self::is_displayable_ascii_memo(text)
-        {
-            return Ok(Some(TxOutputMemo::text(text.to_string())));
-        }
-
-        let mut hasher = Blake2b_256::default();
-        ok!(hasher.update(memo));
-        let mut hash = [0u8; 32];
-        ok!(hasher.finalize(&mut hash));
-        Ok(Some(TxOutputMemo::hash(format!("{}", HexSlice(&hash)))))
-    }
-
-    fn is_displayable_ascii_memo(text: &str) -> bool {
-        text.bytes().all(|byte| matches!(byte, 0x20..=0x7E))
+        memo_display(tx_info, memo)
     }
 
     fn push_deciphered_orchard_output(
@@ -834,13 +804,28 @@ impl PcztParser {
             return Err(ParserError::from_str("Multiple change outputs detected"));
         }
 
+        // Claimed before the address below is encoded: the budget bounds that allocation.
+        if !is_change {
+            claim_displayed_shielded_output(ctx.tx_info)?;
+        } else {
+            // Kept off the review, so it has to be bound to the account being spent. The path is
+            // the one the host declared for this action, which is also what selected the internal
+            // IVK that classified the output as change.
+            let path = self
+                .current_action
+                .path
+                .as_ref()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+            record_hidden_shielded_change_account(ctx.tx_info, path)?;
+        }
+
         let address =
             UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(output.raw_address)])
                 .map(|address| address.encode(&network))
                 // No fallback string: a recipient the user cannot check against their own
                 // wallet is worse than refusing to sign.
                 .map_err(|_| ParserError::from_str("Cannot encode PCZT orchard output address"))?;
-        let memo = Self::orchard_output_memo_display(&output, is_change)?;
+        let memo = Self::orchard_output_memo_display(ctx.tx_info, &output, is_change)?;
 
         debug!(
             "PCZT orchard output address: {}, amount: {}, change: {}",

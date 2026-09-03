@@ -1,5 +1,47 @@
 # Changelog
 
+## 3.9.3
+
+Security release addressing the findings of an external code security scan of 3.9.2.
+
+- Draw the randomness of nonces and blinding factors through a syscall whose failure can be
+  checked, and refuse to sign when it reports one, instead of signing over a buffer the device
+  never filled
+- Zeroize RedPallas signing keys and the secret intermediates of a signature, and redact them
+  from debug formatting
+- Zeroize the Orchard spending key, through a regenerated vendor patch so the change survives the
+  next dependency refresh
+- Stop logging the randomized spend authorizing key and the Orchard viewing key
+- Refuse a `HASH_INPUT_START` continuation sent before the transaction has been reviewed or after
+  it has completed, and refuse any legacy round that would resume a completed transaction
+- Bind one Exchange approval to one signed transaction, so a partial signature on a multi-input
+  transaction can no longer be followed by a second transaction under the same approval
+- Cover `locktime` and `expiry_height` by the transaction review, which now runs on the header
+  `HASH_SIGN` carries rather than at the end of the output stream
+- Display the outputs of a transaction that pays only itself, which the change filter would
+  otherwise have left with no visible destination and no visible amount
+- Require the hardening BIP-44 mandates on a change path, and the app's own hardened prefixes on
+  an exported derivation path
+- Refuse to sign when a change output returns to a different account than the one being spent,
+  on both the legacy and the PCZT paths, and whether that output is transparent or a shielded
+  note the review never shows
+- Refuse a transparent input whose scriptPubKey is not the 25-byte P2PKH shape, the only one the
+  app can sign for, rather than signing over a script no key it derives can spend
+- Raise the transparent input bound to a count measured on the smallest device, which pinning that
+  shape makes affordable by fixing what each input retains
+- Bound the input script size the legacy signing parser will allocate for
+- Bound the Orchard derivations of one run, which the Secure Element does not reclaim before the
+  next power cycle
+- Refuse a swap amount or fee that Zcash cannot represent, rather than keeping its low 64 bits
+- Refuse a swap whose destination carries an extra ID, which a transparent Zcash output has
+  nowhere to hold
+- Show each memo with the output it belongs to, under a label carrying that output's index
+- Bound what a transaction's memos may claim on the heap, and allocate what is kept fallibly
+- Refuse a request to display an address in the mode that has no displayable form
+- Name the exported account on the viewing-key confirmation screen
+- Move the Ledger SDK to 1.37.0, which refuses an APDU arriving while a command is still being
+  processed
+
 ## 3.9.2
 
 - Accept a P2SH (t3) `scriptPubKey` on a transparent output, displaying it for review instead of

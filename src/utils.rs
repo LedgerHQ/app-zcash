@@ -26,6 +26,27 @@ const APP_DECLARED_PURPOSES: [u32; 2] = [44, 32];
 // a different shape.
 const BIP44_PURPOSE: u32 = 44;
 
+const BIP44_PATH_LEN: usize = 5;
+const BIP44_ACCOUNT_OFFSET: usize = 2;
+
+/// The account component of a derivation path, hardening bit included.
+///
+/// Accepts both trees the app derives in: BIP-44 for transparent keys, ZIP-32 for shielded ones.
+/// They place the account at the same depth, and a transparent and a shielded path bearing the same
+/// account belong to the same wallet account — which is what lets a transparent change output be
+/// compared against a shielded spend.
+///
+/// Returned raw on purpose. The account is what separates two key trees, so an unhardened value
+/// must not compare equal to the hardened one: masking here would let `m/44'/133'/2/0/0` pass for
+/// account `2'` while deriving somewhere else entirely.
+pub fn derivation_account(path: &Bip32Path) -> Option<u32> {
+    let path = path.as_slice();
+    if path.len() != BIP44_PATH_LEN && path.len() != ZIP32_PATH_LEN {
+        return None;
+    }
+    Some(path[BIP44_ACCOUNT_OFFSET])
+}
+
 pub enum Endianness {
     Big,
     _Little,
@@ -92,9 +113,7 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const HARDENED: u32 = 0x8000_0000;
     const PURPOSE_OFFSET: usize = 0;
 
-    const BIP44_PATH_LEN: usize = 5;
     const BIP44_COIN_TYPE_OFFSET: usize = 1;
-    const BIP44_ACCOUNT_OFFSET: usize = 2;
     const BIP44_CHANGE_OFFSET: usize = 3;
     const BIP44_ADDRESS_INDEX_OFFSET: usize = 4;
     const MAX_BIP44_ACCOUNT_RECOMMENDED: u32 = 100;
@@ -115,12 +134,22 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
                 return false;
             }
 
-            if !APP_DECLARED_PURPOSES.contains(&(path[PURPOSE_OFFSET] & UNHARDENED_MASK)) {
+            // Compared hardening bit included. The app declares `44'/133'` and `32'/133'`, so an
+            // unhardened prefix is a path the OS will not derive — and it answers that by taking the
+            // app down, not by a status word. Masking the bit off here let such a path through the
+            // one check standing between the host and the derivation.
+            //
+            // Only the two prefix components are constrained: key export legitimately takes paths of
+            // any depth from two components up, and the shortest of them, `44'/133'`, is what Ledger
+            // Live asks for to build the account xpub.
+            if !APP_DECLARED_PURPOSES.contains(&(path[PURPOSE_OFFSET] & UNHARDENED_MASK))
+                || path[PURPOSE_OFFSET] & HARDENED == 0
+            {
                 error!("Bad purpose");
                 return false;
             }
 
-            if (path[BIP44_COIN_TYPE_OFFSET] & UNHARDENED_MASK) != ZCASH_BIP44_COIN_TYPE {
+            if path[BIP44_COIN_TYPE_OFFSET] != (ZCASH_BIP44_COIN_TYPE | HARDENED) {
                 error!("Bad coin type");
                 return false;
             }
@@ -167,19 +196,27 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
         return false;
     }
 
-    let purpose = path[PURPOSE_OFFSET] & UNHARDENED_MASK;
-    if purpose != BIP44_PURPOSE {
+    // BIP-44 hardens purpose, coin type and account. Comparing them with the hardening bit masked
+    // off equates `m/44/133/…` with `m/44'/133'/…`, which derive unrelated keys: the app would
+    // vouch for an address the wallet does not own. The OS refuses to derive a path outside the
+    // ones the app declares, but it answers that refusal by aborting the app rather than by a
+    // status word, so the check has to be exact here.
+    if path[PURPOSE_OFFSET] != (BIP44_PURPOSE | HARDENED) {
         error!("Bad Bip44 purpose");
         return false;
     }
 
-    let coin_type = path[BIP44_COIN_TYPE_OFFSET] & UNHARDENED_MASK;
-    if coin_type != ZCASH_BIP44_COIN_TYPE {
+    if path[BIP44_COIN_TYPE_OFFSET] != (ZCASH_BIP44_COIN_TYPE | HARDENED) {
         error!("Bad Bip44 coin type");
         return false;
     }
 
     if let Bip44CheckMode::Full { is_change_path } = mode {
+        if path[BIP44_ACCOUNT_OFFSET] & HARDENED == 0 {
+            error!("Bip44 account is not hardened");
+            return false;
+        }
+
         let account = path[BIP44_ACCOUNT_OFFSET] & UNHARDENED_MASK;
         if account > MAX_BIP44_ACCOUNT_RECOMMENDED {
             error!("Bad Bip44 account");
@@ -192,7 +229,10 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
             return false;
         }
 
-        let address_index = path[BIP44_ADDRESS_INDEX_OFFSET] & UNHARDENED_MASK;
+        // Change and address index are the non-hardened half of BIP-44, and both are read unmasked:
+        // a hardened value exceeds the bound below on its own, so it cannot pass for the small
+        // index it would be mistaken for.
+        let address_index = path[BIP44_ADDRESS_INDEX_OFFSET];
         if address_index > MAX_BIP44_ADDRESS_INDEX_RECOMMENDED {
             error!("Bad Bip44 address index");
             return false;

@@ -26,12 +26,17 @@ mod handlers {
     pub mod get_trusted_input;
     pub mod get_version;
     pub mod get_vk;
+    #[cfg(feature = "heap_probe")]
+    pub mod heap_probe;
     pub mod pczt;
     pub mod sign_tx;
 }
 
 mod consts;
+#[cfg(feature = "heap_probe")]
+mod heap_probe;
 mod parser;
+mod rng;
 mod settings;
 mod swap;
 mod tx;
@@ -52,11 +57,12 @@ use ledger_device_sdk::{io::StatusWords, libcall::swap::CreateTxParams};
 use ledger_device_sdk::{
     io::{ApduHeader, Comm, Reply},
     nbgl::init_comm,
-    random::rand_bytes,
 };
 use tx::TxContext;
 use zeroize::Zeroizing;
 
+#[cfg(feature = "heap_probe")]
+use crate::consts::INS_HEAP_PROBE;
 use crate::consts::{
     INS_GET_SHIELD_ADDR, MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
     P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
@@ -68,6 +74,8 @@ use crate::consts::{
 use crate::consts::{
     INS_PCZT_IRONWOOD_ACTION, INS_PCZT_SIGN_IRONWOOD, MAX_PCZT_IRONWOOD_ACTIONS_NUMBER,
 };
+#[cfg(feature = "heap_probe")]
+use crate::handlers::heap_probe::handler_heap_probe;
 use crate::handlers::pczt::{handler_pczt_ironwood_action, handler_pczt_sign_ironwood};
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
@@ -136,6 +144,7 @@ pub enum AppSW {
     TechnicalProblem = 0x6F00,
     VersionParsingFail = 0x6F01,
     TxParsingFail = 0x6F02,
+    RngFailure = 0x6F03,
     BadState = 0xB007,
     Ok = StatusWords::Ok as u16,
 }
@@ -204,6 +213,8 @@ pub enum Instruction {
     PcztInvalid {
         sw: AppSW,
     },
+    #[cfg(feature = "heap_probe")]
+    HeapProbe,
 }
 
 impl TryFrom<ApduHeader> for Instruction {
@@ -332,6 +343,8 @@ impl TryFrom<ApduHeader> for Instruction {
                     sw: AppSW::WrongP1P2,
                 })
             }
+            #[cfg(feature = "heap_probe")]
+            (INS_HEAP_PROBE, 0, 0) => Ok(Instruction::HeapProbe),
             // A routed instruction lands here on an unmatched P1/P2; an unrouted one never had
             // P1/P2 semantics, so its reply does not depend on them.
             (
@@ -371,8 +384,11 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             tx_ctx.is_vk_display_finished = false;
             (true, StatusType::Address)
         }
+        // The legacy review runs on HASH_SIGN, which is where the transaction header completes it,
+        // so both its outcomes are reported there. HASH_INPUT_FINALIZE_FULL keeps its refusal arm
+        // for the errors the output parser itself raises.
         (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
-        | (Instruction::HashSign, AppSW::Ok)
+        | (Instruction::HashSign, AppSW::Ok | AppSW::Deny)
             if tx_ctx.is_finished() =>
         {
             (true, StatusType::Transaction)
@@ -409,7 +425,13 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
 fn init_trusted_input_key_storage() {
     if Settings.trusted_input_key().is_none() {
         let mut rng = Zeroizing::new([0u8; 32]);
-        rand_bytes(&mut rng[..]);
+        // Persisting a key drawn from a failed RNG would burn a predictable HMAC key into NVM for
+        // the lifetime of the installation. Leaving the slot empty instead makes the trusted-input
+        // handlers fail cleanly while the rest of the app stays usable.
+        if rng::fill_bytes(&mut rng[..]).is_err() {
+            error!("Could not draw a trusted input key: leaving the slot uninitialized");
+            return;
+        }
 
         Settings.set_trusted_input_key(&rng);
         debug!("Initialized trusted input key storage");
@@ -577,6 +599,8 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
             ctx.pczt_parser.reset();
             Err(*sw)
         }
+        #[cfg(feature = "heap_probe")]
+        Instruction::HeapProbe => handler_heap_probe(comm),
     }
 }
 

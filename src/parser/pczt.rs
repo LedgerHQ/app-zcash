@@ -3,7 +3,8 @@ use ::orchard::bundle::commitments::{
     ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION,
     ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION,
 };
-use alloc::{format, string::ToString, vec::Vec};
+use alloc::{string::String, string::ToString, vec::Vec};
+use core::fmt::Write as _;
 use core::{cmp, mem};
 
 use crate::consts::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
@@ -12,8 +13,9 @@ use ::orchard::keys::Scope as OrchardScope;
 use corez::io::Read;
 use ledger_device_sdk::ecc::Secret;
 use ledger_device_sdk::hash::HashInit as _;
+use ledger_device_sdk::hash::blake2::Blake2b_256;
 use ledger_device_sdk::libcall::swap::CreateTxParams;
-use ledger_device_sdk::log::{debug, info};
+use ledger_device_sdk::log::{debug, error, info};
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
 use zcash_encoding::CompactSize;
 use zcash_primitives::transaction::TxVersion;
@@ -27,10 +29,10 @@ use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
 use crate::consts::MAX_PCZT_IRONWOOD_ACTIONS_NUMBER;
 use crate::consts::{
-    MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_SCRIPT_SIZE, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
+    MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_SCRIPT_SIZE,
+    MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
     MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
 };
-use crate::parser::ORCHARD_MEMO_SIZE;
 use crate::parser::compute::{
     compute_shielded_signature_digest, compute_transparent_input_signature_digest,
     transparent_input_txin_signature_digest, write_transparent_script,
@@ -40,16 +42,17 @@ use crate::parser::orchard_decipher::{
     ORCHARD_OUT_CIPHERTEXT_SIZE, ORCHARD_RAW_ADDRESS_SIZE, OrchardActionCiphertext,
     OrchardCompactAction, OrchardDecipherKeys, decipher_compact_value, decipher_value_with_ovk,
 };
-use crate::tx::{Hashers, TransferType, TxInfo, TxOutput, TxPool, TxSigningState};
+use crate::parser::{HASH_SIZE, ORCHARD_MEMO_SIZE};
+use crate::tx::{Hashers, TransferType, TxInfo, TxOutput, TxOutputMemo, TxPool, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _};
-use crate::utils::check_output_displayable;
 use crate::utils::{
     Bip44CheckMode, CheckDispOutput, HexSlice,
     base58_address::{Base58Address, ToBase58Address},
     bip32_path::Bip32Path,
-    check_bip44_compliance,
+    check_bip44_compliance, check_output_displayable, derivation_account,
     extended_public_key::ExtendedPublicKey,
     hashers::ToHash160,
+    output_script_is_regular,
 };
 use crate::zip32::{
     OrchardAsk, OrchardFvk, derive_orchard_fvk_and_ask_from_sk, derive_orchard_fvk_from_sk,
@@ -77,6 +80,154 @@ const ZIP32_DERIVATION_PATH_COUNT_OFFSET: usize =
     COMPRESSED_PUBKEY_SIZE + ZIP32_SEED_FINGERPRINT_SIZE;
 const ORCHARD_ENC_CIPHERTEXT_TAG_OFFSET: usize =
     ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE + ORCHARD_MEMO_SIZE;
+
+const ZCASH_MEMO_TEXT_MAX_TAG: u8 = 0xF4;
+const ZCASH_MEMO_EMPTY_TAG: u8 = 0xF6;
+
+/// Hexadecimal length of a memo hash, the fixed-size rendering used when the text is not kept.
+const MEMO_HASH_DISPLAY_LEN: usize = 2 * HASH_SIZE;
+
+/// Bytes of memo text one transaction may keep for its review, across both shielded pools.
+///
+/// Every recoverable, non-change shielded output may carry a 512-byte memo, and the host decides
+/// how many such outputs there are: kept verbatim, a few of them claim more than the whole heap,
+/// next to the addresses, the output records and the note ciphertext. The allocation that cannot be
+/// served does not surface as a parse error — the allocator panics and the panic handler exits the
+/// app, so the host takes down the transaction in progress at will.
+///
+/// The budget is what makes the review's footprint independent of what the host sends: past it a
+/// memo is rendered as its hash, and past even that the parser refuses with a status word instead
+/// of walking into the allocator. It is set to hold two maximum-length memos verbatim, well above
+/// what a transaction built by a wallet carries and well below where the heap gives out.
+const MAX_RETAINED_MEMO_BYTES: usize = 2 * ORCHARD_MEMO_SIZE;
+
+/// Bind a hidden shielded change output to the account the transaction spends from.
+///
+/// A shielded output that decrypts under the internal IVK is kept off the review, and that IVK is
+/// derived from the path the host declared for the action — so on its own, nothing stops the host
+/// from naming an account of its choosing and having the value land there unseen. Recording the
+/// account is what arms [`check_change_returns_to_signing_account`], which every path that releases
+/// a signature calls: the hidden change has to belong to the account being spent, or no signature
+/// leaves the device.
+///
+/// Shares `TxInfo::change_account` with the transparent change output, and carries the same conflict
+/// rule for the same reason: two change outputs naming different accounts are refused outright,
+/// since whichever one the signing check matched, the other would stay hidden.
+fn record_hidden_shielded_change_account(
+    tx_info: &mut TxInfo,
+    path: &Bip32Path,
+) -> Result<(), ParserError> {
+    let Some(account) = derivation_account(path) else {
+        error!("Shielded change path carries no account");
+        return Err(ParserError::from_str(
+            "Shielded change path carries no account",
+        ));
+    };
+
+    match tx_info.change_account {
+        Some(previous) if previous != account => Err(ParserError::from_str(
+            "PCZT change outputs declare different accounts",
+        )),
+        _ => {
+            tx_info.change_account = Some(account);
+            Ok(())
+        }
+    }
+}
+
+/// Claim room for one more shielded output on the review, refusing once the budget is spent.
+///
+/// Call this before anything is allocated for the output — the address encoding included — since
+/// refusing after the allocation would leave the parser holding what the budget exists to prevent.
+///
+/// Shared by both shielded pools for the same reason the memo rendering is: Ironwood repeats
+/// Orchard's note format, so a per-pool copy of a budget is a budget that comes apart.
+fn claim_displayed_shielded_output(tx_info: &mut TxInfo) -> Result<(), ParserError> {
+    if tx_info.displayed_shielded_outputs >= MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER {
+        error!("Shielded displayed-output budget exhausted");
+        return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+    }
+
+    tx_info.displayed_shielded_outputs += 1;
+
+    Ok(())
+}
+
+/// Render a shielded output's memo for the review, within the transaction's retention budget.
+///
+/// Shared by both shielded pools: Ironwood repeats Orchard's note format, and a divergence here
+/// would leave one of them with the unbounded behaviour the other lost.
+fn memo_display(tx_info: &mut TxInfo, memo: &[u8]) -> Result<Option<TxOutputMemo>, ParserError> {
+    if memo.len() != ORCHARD_MEMO_SIZE {
+        return Err(ParserError::from_sw(AppSW::TechnicalProblem));
+    }
+
+    if memo[0] == ZCASH_MEMO_EMPTY_TAG && memo[1..].iter().all(|byte| *byte == 0) {
+        return Ok(None);
+    }
+
+    let Some(memo_len) = memo
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .map(|index| index + 1)
+    else {
+        return Ok(None);
+    };
+
+    let budget = MAX_RETAINED_MEMO_BYTES.saturating_sub(tx_info.retained_memo_bytes);
+
+    if memo[0] <= ZCASH_MEMO_TEXT_MAX_TAG
+        && memo_len <= budget
+        && let Ok(text) = core::str::from_utf8(&memo[..memo_len])
+        && is_displayable_memo_text(text)
+    {
+        let retained = try_retain(text)?;
+        tx_info.retained_memo_bytes += memo_len;
+        return Ok(Some(TxOutputMemo::text(retained)));
+    }
+
+    if MEMO_HASH_DISPLAY_LEN > budget {
+        error!("Memo retention budget exhausted");
+        return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+    }
+
+    let mut hasher = Blake2b_256::default();
+    ok!(hasher.update(memo));
+    let mut hash = [0u8; HASH_SIZE];
+    ok!(hasher.finalize(&mut hash));
+
+    let mut retained = String::new();
+    retained
+        .try_reserve_exact(MEMO_HASH_DISPLAY_LEN)
+        .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
+    for byte in hash {
+        // Writes into the capacity reserved just above, so it cannot reach the allocator again.
+        let _ = write!(&mut retained, "{byte:02x}");
+    }
+    tx_info.retained_memo_bytes += MEMO_HASH_DISPLAY_LEN;
+
+    Ok(Some(TxOutputMemo::hash(retained)))
+}
+
+/// Whether a memo can be shown as text rather than hashed.
+///
+/// Printable ASCII only. This is also what keeps a NUL byte out of the retained text: the review
+/// hands each value to the C layer as a NUL-terminated string, and an interior NUL panics the
+/// build of it — an app exit the host would choose. Widening this to non-ASCII UTF-8 would have to
+/// keep excluding it.
+fn is_displayable_memo_text(text: &str) -> bool {
+    text.bytes().all(|byte| matches!(byte, 0x20..=0x7E))
+}
+
+/// Copy a string onto the heap without the infallible path's panic on exhaustion.
+fn try_retain(text: &str) -> Result<String, ParserError> {
+    let mut retained = String::new();
+    retained
+        .try_reserve_exact(text.len())
+        .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
+    retained.push_str(text);
+    Ok(retained)
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 enum PcztParserState {

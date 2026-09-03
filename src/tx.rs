@@ -10,6 +10,9 @@ use ledger_device_sdk::nbgl::NbglHomeAndSettings;
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::BranchId;
 
+use ledger_device_sdk::log::error;
+
+use crate::AppSW;
 use crate::parser::orchard_decipher::OrchardDecipherKeys;
 use crate::parser::personalization::ZCASH_IRONWOOD_HASH_PERSONALIZATION;
 use crate::parser::personalization::{
@@ -19,6 +22,7 @@ use crate::parser::personalization::{
 };
 use crate::parser::{LegacyOutputParser, LegacyParser, LegacyParserMode, PcztParser};
 use crate::utils::blake2b_256_pers::Blake2b256Personalization as _;
+use crate::utils::{bip32_path::Bip32Path, derivation_account};
 use orchard::bundle::commitments::ZCASH_ORCHARD_V5_HASH_PERSONALIZATION;
 
 #[derive(Default)]
@@ -68,6 +72,10 @@ impl Hashers {
 
 #[derive(Default)]
 pub struct TxOutputMemo {
+    /// Names the kind of memo. Composed with the index of the output at display time, since that
+    /// index is the only thing tying a memo to its recipient: an output without a memo contributes
+    /// no field, so a label naming the kind alone leaves the position of a memo among the memo
+    /// fields unable to identify which output it came with.
     pub label: &'static str,
     pub value: String,
 }
@@ -75,14 +83,14 @@ pub struct TxOutputMemo {
 impl TxOutputMemo {
     pub fn text(value: String) -> Self {
         Self {
-            label: "Memo",
+            label: "memo",
             value,
         }
     }
 
     pub fn hash(value: String) -> Self {
         Self {
-            label: "Memo hash",
+            label: "memo hash",
             value,
         }
     }
@@ -164,10 +172,28 @@ pub struct TxInfo {
     pub sighash_type: u8,
     pub expiry_height: u32,
     pub total_amount: u64,
+    /// Fee derived from the parsed amounts, kept for the review that runs after the outputs.
+    pub fees: u64,
 
     pub outputs: Vec<TxOutput>,
+    /// Bytes of memo text already kept for the review of this transaction.
+    ///
+    /// Bounds what the shielded outputs can claim on the heap: the host decides how many memos
+    /// there are and how long each one is, and the review holds them all at once.
+    pub retained_memo_bytes: usize,
+    /// Shielded outputs already accepted for display, across both shielded pools.
+    ///
+    /// Counted rather than derived from `outputs` so the budget is spent before an address is
+    /// encoded: what it bounds is the allocation, so it cannot be read from the allocations already
+    /// made. Change outputs are excluded — only one is ever accepted, and it is kept off the review.
+    pub displayed_shielded_outputs: usize,
     pub is_change_found: bool,
     pub change_pk_hash: Option<[u8; 20]>,
+    /// Account component of the change path the host declared, hardening bit included.
+    ///
+    /// Kept so the signature can be refused when it would spend from a different account than the
+    /// one the hidden change returns to.
+    pub change_account: Option<u32>,
 
     pub prevouts_hash: [u8; 32],
     pub sequence_hash: [u8; 32],
@@ -185,6 +211,41 @@ pub struct TxInfo {
     pub branch_id_raw: u32,
 
     pub orchard_decipher_keys: Option<OrchardDecipherKeys>,
+}
+
+/// Refuse a signature that would spend from an account other than the one the change returns to.
+///
+/// A transparent change output is dropped from the review, so nothing on screen says where its
+/// value goes. That is only acceptable while it comes back to the account being spent. Checked at
+/// signing rather than while parsing because the transparent outputs are parsed before the shielded
+/// bundles, so a shielded spend paying transparent change has no account to compare against yet.
+///
+/// Every signing path is accepted: BIP-44 for a transparent input, ZIP-32 for an Orchard or an
+/// Ironwood action. **Every path that releases a signature must call this** — legacy `HASH_SIGN` and
+/// the three PCZT signing handlers alike — since any one of them signs the same approved digest, and
+/// a single unchecked path is enough to redirect the whole change amount. It lives here, beside the
+/// account it reads, so that a new signing path has one rule to adopt rather than one to copy.
+///
+/// A hidden shielded output records its account the same way, so this one check covers both pools.
+/// That record is what makes the check bite at all on a transaction whose only hidden change is
+/// shielded: nothing else sets the account, and an unset account passes. It is not enough that a
+/// note counts as change only when it decrypts under the viewing key derived from the key signing
+/// the action — that key sits at a path the host chose, so the account it names has to be compared
+/// with the account being spent like any other.
+pub fn check_change_returns_to_signing_account(
+    tx_info: &TxInfo,
+    path: &Bip32Path,
+) -> Result<(), AppSW> {
+    let Some(change_account) = tx_info.change_account else {
+        return Ok(());
+    };
+
+    if derivation_account(path) != Some(change_account) {
+        error!("Change account differs from the signing account");
+        return Err(AppSW::ConditionsOfUseNotSatisfied);
+    }
+
+    Ok(())
 }
 
 pub enum SupportedTxVersion {
@@ -253,6 +314,11 @@ pub struct TxContext<'a> {
     /// Swap parameters if running in swap mode.
     /// Used to validate the transaction against the Exchange's request.
     pub swap_params: Option<&'a CreateTxParams>,
+    /// Whether a signature has already left the device during this run of the app.
+    ///
+    /// Deliberately outside the scope of [`TxContext::reset`]: a signature cannot be recalled, so
+    /// this has to outlive the transaction state a host can reset at will.
+    has_released_signature: bool,
 }
 
 impl<'s> TxContext<'s> {
@@ -283,12 +349,13 @@ impl<'s> TxContext<'s> {
             addr_of_mut!((*ptr).vk_response).write(None);
             addr_of_mut!((*ptr).is_vk_display_finished).write(false);
             addr_of_mut!((*ptr).swap_params).write(swap_params);
+            addr_of_mut!((*ptr).has_released_signature).write(false);
         }
     }
 
     #[inline(never)]
     pub fn reset(&mut self, mode: LegacyParserMode) {
-        // Don't reset home and swap params, they're not part of TX state
+        // Don't reset home, swap params and has_released_signature, they're not part of TX state
         self.is_extra_header_data_set = false;
         self.is_finished = false;
         self.tx_signing_state = TxSigningState::default();
@@ -300,6 +367,30 @@ impl<'s> TxContext<'s> {
         self.legacy_output_parser = LegacyOutputParser::new();
         self.vk_response = None;
         self.is_vk_display_finished = false;
+    }
+
+    /// Resets the context to start a new transaction, refusing when that would reuse an approval
+    /// already spent on a signature.
+    ///
+    /// Outside swap mode every transaction carries its own on-device review, so signing several in
+    /// a row is legitimate. Under swap, the single Exchange approval covers one transaction: the
+    /// app validates against `swap_params` instead of displaying anything, and `reset` keeps those
+    /// params. A host that stops mid-way through a multi-input transaction, once it holds a
+    /// signature, could otherwise start a second transaction against the same approval and have
+    /// the user pay twice.
+    pub fn reset_for_new_transaction(&mut self, mode: LegacyParserMode) -> Result<(), AppSW> {
+        if self.swap_params.is_some() && self.has_released_signature {
+            error!("New transaction after a signature was released under a swap approval");
+            return Err(AppSW::BadState);
+        }
+
+        self.reset(mode);
+        Ok(())
+    }
+
+    /// Records that a signature has been returned to the host.
+    pub fn note_signature_released(&mut self) {
+        self.has_released_signature = true;
     }
 
     pub fn set_transaction_trusted_input_idx(&mut self, idx: u32) {

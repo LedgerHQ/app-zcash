@@ -18,6 +18,7 @@ use ledger_device_sdk::hash::{
     blake2::{Blake2b_256, Blake2bWithPerso},
 };
 use pasta_curves::pallas;
+use zeroize::Zeroizing;
 
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
@@ -119,7 +120,7 @@ pub fn spend_nullifier_bytes(
 
     let g_d = crate::diversify_hash_ledger(&diversifier)?;
     let cm = note_commitment_point(&g_d, &pk_d, value, &rho, rseed)?;
-    let psi = pallas_base_from_repr(orchard_psi(rseed, &rho)?)?;
+    let psi = pallas_base_from_repr(*orchard_psi(rseed, &rho)?)?;
     let nk = pallas_base_from_repr(*nk)?;
     let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
     let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
@@ -171,7 +172,7 @@ pub fn spend_nullifier_bytes_v3(
 
     let g_d = crate::diversify_hash_ledger(&diversifier)?;
     let cm = note_commitment_v3_point(&g_d, &pk_d, value, &rho, rseed)?;
-    let psi = pallas_base_from_repr(orchard_psi(rseed, &rho)?)?;
+    let psi = pallas_base_from_repr(*orchard_psi(rseed, &rho)?)?;
     let nk = pallas_base_from_repr(*nk)?;
     let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
     let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
@@ -450,17 +451,21 @@ fn key_agreement(
 ) -> Result<[u8; HASH_SIZE], Error> {
     let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
     let mut point = pallas_point_from_bytes(point_bytes)?;
-    point.rnd_scalarmul(&scalar_bytes_be)?;
+    point.rnd_scalarmul(&scalar_bytes_be[..])?;
     pallas_point_to_bytes(&point)
 }
 
-fn canonical_scalar_bytes_be(bytes_le: &[u8; HASH_SIZE]) -> Result<[u8; HASH_SIZE], Error> {
+/// Returns the bytes wrapped in [`Zeroizing`]: every caller passes a secret scalar, and wrapping
+/// unconditionally avoids having to decide per call site.
+fn canonical_scalar_bytes_be(
+    bytes_le: &[u8; HASH_SIZE],
+) -> Result<Zeroizing<[u8; HASH_SIZE]>, Error> {
     let scalar = pallas_scalar_from_repr(*bytes_le)?;
     if bool::from(scalar.is_zero()) {
         return Err(Error::MalformedPallasScalar);
     }
 
-    let mut bytes_be = [0u8; HASH_SIZE];
+    let mut bytes_be = Zeroizing::new([0u8; HASH_SIZE]);
     reverse_copy(&mut bytes_be, bytes_le);
     Ok(bytes_be)
 }
@@ -489,7 +494,10 @@ fn is_valid_nonidentity_pallas_point(bytes: &[u8; HASH_SIZE]) -> Result<bool, Er
     Ok(pallas_point_to_bytes(&point)? == *bytes)
 }
 
-fn orchard_esk(rseed: &[u8; HASH_SIZE], rho: &pallas::Base) -> Result<[u8; HASH_SIZE], Error> {
+fn orchard_esk(
+    rseed: &[u8; HASH_SIZE],
+    rho: &pallas::Base,
+) -> Result<Zeroizing<[u8; HASH_SIZE]>, Error> {
     let uniform = prf_expand_rseed_with_rho(rseed, ORCHARD_ESK_DOMAIN_SEPARATOR, rho)?;
     let esk = to_pallas_scalar_bytes(&uniform)?;
 
@@ -500,12 +508,18 @@ fn orchard_esk(rseed: &[u8; HASH_SIZE], rho: &pallas::Base) -> Result<[u8; HASH_
     Ok(esk)
 }
 
-fn orchard_psi(rseed: &[u8; HASH_SIZE], rho: &pallas::Base) -> Result<[u8; HASH_SIZE], Error> {
+fn orchard_psi(
+    rseed: &[u8; HASH_SIZE],
+    rho: &pallas::Base,
+) -> Result<Zeroizing<[u8; HASH_SIZE]>, Error> {
     let uniform = prf_expand_rseed_with_rho(rseed, ORCHARD_PSI_DOMAIN_SEPARATOR, rho)?;
     to_pallas_base_bytes(&uniform)
 }
 
-fn orchard_rcm(rseed: &[u8; HASH_SIZE], rho: &pallas::Base) -> Result<[u8; HASH_SIZE], Error> {
+fn orchard_rcm(
+    rseed: &[u8; HASH_SIZE],
+    rho: &pallas::Base,
+) -> Result<Zeroizing<[u8; HASH_SIZE]>, Error> {
     let uniform = prf_expand_rseed_with_rho(rseed, ORCHARD_RCM_DOMAIN_SEPARATOR, rho)?;
     to_pallas_scalar_bytes(&uniform)
 }
@@ -514,7 +528,7 @@ fn prf_expand_rseed_with_rho(
     rseed: &[u8; HASH_SIZE],
     domain_separator: u8,
     rho: &pallas::Base,
-) -> Result<[u8; PRF_EXPAND_BYTES], Error> {
+) -> Result<Zeroizing<[u8; PRF_EXPAND_BYTES]>, Error> {
     prf_expand_with_domain_separator_and_inputs(rseed, domain_separator, &[&rho.to_repr()])
 }
 
@@ -571,7 +585,7 @@ fn note_commitment(
 ) -> Result<[u8; HASH_SIZE], Error> {
     let psi = orchard_psi(rseed, rho)?;
     let rcm = orchard_rcm(rseed, rho)?;
-    let rcm = pallas_scalar_from_repr(rcm)?;
+    let rcm = pallas_scalar_from_repr(*rcm)?;
 
     let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
     let mut offset = 0;
@@ -579,7 +593,7 @@ fn note_commitment(
     append_le_bits(&mut message, &mut offset, pk_d, 32 * 8);
     append_le_bits(&mut message, &mut offset, &value.to_le_bytes(), 64);
     append_le_bits(&mut message, &mut offset, &rho.to_repr(), L_ORCHARD_BASE);
-    append_le_bits(&mut message, &mut offset, &psi, L_ORCHARD_BASE);
+    append_le_bits(&mut message, &mut offset, &*psi, L_ORCHARD_BASE);
 
     let Some(cmx) = sinsemilla_short_commit(NOTE_COMMITMENT_PERSONALIZATION, &message, &rcm)?
     else {
@@ -609,7 +623,7 @@ fn orchard_rcm_v3(
     value: u64,
     rho: &pallas::Base,
     psi: &[u8; HASH_SIZE],
-) -> Result<[u8; HASH_SIZE], Error> {
+) -> Result<Zeroizing<[u8; HASH_SIZE]>, Error> {
     let value_bytes = value.to_le_bytes();
     let rho_repr = rho.to_repr();
     let uniform = prf_expand_with_domain_separator_and_inputs(
@@ -657,7 +671,7 @@ fn note_commitment_v3(
 ) -> Result<[u8; HASH_SIZE], Error> {
     let psi = orchard_psi(rseed, rho)?;
     let rcm = orchard_rcm_v3(rseed, g_d, pk_d, value, rho, &psi)?;
-    let rcm = pallas_scalar_from_repr(rcm)?;
+    let rcm = pallas_scalar_from_repr(*rcm)?;
 
     let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
     let mut offset = 0;
@@ -665,7 +679,7 @@ fn note_commitment_v3(
     append_le_bits(&mut message, &mut offset, pk_d, 32 * 8);
     append_le_bits(&mut message, &mut offset, &value.to_le_bytes(), 64);
     append_le_bits(&mut message, &mut offset, &rho.to_repr(), L_ORCHARD_BASE);
-    append_le_bits(&mut message, &mut offset, &psi, L_ORCHARD_BASE);
+    append_le_bits(&mut message, &mut offset, &*psi, L_ORCHARD_BASE);
 
     let Some(cmx) = sinsemilla_short_commit(NOTE_COMMITMENT_PERSONALIZATION, &message, &rcm)?
     else {
@@ -685,7 +699,7 @@ fn note_commitment_point(
 ) -> Result<pallas::Point, Error> {
     let psi = orchard_psi(rseed, rho)?;
     let rcm = orchard_rcm(rseed, rho)?;
-    let rcm = pallas_scalar_from_repr(rcm)?;
+    let rcm = pallas_scalar_from_repr(*rcm)?;
 
     let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
     let mut offset = 0;
@@ -693,7 +707,7 @@ fn note_commitment_point(
     append_le_bits(&mut message, &mut offset, pk_d, 32 * 8);
     append_le_bits(&mut message, &mut offset, &value.to_le_bytes(), 64);
     append_le_bits(&mut message, &mut offset, &rho.to_repr(), L_ORCHARD_BASE);
-    append_le_bits(&mut message, &mut offset, &psi, L_ORCHARD_BASE);
+    append_le_bits(&mut message, &mut offset, &*psi, L_ORCHARD_BASE);
 
     sinsemilla_short_commit_point(NOTE_COMMITMENT_PERSONALIZATION, &message, &rcm)?
         .ok_or(Error::InvalidKeyDiscarded)
@@ -714,7 +728,7 @@ fn note_commitment_v3_point(
 ) -> Result<pallas::Point, Error> {
     let psi = orchard_psi(rseed, rho)?;
     let rcm = orchard_rcm_v3(rseed, g_d, pk_d, value, rho, &psi)?;
-    let rcm = pallas_scalar_from_repr(rcm)?;
+    let rcm = pallas_scalar_from_repr(*rcm)?;
 
     let mut message = [false; NOTE_COMMITMENT_MESSAGE_BITS];
     let mut offset = 0;
@@ -722,7 +736,7 @@ fn note_commitment_v3_point(
     append_le_bits(&mut message, &mut offset, pk_d, 32 * 8);
     append_le_bits(&mut message, &mut offset, &value.to_le_bytes(), 64);
     append_le_bits(&mut message, &mut offset, &rho.to_repr(), L_ORCHARD_BASE);
-    append_le_bits(&mut message, &mut offset, &psi, L_ORCHARD_BASE);
+    append_le_bits(&mut message, &mut offset, &*psi, L_ORCHARD_BASE);
 
     sinsemilla_short_commit_point(NOTE_COMMITMENT_PERSONALIZATION, &message, &rcm)?
         .ok_or(Error::InvalidKeyDiscarded)

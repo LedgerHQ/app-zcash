@@ -32,17 +32,30 @@ fn format_zec_amount(amount: u64) -> String {
     format!("{}.{:08} {}", whole, fractional, ZCASH_TICKER)
 }
 
-/// Display transaction outputs and fees for user confirmation.
+/// Display transaction outputs, fees and validity window for user confirmation.
 ///
 /// `transfer_type` classifies the flow (public, shielding, deshielding, private
 /// or mixed) and is shown as the review subtitle so the user can tell apart the
 /// involved value pools.
+///
+/// `expiry_height` is always shown, including when it is zero: zero means the
+/// transaction never expires, which is the widest possible window for it to be
+/// broadcast and therefore the case the user most needs to see. `locktime` is
+/// shown only when set, since zero constrains nothing.
 pub fn ui_display_tx(
     outputs: &[TxOutput],
     fees: u64,
     transfer_type: TransferType,
+    locktime: u32,
+    expiry_height: u32,
 ) -> Result<bool, AppSW> {
     let fees_str = format_zec_amount(fees);
+    let locktime_str = format!("{locktime}");
+    let expiry_str = if expiry_height == 0 {
+        String::from("Never expires")
+    } else {
+        format!("{expiry_height}")
+    };
 
     // Build name and value strings
     let mut name_strs = Vec::new();
@@ -59,6 +72,14 @@ pub fn ui_display_tx(
         name_strs.push((
             format!("Output #{idx} amount"),
             format!("Output #{idx} address"),
+            // The memo carries the index of its output, and is shown right after it below. Grouped
+            // at the end under a label naming only the kind, a memo could not be traced back to a
+            // recipient — an output without one contributes no field, so position identifies
+            // nothing, and two memos exchanged between two outputs would draw the same screen.
+            output
+                .memo
+                .as_ref()
+                .map(|memo| format!("Output #{idx} {}", memo.label)),
         ));
 
         value_strs.push(format_zec_amount(output.amount));
@@ -81,12 +102,10 @@ pub fn ui_display_tx(
             name: name_strs[idx].1.as_str(),
             value: &output.address,
         });
-    }
 
-    for output in outputs.iter().filter(|output| !output.is_change) {
-        if let Some(memo) = output.memo.as_ref() {
+        if let (Some(label), Some(memo)) = (name_strs[idx].2.as_ref(), output.memo.as_ref()) {
             my_fields.push(Field {
-                name: memo.label,
+                name: label.as_str(),
                 value: memo.value.as_str(),
             });
         }
@@ -97,8 +116,18 @@ pub fn ui_display_tx(
         value: fees_str.as_str(),
     });
 
-    // Create NBGL review. Maximum number of fields and string buffer length can be customized
-    // with constant generic parameters of NbglReview. Default values are 32 and 1024 respectively.
+    if locktime != 0 {
+        my_fields.push(Field {
+            name: "Lock time",
+            value: locktime_str.as_str(),
+        });
+    }
+
+    my_fields.push(Field {
+        name: "Expiry height",
+        value: expiry_str.as_str(),
+    });
+
     let review: NbglReview = NbglReview::new()
         .titles(
             "Review transaction to send ZEC",
