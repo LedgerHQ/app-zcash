@@ -55,6 +55,42 @@ impl SigningKey<SpendAuth> {
     }
 }
 
+#[cfg(feature = "ledger")]
+impl SigningKey<SpendAuth> {
+    /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
+    pub fn try_from_ledger_signing_key(
+        ask: ledger_zcash_crypto::redpallas::SpendAuthSigningKey,
+    ) -> Result<Self, ledger_zcash_crypto::Error> {
+        Ok(SigningKey(reddsa::SigningKey::try_from_ledger_signing_key(
+            ask,
+        )?))
+    }
+
+    /// Randomizes this signing key with the given `randomizer`, deriving the
+    /// randomized verification key using Ledger SDK Pallas primitives.
+    ///
+    /// Randomization is only supported for `SpendAuth` keys.
+    pub fn randomize_ledger(
+        &self,
+        randomizer: &pallas::Scalar,
+    ) -> Result<Self, ledger_zcash_crypto::Error> {
+        self.0.randomize_ledger(randomizer).map(SigningKey)
+    }
+
+    /// Creates a SpendAuth signature using Ledger SDK RedPallas primitives.
+    ///
+    /// `random_bytes` must be 80 freshly drawn random bytes; see
+    /// [`reddsa::SigningKey::sign_ledger`] for why the entropy is passed in rather than drawn from
+    /// an `RngCore`.
+    pub fn sign_ledger(
+        &self,
+        random_bytes: &[u8; 80],
+        msg: &[u8],
+    ) -> Result<Signature<SpendAuth>, ledger_zcash_crypto::Error> {
+        self.0.sign_ledger(random_bytes, msg).map(Signature)
+    }
+}
+
 impl<T: SigType> SigningKey<T> {
     /// Creates a signature of type `T` on `msg` using this `SigningKey`.
     pub fn sign<R: RngCore + CryptoRng>(&self, rng: R, msg: &[u8]) -> Signature<T> {

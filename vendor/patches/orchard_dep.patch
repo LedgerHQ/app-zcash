@@ -1,48 +1,1156 @@
-diff --git a/Cargo.toml b/Cargo.toml
-index af477a6..c9b270f 100644
+# Ledger delta for the vendored `orchard` crate.
+#
+# Base: crates.io package orchard 0.15.5 (git 29d1d55db62153dcaeef8ef631c8991c53ed1248)
+# Apply from vendor/orchard with: patch -p1 -E < ../patches/orchard_dep.patch
+#
+# Regenerate: fetch the base artifact, then diff it against the vendored tree.
+#
+diff -ruN a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -30,7 +30,7 @@ ff = { version = "0.13", default-features = false }
- fpe = { version = "0.6", default-features = false, features = ["alloc"] }
- group = "0.13"
- hex = { version = "0.4", default-features = false, features = ["alloc"] }
--lazy_static = "1"
-+lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
- memuse = { version = "0.2.2", default-features = false }
- pasta_curves = "0.5"
- proptest = { version = ">=1.0.0, <1.7.0", optional = true }
-@@ -56,7 +56,7 @@ halo2_proofs = { version = "0.3", optional = true, default-features = false, fea
- getset = "0.1"
+@@ -48,6 +48,7 @@
+ circuit = [
+     "dep:halo2_gadgets",
+     "dep:halo2_proofs",
++    "dep:tracing",
+     "std",
+ ]
+ default = [
+@@ -70,6 +71,10 @@
+     "proptest",
+     "rand/std",
+ ]
++ledger = [
++    "dep:ledger_zcash_crypto",
++    "reddsa/ledger",
++]
+ unstable-frost = []
+ unstable-voting-circuits = []
+ verifier-fingerprint = [
+@@ -103,6 +108,10 @@
+ path = "benches/small.rs"
+ harness = false
  
- # Logging
--tracing = { version = "0.1", default-features = false }
-+#tracing = { version = "0.1", default-features = false }
++[dependencies.ledger_zcash_crypto]
++path = "../../ledger_zcash_crypto"
++optional = true
++
+ [dependencies.aes]
+ version = "0.8"
  
- # No-std support
- corez = { version = "0.1.1", default-features = false, features = ["alloc"] }
-diff --git a/src/bundle/commitments.rs b/src/bundle/commitments.rs
-index fee2419..6afc2d8 100644
+@@ -213,6 +222,7 @@
+ 
+ [dependencies.tracing]
+ version = "0.1"
++optional = true
+ default-features = false
+ 
+ [dependencies.visibility]
+@@ -224,6 +234,10 @@
+ [dependencies.zcash_spec]
+ version = "0.2.1"
+ 
++[dependencies.zeroize]
++version = "1.6.0"
++default-features = false
++
+ [dependencies.zip32]
+ version = "0.2.0"
+ default-features = false
+@@ -270,8 +284,3 @@
+     "flamegraph",
+ ]
+ 
+-[profile.bench]
+-debug = 2
+-
+-[profile.release]
+-debug = 2
+diff -ruN a/src/bundle/commitments.rs b/src/bundle/commitments.rs
 --- a/src/bundle/commitments.rs
 +++ b/src/bundle/commitments.rs
-@@ -1,14 +1,16 @@
+@@ -1,3 +1,4 @@
 +#![allow(missing_docs)]
  //! Utility functions for computing bundle commitments
  
  use blake2b_simd::{Hash as Blake2bHash, Params, State};
+@@ -7,11 +8,11 @@
+     ValuePool,
+ };
  
- use crate::bundle::{Authorization, Authorized, Bundle};
- 
--const ZCASH_ORCHARD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrchardHash";
+-const ZCASH_ORCHARD_V5_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrchardHash";
++pub const ZCASH_ORCHARD_V5_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrchardHash";
+ const ZCASH_ORCHARD_V6_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrchardH_v6";
 -const ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrcActCHash";
 -const ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrcActMHash";
 -const ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrcActNHash";
--const ZCASH_ORCHARD_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthOrchaHash";
-+pub const ZCASH_ORCHARD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrchardHash";
 +pub const ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrcActCHash";
 +pub const ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrcActMHash";
-+pub const ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] =
-+    b"ZTxIdOrcActNHash";
-+pub const ZCASH_ORCHARD_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthOrchaHash";
++pub const ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrcActNHash";
+ const ZCASH_ORCHARD_V5_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthOrchaHash";
+ const ZCASH_ORCHARD_V6_SIGS_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxAuthOrchaH_v6";
+ const ZCASH_IRONWOOD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdIronwd_H_v6";
+diff -ruN a/src/keys.rs b/src/keys.rs
+--- a/src/keys.rs
++++ b/src/keys.rs
+@@ -2,6 +2,7 @@
  
- fn hasher(personal: &[u8; 16]) -> State {
-     Params::new().hash_length(32).personal(personal).to_state()
+ use alloc::boxed::Box;
+ use alloc::vec::Vec;
++use core::fmt;
+ use corez::io::{self, Read, Write};
+ 
+ use ::zip32::{AccountId, ChildIndex};
+@@ -18,6 +19,7 @@
+ use rand::RngCore;
+ use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
+ use zcash_note_encryption::EphemeralKeyBytes;
++use zeroize::{Zeroize as _, Zeroizing};
+ 
+ use crate::{
+     address::Address,
+@@ -40,9 +42,24 @@
+ /// $\mathsf{sk}$ as defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
+ ///
+ /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
+-#[derive(Debug, Copy, Clone)]
++/// Deliberately not `Copy`: this is the master Orchard spending key, and an implicit copy would
++/// leave a duplicate behind that the `Drop` below cannot reach. `Debug` is implemented by hand so
++/// that no `{:?}` can print the key material.
++#[derive(Clone)]
+ pub struct SpendingKey([u8; 32]);
+ 
++impl fmt::Debug for SpendingKey {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_tuple("SpendingKey").field(&"<redacted>").finish()
++    }
++}
++
++impl Drop for SpendingKey {
++    fn drop(&mut self) {
++        self.0.zeroize();
++    }
++}
++
+ impl ConstantTimeEq for SpendingKey {
+     fn ct_eq(&self, other: &Self) -> Choice {
+         self.to_bytes().ct_eq(other.to_bytes())
+@@ -93,6 +110,24 @@
+         &self.0
+     }
+ 
++    /// Builds a spending key from already-derived key bytes, refusing one whose spend authorizing
++    /// key would be zero.
++    ///
++    /// Takes the key by reference: passing it by value copies the seed-derived secret into a
++    /// parameter slot that no owner wipes, whereas the copy the returned `SpendingKey` owns is
++    /// cleared by its `Drop`.
++    #[cfg(feature = "ledger")]
++    pub fn ledger_from_bytes(sk: &[u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
++        let sk = SpendingKey(*sk);
++        let ask = SpendAuthorizingKey::ledger_derive_inner(&sk)?;
++
++        if ask.is_zero().into() {
++            return Err(ledger_zcash_crypto::Error::InvalidKeyDiscarded);
++        }
++
++        Ok(sk)
++    }
++
+     /// Derives the Orchard spending key for the given seed, coin type, and account.
+     pub fn from_zip32_seed(
+         seed: &[u8],
+@@ -129,12 +164,83 @@
+         to_scalar(PrfExpand::ORCHARD_ASK.with(&sk.0))
+     }
+ 
++    /// Derives ask from sk, using the same logic as `derive_inner` but with additional checks to ensure that the resulting ask is valid.
++    #[cfg(feature = "ledger")]
++    fn ledger_derive_inner(sk: &SpendingKey) -> Result<pallas::Scalar, ledger_zcash_crypto::Error> {
++        let ask = ledger_zcash_crypto::orchard_ask(&sk.0)?;
++        ledger_zcash_crypto::pallas_scalar_from_repr(*ask)
++    }
++
+     /// Randomizes this spend authorizing key with the given `randomizer`.
+     ///
+     /// The resulting key can be used to actually sign a spend.
+     pub fn randomize(&self, randomizer: &pallas::Scalar) -> redpallas::SigningKey<SpendAuth> {
+         self.0.randomize(randomizer)
+     }
++
++    /// Randomizes this spend authorizing key with the given `randomizer`, deriving
++    /// the randomized verification key using Ledger SDK Pallas primitives.
++    ///
++    /// The resulting key can be used to actually sign a spend.
++    #[cfg(feature = "ledger")]
++    pub fn randomize_ledger(
++        &self,
++        randomizer: &pallas::Scalar,
++    ) -> Result<redpallas::SigningKey<SpendAuth>, ledger_zcash_crypto::Error> {
++        self.0.randomize_ledger(randomizer)
++    }
++
++    /// Computes only the bytes of the randomized spend-auth verification key
++    /// (`rk = [(ask + randomizer) mod q]·G`) for this key, without constructing
++    /// the intermediate curve point. Used to verify a PCZT action's `rk` with a
++    /// smaller BN/point footprint than `randomize_ledger` + key conversion.
++    #[cfg(feature = "ledger")]
++    pub fn randomized_verification_key_bytes(
++        &self,
++        randomizer: &pallas::Scalar,
++    ) -> Result<[u8; 32], ledger_zcash_crypto::Error> {
++        let scalar_bytes: Zeroizing<[u8; 32]> = Zeroizing::new((&self.0).into());
++        let randomizer_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(randomizer.to_repr());
++        Ok(
++            ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
++                &scalar_bytes,
++                &randomizer_bytes,
++            )?,
++        )
++    }
++
++    /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
++    #[cfg(feature = "ledger")]
++    pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
++        let ask = Self::ledger_derive_inner(sk)?;
++        // `SpendingKey::ledger_from_bytes` already rejects a key deriving ask == 0, so this is
++        // unreachable — but it is returned rather than asserted: a panic here aborts through the
++        // device panic handler and freezes the app mid-signing, which is exactly what the
++        // `.expect()` removal below avoids.
++        if bool::from(ask.is_zero()) {
++            return Err(ledger_zcash_crypto::Error::InvalidKeyDiscarded);
++        }
++        // `to_repr` hands out a plain array: held as-is, this copy of `ask` would stay in the
++        // frame with nothing to wipe it.
++        let ask_bytes = Zeroizing::new(ask.to_repr());
++        // ask != 0 rules out a malformed-scalar failure, but derivation can still
++        // fail on BN-pool exhaustion (CxError): propagate it instead of
++        // `.expect()`-panicking, since a panic aborts through the device panic
++        // handler and freezes the app mid-signing, whereas a returned error lets
++        // the caller fail closed with a proper status word.
++        let signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(&ask_bytes)?;
++
++        let signing_key = if (signing_key.verification_key_bytes()[31] >> 7) == 1 {
++            let neg_ask_bytes = Zeroizing::new((-ask).to_repr());
++            ledger_zcash_crypto::redpallas::spendauth_signing_key(&neg_ask_bytes)?
++        } else {
++            signing_key
++        };
++
++        Ok(SpendAuthorizingKey(
++            redpallas::SigningKey::try_from_ledger_signing_key(signing_key)?,
++        ))
++    }
+ }
+ 
+ impl From<&SpendingKey> for SpendAuthorizingKey {
+@@ -248,6 +354,15 @@
+ }
+ 
+ impl NullifierDerivingKey {
++    /// Derives a nullifier deriving key from the given spending key, using the same logic as `From<&SpendingKey> for NullifierDerivingKey`.
++    #[cfg(feature = "ledger")]
++    pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
++        let nk = ledger_zcash_crypto::orchard_nk(&sk.0)?;
++        Ok(NullifierDerivingKey(
++            ledger_zcash_crypto::pallas_base_from_repr(*nk)?,
++        ))
++    }
++
+     pub(crate) fn prf_nf(&self, rho: pallas::Base) -> pallas::Base {
+         prf_nf(self.0, rho)
+     }
+@@ -284,6 +399,15 @@
+ }
+ 
+ impl CommitIvkRandomness {
++    /// Derives a nullifier deriving key from the given spending key, using the same logic as `From<&SpendingKey> for CommitIvkRandomness`.
++    #[cfg(feature = "ledger")]
++    pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
++        let rivk = ledger_zcash_crypto::orchard_rivk(&sk.0)?;
++        Ok(CommitIvkRandomness(
++            ledger_zcash_crypto::pallas_scalar_from_repr(*rivk)?,
++        ))
++    }
++
+     /// Returns the inner scalar value.
+     #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
+     pub(crate) fn inner(&self) -> pallas::Scalar {
+@@ -344,6 +468,17 @@
+ }
+ 
+ impl FullViewingKey {
++    /// Derives the internal full viewing key corresponding to this full viewing key.
++    #[cfg(feature = "ledger")]
++    pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
++        let ask = SpendAuthorizingKey::ledger_try_from(sk)?;
++        Ok(FullViewingKey {
++            ak: (&ask).into(),
++            nk: NullifierDerivingKey::ledger_try_from(sk)?,
++            rivk: CommitIvkRandomness::ledger_try_from(sk)?,
++        })
++    }
++
+     /// Returns the nullifier deriving key for this full viewing key.
+     #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
+     pub(crate) fn nk(&self) -> &NullifierDerivingKey {
+@@ -379,6 +514,22 @@
+         )
+     }
+ 
++    /// Ledger-SDK equivalent of [`Self::derive_dk_ovk`].
++    #[cfg(feature = "ledger")]
++    fn derive_dk_ovk_ledger(
++        &self,
++    ) -> Result<(DiversifierKey, OutgoingViewingKey), ledger_zcash_crypto::Error> {
++        let rivk = Zeroizing::new(self.rivk.to_bytes());
++        let ak = self.ak.to_bytes();
++        let nk = Zeroizing::new(self.nk.to_bytes());
++        let (dk, ovk) = ledger_zcash_crypto::orchard_dk_ovk(&rivk, &ak, &nk)?;
++
++        Ok((
++            DiversifierKey::from_bytes(*dk),
++            OutgoingViewingKey::from(*ovk),
++        ))
++    }
++
+     /// Returns the payment address for this key at the given index.
+     pub fn address_at(&self, j: impl Into<DiversifierIndex>, scope: Scope) -> Address {
+         self.to_ivk(scope).address_at(j)
+@@ -480,6 +631,65 @@
+             Scope::Internal => OutgoingViewingKey::from_fvk(&self.derive_internal()),
+         }
+     }
++
++    /// Ledger-SDK equivalent of [`Self::rivk`].
++    #[cfg(feature = "ledger")]
++    pub(crate) fn rivk_ledger(
++        &self,
++        scope: Scope,
++    ) -> Result<CommitIvkRandomness, ledger_zcash_crypto::Error> {
++        match scope {
++            Scope::External => Ok(self.rivk),
++            Scope::Internal => {
++                let rivk = Zeroizing::new(self.rivk.to_bytes());
++                let ak = self.ak.to_bytes();
++                let nk = Zeroizing::new(self.nk.to_bytes());
++                let rivk_internal = ledger_zcash_crypto::orchard_rivk_internal(&rivk, &ak, &nk)?;
++
++                Ok(CommitIvkRandomness(
++                    ledger_zcash_crypto::pallas_scalar_from_repr(*rivk_internal)?,
++                ))
++            }
++        }
++    }
++
++    /// Ledger-SDK equivalent of [`Self::derive_internal`].
++    #[cfg(feature = "ledger")]
++    fn derive_internal_ledger(&self) -> Result<Self, ledger_zcash_crypto::Error> {
++        Ok(FullViewingKey {
++            ak: self.ak.clone(),
++            nk: self.nk,
++            rivk: self.rivk_ledger(Scope::Internal)?,
++        })
++    }
++
++    /// Ledger-SDK equivalent of [`Self::to_ivk`].
++    #[cfg(feature = "ledger")]
++    pub fn to_ivk_ledger(
++        &self,
++        scope: Scope,
++    ) -> Result<IncomingViewingKey, ledger_zcash_crypto::Error> {
++        Ok(match scope {
++            Scope::External => IncomingViewingKey::from_fvk_ledger(self)?,
++            Scope::Internal => {
++                IncomingViewingKey::from_fvk_ledger(&self.derive_internal_ledger()?)?
++            }
++        })
++    }
++
++    /// Ledger-SDK equivalent of [`Self::to_ovk`].
++    #[cfg(feature = "ledger")]
++    pub fn to_ovk_ledger(
++        &self,
++        scope: Scope,
++    ) -> Result<OutgoingViewingKey, ledger_zcash_crypto::Error> {
++        Ok(match scope {
++            Scope::External => OutgoingViewingKey::from_fvk_ledger(self)?,
++            Scope::Internal => {
++                OutgoingViewingKey::from_fvk_ledger(&self.derive_internal_ledger()?)?
++            }
++        })
++    }
+ }
+ 
+ /// A key that provides the capability to derive a sequence of diversifiers.
+@@ -576,6 +786,23 @@
+         let ivk = KeyAgreementPrivateKey::derive_inner(fvk).unwrap();
+         KeyAgreementPrivateKey(ivk.into())
+     }
++
++    /// Ledger-SDK equivalent of [`Self::from_fvk`].
++    #[cfg(feature = "ledger")]
++    fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
++        let ak = fvk.ak.to_bytes();
++        let nk = Zeroizing::new(fvk.nk.to_bytes());
++        let rivk = Zeroizing::new(fvk.rivk.to_bytes());
++        let ivk = ledger_zcash_crypto::orchard_ivk(&ak, &nk, &rivk)?;
++
++        let ivk = NonZeroPallasBase::from_bytes(&ivk);
++
++        if !bool::from(ivk.is_some()) {
++            return Err(ledger_zcash_crypto::Error::InvalidKeyDiscarded);
++        }
++
++        Ok(KeyAgreementPrivateKey(ivk.unwrap().into()))
++    }
+ }
+ 
+ impl KeyAgreementPrivateKey {
+@@ -612,6 +839,19 @@
+         let pk_d = DiversifiedTransmissionKey::derive(&prepared_ivk, &d);
+         Address::from_parts(d, pk_d)
+     }
++
++    /// Ledger-SDK equivalent of [`Self::address`].
++    #[cfg(feature = "ledger")]
++    fn address_ledger(&self, d: Diversifier) -> Result<Address, ledger_zcash_crypto::Error> {
++        let ivk = Zeroizing::new(self.0.to_repr());
++        let g_d = ledger_zcash_crypto::diversify_hash_ledger(d.as_array())?;
++        let pk_d = ledger_zcash_crypto::orchard_pk_d(&ivk, &g_d)?;
++
++        Ok(Address::from_parts(
++            d,
++            DiversifiedTransmissionKey::from_bytes_ledger(&pk_d)?,
++        ))
++    }
+ }
+ 
+ /// A key that provides the capability to detect and decrypt incoming notes from the block
+@@ -640,6 +880,15 @@
+             ivk: KeyAgreementPrivateKey::from_fvk(fvk),
+         }
+     }
++
++    /// Helper method.
++    #[cfg(feature = "ledger")]
++    fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
++        Ok(IncomingViewingKey {
++            dk: fvk.derive_dk_ovk_ledger()?.0,
++            ivk: KeyAgreementPrivateKey::from_fvk_ledger(fvk)?,
++        })
++    }
+ }
+ 
+ impl IncomingViewingKey {
+@@ -680,6 +929,16 @@
+         self.address(self.dk.get(j))
+     }
+ 
++    /// Ledger-SDK equivalent of [`Self::address_at`].
++    #[cfg(feature = "ledger")]
++    pub fn address_at_ledger(
++        &self,
++        j: impl Into<DiversifierIndex>,
++    ) -> Result<Address, ledger_zcash_crypto::Error> {
++        let d = self.dk.get(j);
++        self.ivk.address_ledger(d)
++    }
++
+     /// Returns the payment address for this key corresponding to the given diversifier.
+     pub fn address(&self, d: Diversifier) -> Address {
+         self.ivk.address(d)
+@@ -741,6 +1000,12 @@
+     fn from_fvk(fvk: &FullViewingKey) -> Self {
+         fvk.derive_dk_ovk().1
+     }
++
++    /// Ledger-SDK equivalent of [`Self::from_fvk`].
++    #[cfg(feature = "ledger")]
++    fn from_fvk_ledger(fvk: &FullViewingKey) -> Result<Self, ledger_zcash_crypto::Error> {
++        Ok(fvk.derive_dk_ovk_ledger()?.1)
++    }
+ }
+ 
+ impl From<[u8; 32]> for OutgoingViewingKey {
+@@ -785,6 +1050,13 @@
+         NonIdentityPallasPoint::from_bytes(bytes).map(DiversifiedTransmissionKey)
+     }
+ 
++    #[cfg(feature = "ledger")]
++    pub(crate) fn from_bytes_ledger(bytes: &[u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
++        Ok(DiversifiedTransmissionKey(
++            NonIdentityPallasPoint::from_bytes_ledger(bytes)?,
++        ))
++    }
++
+     /// $repr_P(self)$
+     #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
+     pub(crate) fn to_bytes(self) -> [u8; 32] {
+diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
+--- a/src/note_encryption.rs
++++ b/src/note_encryption.rs
+@@ -579,9 +579,11 @@
+ 
+ #[cfg(test)]
+ mod tests {
++    use alloc::string::String;
+     use alloc::vec::Vec;
+ 
+     use rand::rngs::OsRng;
++    use std::println;
+     use zcash_note_encryption::{
+         batch, try_compact_note_decryption, try_note_decryption, try_output_recovery_with_ovk,
+         BatchDomain, Domain, EphemeralKeyBytes, NoteEncryption,
+@@ -1022,4 +1024,567 @@
+             assert_eq!(batched_wnaf, expected);
+         }
+     }
++
++    /// Generates deterministic V3 (ZIP 2005) Ironwood note-encryption test vectors for use
++    /// in the Ragger Python functional tests (`tests/standalone/test_pczt_ironwood.py`).
++    ///
++    /// Must be run inside the Ledger dev-tools Docker container (host build, not device build):
++    ///
++    /// ```sh
++    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
++    /// cargo test --target "$HOST" -- gen_v3_ironwood_test_vectors --nocapture
++    /// ```
++    ///
++    /// The `ledger` feature must be excluded from the build to avoid pulling in the device SDK:
++    /// run from within `vendor/orchard/` so the root `Cargo.toml`'s `features = ["ledger"]`
++    /// does not apply.
++    ///
++    /// **Why this is device-compatible:**
++    /// The enc_ciphertext is encrypted with `k_enc = KDF(ECDH(esk, pk_d), epk)`.
++    /// The device decrypts with `k_enc = KDF(ECDH(ivk, epk), epk) = KDF(ECDH(esk, pk_d), epk)`
++    /// because `pk_d = ivk·g_d` and `epk = esk·g_d`, so both DH computations yield `esk·ivk·g_d`.
++    /// Therefore the device's IVK will successfully decrypt this enc_ciphertext without us
++    /// needing to know the IVK value.
++    #[test]
++    fn gen_v3_ironwood_test_vectors() {
++        // _INTERNAL_RECIPIENT from test_pczt_ironwood.py: 11-byte diversifier + 32-byte pk_d.
++        // This is the device's internal address at m/32'/133'/0' (Speculos deterministic seed).
++        let recipient_bytes: [u8; 43] = [
++            // diversifier (11 bytes)
++            0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe,
++            // pk_d (32 bytes)
++            0x68, 0x14, 0xce, 0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09,
++            0x46, 0xf1, 0xab, 0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f,
++            0xd0, 0x52, 0xe2, 0x0a,
++        ];
++        let diversifier = Diversifier::from_bytes(recipient_bytes[..11].try_into().unwrap());
++        let pk_d =
++            DiversifiedTransmissionKey::from_bytes(recipient_bytes[11..].try_into().unwrap())
++                .unwrap();
++        let recipient = Address::from_parts(diversifier, pk_d);
++
++        // _DUMMY_NULLIFIER from test_pczt_ironwood.py — spend nullifier of the dummy action.
++        // rho = Rho::from_nf_old(nf_old) matches what the device reconstructs from the wire.
++        let nullifier_bytes: [u8; 32] = [
++            0x57, 0xaa, 0xd2, 0x67, 0x0e, 0x2e, 0x4d, 0xf6, 0x7c, 0xa8, 0x55, 0xc5, 0x39, 0x73,
++            0xdb, 0x38, 0xe7, 0x94, 0x2e, 0xfa, 0x8e, 0x90, 0x6e, 0xe9, 0x61, 0xad, 0xb7, 0x19,
++            0x55, 0xaa, 0x84, 0x23,
++        ];
++        let nf_old = Nullifier::from_bytes(&nullifier_bytes).unwrap();
++        let rho = Rho::from_nf_old(nf_old);
++
++        // Fixed rseed distinct from _DUMMY_RSEED (0x30) to produce a different V3 cmx.
++        let rseed_bytes: [u8; 32] = {
++            let mut b = [0u8; 32];
++            b[0] = 0x35;
++            b
++        };
++        let rseed = Option::from(RandomSeed::from_bytes(rseed_bytes, &rho)).expect(
++            "rseed 0x35... is valid for this rho; if this fails try a different leading byte",
++        );
++
++        // V3 (ZIP 2005) note: same Sinsemilla commitment message as V2, but rcm uses BLAKE2b-512
++        // over (rseed ‖ 0x0B ‖ g_d ‖ pk_d ‖ value_le ‖ rho ‖ psi) — see note_commitment_v3.
++        let value = NoteValue::from_raw(10000); // same as _DUMMY_CHANGE_VALUE
++        let note: Note = Option::from(Note::from_parts(
++            recipient,
++            value,
++            rho,
++            rseed,
++            NoteVersion::V3,
++        ))
++        .expect("note construction failed — recipient or rho may be invalid");
++
++        // Derive esk from the note's rseed so the device's compact-decryption path can verify
++        // that epk == PRF-esk(rseed, rho) · g_d.  Using a fixed scalar here (as the previous
++        // version did) would cause that check to fail, making the device reject the note.
++        let esk = note.esk();
++
++        let encryptor = IronwoodNoteEncryption::new_with_esk(esk, None, note, [0u8; 512]);
++        let cmx = ExtractedNoteCommitment::from(note.commitment());
++        let ephemeral_key = IronwoodDomain::epk_bytes(encryptor.epk());
++        let enc_ciphertext_array = encryptor.encrypt_note_plaintext();
++        let enc_ciphertext: &[u8] = enc_ciphertext_array.as_ref();
++
++        // Helper: format bytes as a Python hex string literal, 64 hex chars per line.
++        let hex_lines = |bytes: &[u8]| -> String {
++            bytes
++                .chunks(32)
++                .map(|c| c.iter().map(|b| format!("{:02x}", b)).collect::<String>())
++                .collect::<Vec<_>>()
++                .join("\"\n    \"")
++        };
++
++        println!("\n# ---- V3 Ironwood test vectors (gen_v3_ironwood_test_vectors) ----");
++        println!(
++            "# Generated with: cargo test -p orchard -- gen_v3_ironwood_test_vectors --nocapture"
++        );
++        println!("# recipient  = _INTERNAL_RECIPIENT");
++        println!("# nullifier  = _DUMMY_NULLIFIER  (rho = Rho::from_nf_old(nullifier))");
++        println!("# note_value = 10000  (= _DUMMY_CHANGE_VALUE)");
++        println!("# rseed      = 0x35 followed by 31 zero bytes (note rseed, not metadata rseed)");
++        println!("# esk        = note.esk() = PRF-esk(rseed, rho) — derived, not fixed");
++        println!("# version    = NoteVersion::V3  (plaintext lead byte 0x03)\n");
++        println!(
++            "_V3_REAL_EPK = bytes.fromhex(\n    \"{}\"\n)",
++            hex_lines(&ephemeral_key.0)
++        );
++        println!(
++            "_V3_REAL_CMX = bytes.fromhex(\n    \"{}\"\n)",
++            hex_lines(&cmx.to_bytes())
++        );
++        println!(
++            "_V3_REAL_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
++            hex_lines(enc_ciphertext)
++        );
++
++        // Sanity check: the note commitment is stable (not randomised).
++        assert_eq!(
++            cmx,
++            ExtractedNoteCommitment::from(note.commitment()),
++            "note commitment must be deterministic"
++        );
++    }
++
++    /// Compute the V3 note commitment for the zero-value dummy output used in
++    /// `test_pczt_v2_0x03_dummy_accepted`.  Outputs the `_V3_DUMMY_CMX` Python constant.
++    ///
++    /// Run from within `vendor/orchard/` (host target, no `ledger` feature):
++    /// ```sh
++    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
++    /// cargo test --target "$HOST" -- gen_v3_dummy_cmx --nocapture
++    /// ```
++    #[test]
++    fn gen_v3_dummy_cmx() {
++        // _INTERNAL_RECIPIENT — same as gen_v3_ironwood_test_vectors.
++        let recipient_bytes: [u8; 43] = [
++            0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe, 0x68, 0x14, 0xce,
++            0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09, 0x46, 0xf1, 0xab,
++            0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f, 0xd0, 0x52, 0xe2,
++            0x0a,
++        ];
++        let diversifier = Diversifier::from_bytes(recipient_bytes[..11].try_into().unwrap());
++        let pk_d =
++            DiversifiedTransmissionKey::from_bytes(recipient_bytes[11..].try_into().unwrap())
++                .unwrap();
++        let recipient = Address::from_parts(diversifier, pk_d);
++
++        // _DUMMY_NULLIFIER — same as gen_v3_ironwood_test_vectors.
++        let nullifier_bytes: [u8; 32] = [
++            0x57, 0xaa, 0xd2, 0x67, 0x0e, 0x2e, 0x4d, 0xf6, 0x7c, 0xa8, 0x55, 0xc5, 0x39, 0x73,
++            0xdb, 0x38, 0xe7, 0x94, 0x2e, 0xfa, 0x8e, 0x90, 0x6e, 0xe9, 0x61, 0xad, 0xb7, 0x19,
++            0x55, 0xaa, 0x84, 0x23,
++        ];
++        let nf_old = Nullifier::from_bytes(&nullifier_bytes).unwrap();
++        let rho = Rho::from_nf_old(nf_old);
++
++        // _DUMMY_RSEED = 0x30 followed by 31 zero bytes (distinct from the real-output rseed 0x35).
++        let rseed_bytes: [u8; 32] = {
++            let mut b = [0u8; 32];
++            b[0] = 0x30;
++            b
++        };
++        let rseed = Option::from(RandomSeed::from_bytes(rseed_bytes, &rho))
++            .expect("rseed 0x30... is valid for this rho");
++
++        // Zero-value V3 dummy note.
++        let note: Note = Option::from(Note::from_parts(
++            recipient,
++            NoteValue::from_raw(0),
++            rho,
++            rseed,
++            NoteVersion::V3,
++        ))
++        .expect("note construction failed");
++
++        let cmx = ExtractedNoteCommitment::from(note.commitment());
++        let cmx_bytes = cmx.to_bytes();
++
++        println!("\n# ---- V3 dummy cmx (gen_v3_dummy_cmx) ----");
++        println!(
++            "# Generated with: cargo test --target $HOST -p orchard -- gen_v3_dummy_cmx --nocapture"
++        );
++        println!("# recipient = _INTERNAL_RECIPIENT, value = 0, nullifier = _DUMMY_NULLIFIER");
++        println!("# rseed     = 0x30 followed by 31 zero bytes (_DUMMY_RSEED)\n");
++        println!(
++            "_V3_DUMMY_CMX = bytes.fromhex(\n    \"{}\"\n)",
++            cmx_bytes
++                .iter()
++                .map(|b| format!("{:02x}", b))
++                .collect::<String>()
++        );
++    }
++
++    /// Emits the V3 note commitment for a zero-valued output that the device cannot decrypt,
++    /// as used by `_valid_ironwood_action()` in test_pczt_ironwood.py. Such an action carries an
++    /// all-zero enc_ciphertext, so only the commitment has to agree with the firmware.
++    ///
++    /// ```sh
++    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
++    /// cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
++    ///   --target-dir /tmp/orchard-host -- gen_v3_valid_action_cmx --nocapture
++    /// ```
++    #[test]
++    fn gen_v3_valid_action_cmx() {
++        // _INTERNAL_RECIPIENT
++        let recipient_bytes: [u8; 43] = [
++            0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe, 0x68, 0x14, 0xce,
++            0xda, 0xfd, 0x96, 0xc1, 0x60, 0xc3, 0xd8, 0x79, 0xcb, 0x27, 0x09, 0x46, 0xf1, 0xab,
++            0x6f, 0xdf, 0x44, 0x2a, 0x15, 0x64, 0x8d, 0x7c, 0x0b, 0x3c, 0x9f, 0xd0, 0x52, 0xe2,
++            0x0a,
++        ];
++        let diversifier = Diversifier::from_bytes(recipient_bytes[..11].try_into().unwrap());
++        let pk_d =
++            DiversifiedTransmissionKey::from_bytes(recipient_bytes[11..].try_into().unwrap())
++                .unwrap();
++        let recipient = Address::from_parts(diversifier, pk_d);
++
++        // _NULLIFIER
++        let nullifier_bytes: [u8; 32] = [
++            0xed, 0x37, 0xcc, 0x73, 0x3c, 0x22, 0x8d, 0xc3, 0xdd, 0xa2, 0xcf, 0x08, 0x8b, 0xa6,
++            0x46, 0xf9, 0xd2, 0x04, 0xad, 0xc9, 0xd8, 0xd6, 0xf9, 0x5e, 0xc3, 0x61, 0x26, 0xeb,
++            0x74, 0x2c, 0x3a, 0x10,
++        ];
++        let nf_old = Nullifier::from_bytes(&nullifier_bytes).unwrap();
++        let rho = Rho::from_nf_old(nf_old);
++
++        // _RSEED = 0x2e followed by 31 zero bytes
++        let rseed_bytes: [u8; 32] = {
++            let mut b = [0u8; 32];
++            b[0] = 0x2e;
++            b
++        };
++        let rseed = Option::from(RandomSeed::from_bytes(rseed_bytes, &rho))
++            .expect("rseed 0x2e... is valid for this rho");
++
++        let note: Note = Option::from(Note::from_parts(
++            recipient,
++            NoteValue::from_raw(0),
++            rho,
++            rseed,
++            NoteVersion::V3,
++        ))
++        .expect("note construction failed");
++
++        let cmx_bytes = ExtractedNoteCommitment::from(note.commitment()).to_bytes();
++
++        println!("\n# ---- V3 cmx for _valid_ironwood_action (gen_v3_valid_action_cmx) ----");
++        println!("# recipient = _INTERNAL_RECIPIENT, value = 0, nullifier = _NULLIFIER");
++        println!("# rseed     = 0x2e followed by 31 zero bytes (_RSEED)\n");
++        println!(
++            "_CMX = bytes.fromhex(\n    \"{}\"\n)",
++            cmx_bytes
++                .iter()
++                .map(|b| format!("{:02x}", b))
++                .collect::<String>()
++        );
++    }
++}
++
++#[cfg(test)]
++mod gen_v3_ext_vectors {
++    //! Generates updated V3 external-recipient action vectors for
++    //! test_pczt_ironwood.py after the firmware fix to use V3 note commitment
++    //! for spend-nullifier recomputation.
++    //!
++    //! The external action's spend note is owned by the same Speculos key
++    //! (spend_recipient = _SPEND_RECIPIENT), so its nullifier also changes
++    //! when the firmware switches from V2 → V3 note commitment.
++    //!
++    //! Run from the app-zcash worktree root (outside /app to avoid build-std):
++    //! ```sh
++    //! HOST=$(rustc -vV | awk '/^host:/ {print $2}')
++    //! cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
++    //!   --target-dir /tmp/orchard-host -- gen_v3_ext_action_vectors --nocapture
++    //! ```
++
++    use alloc::{string::String, vec::Vec};
++    use rand::rngs::OsRng;
++    use std::println;
++    use zcash_note_encryption::Domain;
++
++    use crate::{
++        keys::{DiversifiedTransmissionKey, Diversifier, FullViewingKey, Scope},
++        note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
++        note_encryption::{IronwoodDomain, IronwoodNoteEncryption},
++        value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
++        Address, Note, NoteVersion,
++    };
++
++    const fn hex_decode_96(hex: &[u8; 192]) -> [u8; 96] {
++        let mut out = [0u8; 96];
++        let mut i = 0;
++        while i < 96 {
++            let h = if hex[i * 2] >= b'a' {
++                hex[i * 2] - b'a' + 10
++            } else {
++                hex[i * 2] - b'0'
++            };
++            let l = if hex[i * 2 + 1] >= b'a' {
++                hex[i * 2 + 1] - b'a' + 10
++            } else {
++                hex[i * 2 + 1] - b'0'
++            };
++            out[i] = (h << 4) | l;
++            i += 1;
++        }
++        out
++    }
++
++    const fn hex_decode_43(hex: &[u8; 86]) -> [u8; 43] {
++        let mut out = [0u8; 43];
++        let mut i = 0;
++        while i < 43 {
++            let h = if hex[i * 2] >= b'a' {
++                hex[i * 2] - b'a' + 10
++            } else {
++                hex[i * 2] - b'0'
++            };
++            let l = if hex[i * 2 + 1] >= b'a' {
++                hex[i * 2 + 1] - b'a' + 10
++            } else {
++                hex[i * 2 + 1] - b'0'
++            };
++            out[i] = (h << 4) | l;
++            i += 1;
++        }
++        out
++    }
++
++    // Speculos Orchard FVK bytes (ak ‖ nk ‖ rivk, 96 bytes) for m/32'/133'/0'
++    // on the Speculos default seed.
++    // Derived by compute_v3_spend_nullifier_from_speculos_seed in
++    // ledger-zcash-utils/crates/zcash-crypto/tests/ironwood_nullifier_version_check.rs
++    const FVK_BYTES: [u8; 96] = hex_decode_96(
++        b"e129bb7d06ed69a5ac01a664482ec9987fd19c40940bf76d98eb8b952974852949b0128d5072f9f92c7f7e8eb49a5434d2c04b67a30a55946d8322df3e484426f6151235e5897d34196943cb8f968312f1c8fba9ed82830b59f801b6de5da835",
++    );
++
++    // _SPEND_RECIPIENT from test_pczt_ironwood.py — also the spend_recipient
++    // in _external_recipient_ironwood_action (the external action spends our own note).
++    const SPEND_RECIPIENT: [u8; 43] = hex_decode_43(
++        b"4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
++    );
++
++    // _EXT_RECIPIENT — output recipient for the external action.
++    const EXT_RECIPIENT: [u8; 43] = hex_decode_43(
++        b"4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
++    );
++
++    const EXT_SPEND_RHO: [u8; 32] = {
++        let mut b = [0u8; 32];
++        b[0] = 0x07;
++        b
++    };
++    const EXT_SPEND_RSEED: [u8; 32] = {
++        let mut b = [0u8; 32];
++        b[0] = 0x1b;
++        b
++    };
++    const EXT_RSEED: [u8; 32] = {
++        let mut b = [0u8; 32];
++        b[0] = 0x2f;
++        b
++    };
++    const EXT_RCV: [u8; 32] = {
++        let mut b = [0u8; 32];
++        b[0] = 0x43;
++        b
++    };
++
++    fn hex_lines(bytes: &[u8]) -> String {
++        bytes
++            .chunks(32)
++            .map(|c| c.iter().map(|b| format!("{:02x}", b)).collect::<String>())
++            .collect::<Vec<_>>()
++            .join("\"\n    \"")
++    }
++
++    fn hex_str(bytes: &[u8]) -> String {
++        bytes.iter().map(|b| format!("{:02x}", b)).collect()
++    }
++
++    /// Generate updated V3 external-action vectors for test_pczt_ironwood.py.
++    #[test]
++    fn gen_v3_ext_action_vectors() {
++        let fvk = FullViewingKey::from_bytes(&FVK_BYTES).expect("Speculos Orchard FVK must decode");
++        let ext_ovk = fvk.to_ovk(Scope::External);
++
++        // ── V3 spend note (spend_value = 200 000) ──────────────────────
++        let spend_div = Diversifier::from_bytes(SPEND_RECIPIENT[..11].try_into().unwrap());
++        let spend_pk_d =
++            DiversifiedTransmissionKey::from_bytes(SPEND_RECIPIENT[11..].try_into().unwrap())
++                .expect("spend_recipient pk_d must be valid");
++        let spend_addr = Address::from_parts(spend_div, spend_pk_d);
++
++        let ext_spend_rho = Rho::from_bytes(&EXT_SPEND_RHO)
++            .into_option()
++            .expect("EXT_SPEND_RHO must be valid");
++        let ext_spend_rseed = Option::from(RandomSeed::from_bytes(EXT_SPEND_RSEED, &ext_spend_rho))
++            .expect("EXT_SPEND_RSEED must be valid for rho");
++        let spend_note: Note = Option::from(Note::from_parts(
++            spend_addr,
++            NoteValue::from_raw(200_000),
++            ext_spend_rho,
++            ext_spend_rseed,
++            NoteVersion::V3,
++        ))
++        .expect("external spend note must be valid");
++
++        let ext_nullifier = spend_note.nullifier(&fvk);
++        let ext_nf_bytes = ext_nullifier.to_bytes();
++        println!(
++            "_EXT_NULLIFIER = bytes.fromhex(\"{}\")",
++            hex_str(&ext_nf_bytes)
++        );
++
++        // ── V3 output note (value = 180 000, rho = ext_nullifier) ────────
++        // The Ironwood value pool carries V3 note plaintexts only.
++        let ext_div = Diversifier::from_bytes(EXT_RECIPIENT[..11].try_into().unwrap());
++        let ext_pk_d =
++            DiversifiedTransmissionKey::from_bytes(EXT_RECIPIENT[11..].try_into().unwrap())
++                .expect("ext_recipient pk_d must be valid");
++        let ext_addr = Address::from_parts(ext_div, ext_pk_d);
++
++        let ext_output_rho = Rho::from_bytes(&ext_nf_bytes)
++            .into_option()
++            .expect("ext_nullifier must be a valid field element");
++        let ext_rseed = Option::from(RandomSeed::from_bytes(EXT_RSEED, &ext_output_rho))
++            .expect("EXT_RSEED must be valid for rho");
++        let ext_output_note: Note = Option::from(Note::from_parts(
++            ext_addr,
++            NoteValue::from_raw(180_000),
++            ext_output_rho,
++            ext_rseed,
++            NoteVersion::V3,
++        ))
++        .expect("external output note must be valid");
++
++        let ext_cmx = ExtractedNoteCommitment::from(ext_output_note.commitment());
++        let ext_cmx_bytes = ext_cmx.to_bytes();
++        println!("_EXT_CMX = bytes.fromhex(\"{}\")", hex_str(&ext_cmx_bytes));
++
++        // ── Encrypt output note (external OVK) ───────────────────────────
++        let esk = ext_output_note.esk();
++        let encryptor =
++            IronwoodNoteEncryption::new_with_esk(esk, Some(ext_ovk), ext_output_note, [0u8; 512]);
++        let epk_bytes = IronwoodDomain::epk_bytes(encryptor.epk());
++        println!(
++            "_EXT_EPHEMERAL_KEY = bytes.fromhex(\"{}\")",
++            hex_str(&epk_bytes.0)
++        );
++
++        let enc_ct = encryptor.encrypt_note_plaintext();
++        println!(
++            "_EXT_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
++            hex_lines(enc_ct.as_ref())
++        );
++
++        // cv_net = ValueCommitment::derive(net = 20000, rcv = EXT_RCV)
++        let ext_rcv = ValueCommitTrapdoor::from_bytes(EXT_RCV)
++            .into_option()
++            .expect("EXT_RCV must be a valid scalar");
++        let value_net = NoteValue::from_raw(200_000) - NoteValue::from_raw(180_000);
++        let ext_cv_net = ValueCommitment::derive(value_net, ext_rcv);
++
++        let out_ct = encryptor.encrypt_outgoing_plaintext(&ext_cv_net, &ext_cmx, &mut OsRng);
++        println!(
++            "_EXT_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
++            hex_lines(out_ct.as_ref())
++        );
++    }
++
++    /// Generate updated V3 memo-action vectors for test_pczt_ironwood.py.
++    ///
++    /// The memo action is a dummy padding spend whose 90 000-zat output goes to
++    /// `_EXT_RECIPIENT` and carries an ASCII memo recovered through the external OVK.
++    ///
++    /// ```sh
++    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
++    /// cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
++    ///   --target-dir /tmp/orchard-host -- gen_v3_memo_action_vectors --nocapture
++    /// ```
++    #[test]
++    fn gen_v3_memo_action_vectors() {
++        let fvk = FullViewingKey::from_bytes(&FVK_BYTES).expect("Speculos Orchard FVK must decode");
++        let ovk = fvk.to_ovk(Scope::External);
++
++        let ext_div = Diversifier::from_bytes(EXT_RECIPIENT[..11].try_into().unwrap());
++        let ext_pk_d =
++            DiversifiedTransmissionKey::from_bytes(EXT_RECIPIENT[11..].try_into().unwrap())
++                .expect("ext_recipient pk_d must be valid");
++        let ext_addr = Address::from_parts(ext_div, ext_pk_d);
++
++        // _MEMO_NULLIFIER — the action's nullifier; the output rho derives from it.
++        let memo_nf_bytes: [u8; 32] = [
++            0x78, 0x1c, 0x4f, 0xaf, 0x96, 0x02, 0x06, 0x51, 0x0f, 0xdc, 0x72, 0x73, 0x92, 0x67,
++            0xfa, 0x19, 0x3d, 0x9e, 0x01, 0x2d, 0xbc, 0x68, 0x99, 0x8d, 0x35, 0x53, 0x98, 0x37,
++            0xe5, 0x20, 0xae, 0x2a,
++        ];
++        let nf_old = Nullifier::from_bytes(&memo_nf_bytes).expect("_MEMO_NULLIFIER must be valid");
++        let rho = Rho::from_nf_old(nf_old);
++
++        // _MEMO_RSEED = 0x29 followed by 31 zero bytes.
++        let memo_rseed_bytes: [u8; 32] = {
++            let mut b = [0u8; 32];
++            b[0] = 0x29;
++            b
++        };
++        let rseed = Option::from(RandomSeed::from_bytes(memo_rseed_bytes, &rho))
++            .expect("_MEMO_RSEED must be valid for rho");
++
++        let note: Note = Option::from(Note::from_parts(
++            ext_addr,
++            NoteValue::from_raw(90_000),
++            rho,
++            rseed,
++            NoteVersion::V3,
++        ))
++        .expect("memo output note must be valid");
++
++        let cmx = ExtractedNoteCommitment::from(note.commitment());
++        println!("\n# ---- V3 memo action (gen_v3_memo_action_vectors) ----");
++        println!(
++            "_MEMO_CMX = bytes.fromhex(\"{}\")",
++            hex_str(&cmx.to_bytes())
++        );
++
++        let mut memo = [0u8; 512];
++        let text = b"PCZT Orchard memo test";
++        memo[..text.len()].copy_from_slice(text);
++
++        let esk = note.esk();
++        let encryptor = IronwoodNoteEncryption::new_with_esk(esk, Some(ovk), note, memo);
++        let epk_bytes = IronwoodDomain::epk_bytes(encryptor.epk());
++        println!(
++            "_MEMO_EPHEMERAL_KEY = bytes.fromhex(\"{}\")",
++            hex_str(&epk_bytes.0)
++        );
++        let enc_ct = encryptor.encrypt_note_plaintext();
++        println!(
++            "_MEMO_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
++            hex_lines(enc_ct.as_ref())
++        );
++
++        // _MEMO_RCV = 0x3d …; the action spends nothing and outputs 90 000.
++        let memo_rcv_bytes: [u8; 32] = {
++            let mut b = [0u8; 32];
++            b[0] = 0x3d;
++            b
++        };
++        let rcv = ValueCommitTrapdoor::from_bytes(memo_rcv_bytes)
++            .into_option()
++            .expect("_MEMO_RCV must be a valid scalar");
++        let value_net = NoteValue::from_raw(0) - NoteValue::from_raw(90_000);
++        let cv_net = ValueCommitment::derive(value_net, rcv);
++        println!(
++            "_MEMO_CV_NET = bytes.fromhex(\"{}\")",
++            hex_str(&cv_net.to_bytes())
++        );
++
++        let out_ct = encryptor.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut OsRng);
++        println!(
++            "_MEMO_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
++            hex_lines(out_ct.as_ref())
++        );
++    }
+ }
+diff -ruN a/src/primitives/redpallas.rs b/src/primitives/redpallas.rs
+--- a/src/primitives/redpallas.rs
++++ b/src/primitives/redpallas.rs
+@@ -55,6 +55,42 @@
+     }
+ }
+ 
++#[cfg(feature = "ledger")]
++impl SigningKey<SpendAuth> {
++    /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
++    pub fn try_from_ledger_signing_key(
++        ask: ledger_zcash_crypto::redpallas::SpendAuthSigningKey,
++    ) -> Result<Self, ledger_zcash_crypto::Error> {
++        Ok(SigningKey(reddsa::SigningKey::try_from_ledger_signing_key(
++            ask,
++        )?))
++    }
++
++    /// Randomizes this signing key with the given `randomizer`, deriving the
++    /// randomized verification key using Ledger SDK Pallas primitives.
++    ///
++    /// Randomization is only supported for `SpendAuth` keys.
++    pub fn randomize_ledger(
++        &self,
++        randomizer: &pallas::Scalar,
++    ) -> Result<Self, ledger_zcash_crypto::Error> {
++        self.0.randomize_ledger(randomizer).map(SigningKey)
++    }
++
++    /// Creates a SpendAuth signature using Ledger SDK RedPallas primitives.
++    ///
++    /// `random_bytes` must be 80 freshly drawn random bytes; see
++    /// [`reddsa::SigningKey::sign_ledger`] for why the entropy is passed in rather than drawn from
++    /// an `RngCore`.
++    pub fn sign_ledger(
++        &self,
++        random_bytes: &[u8; 80],
++        msg: &[u8],
++    ) -> Result<Signature<SpendAuth>, ledger_zcash_crypto::Error> {
++        self.0.sign_ledger(random_bytes, msg).map(Signature)
++    }
++}
++
+ impl<T: SigType> SigningKey<T> {
+     /// Creates a signature of type `T` on `msg` using this `SigningKey`.
+     pub fn sign<R: RngCore + CryptoRng>(&self, rng: R, msg: &[u8]) -> Signature<T> {
+diff -ruN a/src/spec.rs b/src/spec.rs
+--- a/src/spec.rs
++++ b/src/spec.rs
+@@ -60,6 +60,34 @@
+         assert!(!bool::from(p.is_identity()));
+         NonIdentityPallasPoint(p)
+     }
++
++    #[cfg(feature = "ledger")]
++    pub(crate) fn from_bytes_ledger(bytes: &[u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
++        let point = ledger_zcash_crypto::nonidentity_pallas_point_from_bytes(bytes)?;
++        let x = pallas::Base::from_repr(point.x);
++        if !bool::from(x.is_some()) {
++            return Err(ledger_zcash_crypto::Error::MalformedPallasBase);
++        }
++        let x = x.unwrap();
++
++        let y = pallas::Base::from_repr(point.y);
++        if !bool::from(y.is_some()) {
++            return Err(ledger_zcash_crypto::Error::MalformedPallasBase);
++        }
++        let y = y.unwrap();
++
++        let affine = pallas::Affine::from_xy(x, y);
++        if !bool::from(affine.is_some()) {
++            return Err(ledger_zcash_crypto::Error::MalformedPallasPoint);
++        }
++
++        let point = pallas::Point::from(affine.unwrap());
++        if bool::from(point.is_identity()) {
++            return Err(ledger_zcash_crypto::Error::MalformedPallasPoint);
++        }
++
++        Ok(NonIdentityPallasPoint(point))
++    }
+ }
+ 
+ impl Deref for NonIdentityPallasPoint {

@@ -1,0 +1,217 @@
+// -*- mode: rust; -*-
+//
+// This file is part of reddsa.
+// Copyright (c) 2019-2021 Zcash Foundation
+// See LICENSE for licensing information.
+//
+// Authors:
+// - Deirdre Connolly <deirdre@zfnd.org>
+// - Henry de Valence <hdevalence@hdevalence.ca>
+
+use core::{
+    convert::{TryFrom, TryInto},
+    fmt,
+    marker::PhantomData,
+};
+
+use crate::{
+    private::SealedScalar, Error, Randomizer, SigType, Signature, SpendAuth, VerificationKey,
+};
+
+use group::{ff::PrimeField, GroupEncoding};
+use rand_core::{CryptoRng, RngCore};
+use zeroize::Zeroizing;
+
+/// A RedDSA signing key.
+#[derive(Copy, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "SerdeHelper"))]
+#[cfg_attr(feature = "serde", serde(into = "SerdeHelper"))]
+#[cfg_attr(feature = "serde", serde(bound = "T: SigType"))]
+pub struct SigningKey<T: SigType> {
+    sk: T::Scalar,
+    pk: VerificationKey<T>,
+}
+
+impl<T: SigType> fmt::Debug for SigningKey<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SigningKey")
+            .field("sk", &"<redacted>")
+            .field("pk", &self.pk)
+            .finish()
+    }
+}
+
+#[cfg(feature = "ledger")]
+impl SigningKey<crate::orchard::SpendAuth> {
+    /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
+    pub fn try_from_ledger_signing_key(
+        ask: ledger_zcash_crypto::redpallas::SpendAuthSigningKey,
+    ) -> Result<Self, ledger_zcash_crypto::Error> {
+        // By reference: `SpendAuthSigningKey` is no longer `Copy`, so that it can zeroize its secret
+        // scalar on drop. The conversion still yields a plain array, held in `Zeroizing` so this
+        // frame does not keep an unwiped copy of the scalar `ask` already protects.
+        // `pallas_scalar_from_repr` then takes it by value: its signature is shared with callers
+        // passing public material, and is left alone here rather than changed for this one path.
+        let ask_bytes = Zeroizing::new(<[u8; 32]>::from(&ask));
+        let sk = ledger_zcash_crypto::pallas_scalar_from_repr(*ask_bytes)?;
+        let pk = VerificationKey::from_ledger_verification_key(ask.verification_key());
+
+        Ok(SigningKey { sk, pk })
+    }
+
+    /// Randomize this Orchard SpendAuth signing key with the given `randomizer`,
+    /// deriving the randomized verification key using Ledger SDK Pallas primitives.
+    pub fn randomize_ledger(
+        &self,
+        randomizer: &Randomizer<crate::orchard::SpendAuth>,
+    ) -> Result<SigningKey<crate::orchard::SpendAuth>, ledger_zcash_crypto::Error> {
+        // `self.sk` is the spend authorizing key: its byte representation is held in `Zeroizing`
+        // so it does not survive this frame. The randomizer is `alpha`, which the app hands to the
+        // host, so it needs no such care.
+        let sk_bytes: Zeroizing<[u8; 32]> =
+            Zeroizing::new(self.sk.to_repr().as_ref().try_into().unwrap());
+        let randomizer_bytes: [u8; 32] = randomizer.to_repr().as_ref().try_into().unwrap();
+        let ledger_signing_key = ledger_zcash_crypto::redpallas::spendauth_randomized_signing_key(
+            &sk_bytes,
+            &randomizer_bytes,
+        )
+        .map_err(ledger_zcash_crypto::Error::from)?;
+
+        Self::try_from_ledger_signing_key(ledger_signing_key)
+    }
+
+    /// Create a SpendAuth signature using Ledger SDK RedPallas primitives.
+    ///
+    /// `random_bytes` must be (\ell_H + 128)/8 = 80 freshly drawn random bytes. It is passed in
+    /// rather than drawn from an `RngCore` because `RngCore::fill_bytes` cannot report a hardware
+    /// RNG failure: a silent failure here would make the nonce a public function of the
+    /// verification key and `msg`, disclosing the signing key. The caller is responsible for
+    /// checking that the draw succeeded.
+    pub fn sign_ledger(
+        &self,
+        random_bytes: &[u8; 80],
+        msg: &[u8],
+    ) -> Result<Signature<crate::orchard::SpendAuth>, ledger_zcash_crypto::Error> {
+        // `self.sk` is the *randomized* spend authorizing key — the secret this signature is made
+        // with, and the one an attacker recovers a spend authority from. Held in `Zeroizing` so
+        // its bytes do not stay behind in this frame once the signature is out.
+        let sk_bytes: Zeroizing<[u8; 32]> =
+            Zeroizing::new(self.sk.to_repr().as_ref().try_into().unwrap());
+        let ledger_signing_key = ledger_zcash_crypto::redpallas::spendauth_signing_key(&sk_bytes)
+            .map_err(ledger_zcash_crypto::Error::from)?;
+        let signature =
+            ledger_zcash_crypto::redpallas::spendauth_sign(&ledger_signing_key, random_bytes, msg)
+                .map_err(ledger_zcash_crypto::Error::from)?;
+
+        Ok(signature.into())
+    }
+}
+
+impl<T: SigType> From<&SigningKey<T>> for VerificationKey<T> {
+    fn from(sk: &SigningKey<T>) -> VerificationKey<T> {
+        sk.pk
+    }
+}
+
+impl<T: SigType> From<SigningKey<T>> for [u8; 32] {
+    fn from(sk: SigningKey<T>) -> [u8; 32] {
+        sk.sk.to_repr().as_ref().try_into().unwrap()
+    }
+}
+
+impl<T: SigType> TryFrom<[u8; 32]> for SigningKey<T> {
+    type Error = Error;
+
+    fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
+        // XXX-jubjub: this should not use CtOption
+        let mut repr = <T::Scalar as PrimeField>::Repr::default();
+        repr.as_mut().copy_from_slice(&bytes);
+        let maybe_sk = T::Scalar::from_repr(repr);
+        if maybe_sk.is_some().into() {
+            let sk = maybe_sk.unwrap();
+            let pk = VerificationKey::from(&sk);
+            Ok(SigningKey { sk, pk })
+        } else {
+            Err(Error::MalformedSigningKey)
+        }
+    }
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+struct SerdeHelper([u8; 32]);
+
+impl<T: SigType> TryFrom<SerdeHelper> for SigningKey<T> {
+    type Error = Error;
+
+    fn try_from(helper: SerdeHelper) -> Result<Self, Self::Error> {
+        helper.0.try_into()
+    }
+}
+
+impl<T: SigType> From<SigningKey<T>> for SerdeHelper {
+    fn from(sk: SigningKey<T>) -> Self {
+        Self(sk.into())
+    }
+}
+
+impl<T: SpendAuth> SigningKey<T> {
+    /// Randomize this public key with the given `randomizer`.
+    pub fn randomize(&self, randomizer: &Randomizer<T>) -> SigningKey<T> {
+        let sk = self.sk + randomizer;
+        let pk = VerificationKey::from(&sk);
+        SigningKey { sk, pk }
+    }
+}
+
+impl<T: SigType> SigningKey<T> {
+    /// Generate a new signing key.
+    pub fn new<R: RngCore + CryptoRng>(mut rng: R) -> SigningKey<T> {
+        let sk = {
+            let mut bytes = [0; 64];
+            rng.fill_bytes(&mut bytes);
+            T::Scalar::from_bytes_wide(&bytes)
+        };
+        let pk = VerificationKey::from(&sk);
+        SigningKey { sk, pk }
+    }
+
+    /// Create a signature of type `T` on `msg` using this `SigningKey`.
+    // Similar to signature::Signer but without boxed errors.
+    pub fn sign<R: RngCore + CryptoRng>(&self, mut rng: R, msg: &[u8]) -> Signature<T> {
+        use crate::HStar;
+
+        // Choose a byte sequence uniformly at random of length
+        // (\ell_H + 128)/8 bytes.  For RedJubjub and RedPallas this is
+        // (512 + 128)/8 = 80.
+        let random_bytes = {
+            let mut bytes = [0; 80];
+            rng.fill_bytes(&mut bytes);
+            bytes
+        };
+
+        let nonce = HStar::<T>::default()
+            .update(&random_bytes[..])
+            .update(&self.pk.bytes.bytes[..]) // XXX ugly
+            .update(msg)
+            .finalize();
+
+        let r: T::Point = T::basepoint() * nonce;
+        let r_bytes: [u8; 32] = r.to_bytes().as_ref().try_into().unwrap();
+
+        let c = HStar::<T>::default()
+            .update(&r_bytes[..])
+            .update(&self.pk.bytes.bytes[..]) // XXX ugly
+            .update(msg)
+            .finalize();
+
+        let s = nonce + (c * self.sk);
+        let s_bytes = s.to_repr().as_ref().try_into().unwrap();
+
+        Signature {
+            r_bytes,
+            s_bytes,
+            _marker: PhantomData,
+        }
+    }
+}

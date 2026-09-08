@@ -1,14 +1,16 @@
 from pathlib import Path
+
 import tomli
 from application_client.zcash_command_sender import ZcashCommandSender
 from application_client.zcash_response_unpacker import unpack_get_version_response
+
 
 # In this test we check the behavior of the device when asked to provide the app version
 def test_version(backend):
 
     with open(Path(__file__).parent.parent.parent / "Cargo.toml", "rb") as f:
         data = tomli.load(f)
-    version = tuple(map(int, data['package']['version'].split('.')))
+    version = tuple(map(int, data["package"]["version"].split(".")))
     # Use the app interface instead of raw interface
     client = ZcashCommandSender(backend)
     # Send the GET_VERSION instruction

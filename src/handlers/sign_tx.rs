@@ -14,17 +14,22 @@
  *  See the License for the specific language governing permissions and
  *  limitations under the License.
  *****************************************************************************/
-use ledger_device_sdk::ecc::{Secp256k1, SeedDerive as _};
-use ledger_device_sdk::hash::HashInit;
-use ledger_device_sdk::hash::blake2::Blake2b_256;
+use ledger_device_sdk::ecc::{Secp256k1, Secret, SeedDerive as _};
 use ledger_device_sdk::io::Comm;
 use ledger_device_sdk::log::{debug, error, info};
+use zeroize::Zeroizing;
 
 use crate::AppSW;
-use crate::parser::{OutputParserCtx, Parser, ParserCtx, ParserMode, ParserSourceError};
-use crate::tx::TxContext;
-use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance};
+use crate::app_ui::sign::ui_display_tx;
+use crate::consts::SIGHASH_ALL;
+use crate::parser::{
+    LegacyOutputParserCtx, LegacyParser, LegacyParserCtx, LegacyParserMode, ParserSourceError,
+};
+use crate::rng;
+use crate::tx::{TransferType, TxContext, check_change_returns_to_signing_account};
+use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance, derivation_account};
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
+use crate::zip32::{derive_orchard_ask_from_sk, map_ledger_crypto_error};
 
 pub fn handler_hash_input_start(
     comm: &mut Comm,
@@ -32,20 +37,62 @@ pub fn handler_hash_input_start(
     first: bool,
     continue_hashing: bool,
 ) -> Result<(), AppSW> {
+    // Any shape that does not reset the context reuses the transaction state already there, which is
+    // sound only after a legacy round that is still in progress.
+    let resets_context = first && !continue_hashing;
+    if !resets_context {
+        if ctx.pczt_parser.is_session_active() {
+            error!("Legacy round during a PCZT session");
+            return Err(AppSW::BadState);
+        }
+
+        // A transaction that is finished — fully signed, or refused at its review — keeps its
+        // outputs, hashers and parsers until the next reset, and a PCZT that ran to completion is
+        // no longer reported as an active session. Resuming that state would append this round's
+        // outputs to the previous transaction's, so the review would list outputs the signature
+        // does not cover, and would spend an approval that is already spent.
+        if ctx.is_finished() {
+            error!("Legacy round resuming a finished transaction");
+            return Err(AppSW::BadState);
+        }
+    }
+
     if continue_hashing {
+        // A continuation keeps the transaction state of the previous round, so it may
+        // only follow a legacy round. `is_v6` is reachable here through a V6 trusted-input
+        // round, and continuing would parse legacy fields under a V6 transaction version.
+        if ctx.tx_info.is_v6 {
+            error!("Legacy continuation after a V6 transaction header");
+            return Err(AppSW::BadState);
+        }
+
+        // A continuation is the signing round, so it may only resume a transaction the user has
+        // already reviewed. It preserves the output amounts and the change classification the
+        // review round accumulated, yet `parse_header` re-initialises the V5 hashers while
+        // `is_tx_parsed_once` is false. Accepting it mid-review would therefore let a host park an
+        // output in the displayed fee computation while dropping it from the signed outputs
+        // digest, so the value of that output would silently go to the miner instead.
+        if !ctx.tx_signing_state.is_tx_parsed_once {
+            error!("Legacy continuation before the transaction was reviewed");
+            return Err(AppSW::BadState);
+        }
+
         info!("Reset parser");
-        ctx.parser = Parser::new(ParserMode::Signature);
+        ctx.legacy_parser = LegacyParser::new(LegacyParserMode::Signature);
+        // Extract transparent output count from output parser on final state
+        ctx.legacy_parser
+            .set_transparent_output_count(ctx.legacy_output_parser.transparent_output_count());
     } else if first {
         info!("Reset TX context");
-        ctx.reset(ParserMode::Signature);
+        ctx.reset_for_new_transaction(LegacyParserMode::Signature)?;
     }
 
     // Try to get data from comm
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
-    ctx.parser
+    ctx.legacy_parser
         .parse(
-            &mut ParserCtx {
+            &mut LegacyParserCtx {
                 tx_state: &mut ctx.tx_signing_state,
                 tx_info: &mut ctx.tx_info,
                 trusted_input_info: &mut ctx.trusted_input_info,
@@ -76,7 +123,7 @@ pub fn handler_hash_input_finalize_full(
     }
 
     // Check processing states
-    if !ctx.parser.is_presign_ready() || ctx.output_parser.is_finished() {
+    if !ctx.legacy_parser.is_presign_ready() || ctx.legacy_output_parser.is_finished() {
         error!("Bad processing state");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
@@ -84,12 +131,8 @@ pub fn handler_hash_input_finalize_full(
     if is_change_info {
         let path: Bip32Path = data.try_into()?;
 
-        let public_key_with_cc = ExtendedPublicKey::try_from(&path)?;
-
-        ctx.tx_info.change_pk_hash = public_key_with_cc.compressed_public_key_hash160()?;
-
-        info!("Change pk hash: {}", HexSlice(&ctx.tx_info.change_pk_hash));
-
+        // A change hash removes an output from the review screen, so it is installed only from a
+        // path that passed the check.
         if !check_bip44_compliance(
             &path,
             Bip44CheckMode::Full {
@@ -100,12 +143,21 @@ pub fn handler_hash_input_finalize_full(
             return Err(AppSW::ConditionsOfUseNotSatisfied);
         }
 
+        let public_key_with_cc = ExtendedPublicKey::try_from(&path)?;
+        let change_pk_hash = public_key_with_cc.compressed_public_key_hash160()?;
+        ctx.tx_info.change_pk_hash = Some(change_pk_hash);
+        // Remembered for the signing step, which is the first point where the account being spent
+        // from is known too.
+        ctx.tx_info.change_account = derivation_account(&path);
+
+        info!("Change pk hash: {}", HexSlice(&change_pk_hash));
+
         return Ok(());
     }
 
-    ctx.output_parser
+    ctx.legacy_output_parser
         .parse(
-            &mut OutputParserCtx {
+            &mut LegacyOutputParserCtx {
                 tx_info: &mut ctx.tx_info,
                 hashers: &mut ctx.hashers,
                 swap_params: ctx.swap_params,
@@ -139,11 +191,6 @@ pub fn handler_hash_input_finalize_full(
             }
         })?;
 
-    if ctx.output_parser.is_finished() && !ctx.tx_signing_state.is_tx_parsed_once {
-        info!("Set TX parsed once flag");
-        ctx.tx_signing_state.is_tx_parsed_once = true;
-    }
-
     Ok(())
 }
 
@@ -158,6 +205,11 @@ fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
     let sighash_type: u8 = buf[4];
     let expiry_height: u32 = u32::from_be_bytes(buf[5..9].try_into().unwrap());
 
+    if sighash_type != SIGHASH_ALL {
+        error!("Unsupported sighash_type: {}", sighash_type);
+        return Err(AppSW::IncorrectData);
+    }
+
     info!("Extra TX data received:");
     info!("locktime: {}", locktime);
     info!("sighash_type: {}", sighash_type);
@@ -167,14 +219,25 @@ fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
 }
 
 pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
+    // Legacy signing reads the transaction state a legacy round built; during a PCZT session that
+    // state belongs to the PCZT.
+    if ctx.pczt_parser.is_session_active() {
+        error!("Legacy signing during a PCZT session");
+        return Err(AppSW::BadState);
+    }
+
     let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
     if data.is_empty() {
-        error!("Not enough data for derivation path length");
+        error!("Not enough data for hash sign");
         return Err(AppSW::WrongApduLength);
     }
 
-    if ctx.tx_signing_state.is_tx_parsed_once && !ctx.is_extra_header_data_set() {
+    // This APDU carries the header of a transaction whose outputs are already in. It is the point
+    // at which the transaction is fully known, so it is also where the user reviews it: the
+    // validity window arrives here and nowhere earlier, and reviewing before it would leave the
+    // host free to pick a locktime and an expiry the approval never covered.
+    if ctx.legacy_output_parser.is_finished() && !ctx.is_extra_header_data_set() {
         // not used path size 1 + not used auth len 1 + locktime 4 + sighhash ty 1 +  expiry height 4
         const EXTRA_HEADER_DATA_LEN: usize = 11;
         if data.len() != EXTRA_HEADER_DATA_LEN {
@@ -194,10 +257,30 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
 
         ctx.set_extra_header_data();
 
+        // Under swap the Exchange approval stands in for the review, and the output parser has
+        // already cross-checked the transaction against it.
+        if ctx.swap_params.is_none() {
+            let transfer_type = TransferType::classify(true, false, &ctx.tx_info.outputs);
+            if !ui_display_tx(
+                &ctx.tx_info.outputs,
+                ctx.tx_info.fees,
+                transfer_type,
+                locktime,
+                expiry_height,
+            )? {
+                info!("Transaction refused at review");
+                ctx.set_finished();
+                return Err(AppSW::Deny);
+            }
+            info!("Transaction reviewed");
+        }
+
+        ctx.tx_signing_state.is_tx_parsed_once = true;
+
         return Ok(());
     }
 
-    if !ctx.parser.is_ready_to_sign() {
+    if !ctx.legacy_parser.is_ready_to_sign() {
         error!("Bad processing state for signing");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
@@ -213,30 +296,36 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
     let path: Bip32Path = path_data.try_into()?;
 
     if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
-        error!("Output address path not Bip44 compliant");
+        error!("Signing path not compliant");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }
 
-    // Finalize hash
-    compute_signature_and_append(
+    // Both accounts are known only here, so this is where the transaction is refused — before any
+    // signature exists, since a released signature cannot be recalled.
+    check_change_returns_to_signing_account(&ctx.tx_info, &path)?;
+
+    append_signature(
         comm,
-        &mut ctx.hashers.tx_full_hasher,
+        &ctx.tx_info.signature_digest,
         &path,
         ctx.tx_info.sighash_type,
         true,
     )?;
+    ctx.note_signature_released();
 
     ctx.tx_signing_state.already_signed_input_count = ctx
         .tx_signing_state
         .already_signed_input_count
         .saturating_add(1);
 
+    let expected_signatures = core::cmp::max(ctx.tx_signing_state.total_input_count, 1);
+
     info!(
         "Signed input {}/{}",
-        ctx.tx_signing_state.already_signed_input_count, ctx.tx_signing_state.total_input_count
+        ctx.tx_signing_state.already_signed_input_count, expected_signatures
     );
 
-    if ctx.tx_signing_state.already_signed_input_count == ctx.tx_signing_state.total_input_count {
+    if ctx.tx_signing_state.already_signed_input_count == expected_signatures {
         info!("All inputs have been signed, TX signing is finished");
         ctx.set_finished();
     }
@@ -244,26 +333,21 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
     Ok(())
 }
 
-fn compute_signature_and_append(
+pub(crate) fn append_signature(
     comm: &mut Comm,
-    tx_full_hasher: &mut Blake2b_256,
+    sig_hash: &[u8; 32],
     path: &Bip32Path,
     sighash_type: u8,
     deterministic_sign: bool,
 ) -> Result<(), AppSW> {
-    let mut hash = [0u8; 32];
-    tx_full_hasher
-        .finalize(&mut hash)
-        .map_err(|_| AppSW::TechnicalProblem)?;
-
-    debug!("Final TX hash: {}", HexSlice(&hash));
+    debug!("Final TX hash: {}", HexSlice(sig_hash));
 
     let (p, _chain_code) = Secp256k1::derive_from(path.as_slice());
 
     let (mut sig, sig_len, info) = if deterministic_sign {
-        p.deterministic_sign(&hash)
+        p.deterministic_sign(sig_hash)
     } else {
-        p.sign(&hash)
+        p.sign(sig_hash)
     }
     .map_err(|_| AppSW::TechnicalProblem)?;
 
@@ -278,4 +362,49 @@ fn compute_signature_and_append(
     comm.append(&[sighash_type]);
 
     Ok(())
+}
+
+pub(crate) fn orchard_spend_auth_signature_with_sk(
+    sk_bytes: &Secret<32>,
+    sig_hash: &[u8; 32],
+    alpha_bytes: [u8; 32],
+) -> Result<[u8; 64], AppSW> {
+    let ask = derive_orchard_ask_from_sk(sk_bytes)?;
+    orchard_spend_auth_signature_with_ask(&ask, sig_hash, alpha_bytes)
+}
+
+fn orchard_spend_auth_signature_with_ask(
+    ask: &::orchard::keys::SpendAuthorizingKey,
+    sig_hash: &[u8; 32],
+    alpha_bytes: [u8; 32],
+) -> Result<[u8; 64], AppSW> {
+    let alpha =
+        ledger_zcash_crypto::pallas_scalar_from_repr(alpha_bytes).map_err(|err| match err {
+            ledger_zcash_crypto::Error::MalformedPallasScalar => AppSW::IncorrectData,
+            _ => AppSW::TechnicalProblem,
+        })?;
+
+    // Never logged: the randomized spend authorizing key is a device-only secret, and printing it
+    // would disclose the signing key outright.
+    let randomized_ask = ask
+        .randomize_ledger(&alpha)
+        .map_err(map_ledger_crypto_error)?;
+
+    // Drawn here, and checked, so that an RNG failure aborts the signature instead of producing one
+    // with an all-zero nonce seed, which would disclose the randomized signing key.
+    let mut random_bytes = Zeroizing::new([0u8; 80]);
+    rng::fill_bytes(&mut random_bytes[..])?;
+
+    let auth_sig = randomized_ask
+        .sign_ledger(&random_bytes, sig_hash)
+        .map_err(map_ledger_crypto_error)?;
+    let auth_sig: [u8; 64] = (&auth_sig).into();
+
+    // Only the signature is logged: it goes on chain. The randomizer is not, even though the host
+    // supplied it and already knows it — a build with logging enabled would otherwise put scalar
+    // material next to the signature it randomizes, and the pair is what turns a second leak into a
+    // key recovery.
+    debug!("Orchard spend auth signature: {}", HexSlice(&auth_sig));
+
+    Ok(auth_sig)
 }

@@ -1,0 +1,29 @@
+[package]
+name = "ledger_zcash_crypto"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ledger_device_sdk = { workspace = true }
+chacha20poly1305 = { version = "0.10", default-features = false }
+chacha20 = { version = "0.9", default-features = false }
+ff = { version = "0.13", default-features = false }
+arrayvec = { version = "0.7.6", default-features = false }
+bs58 = { version = "0.5.1", default-features = false }
+# `alloc` provides the imported `arithmetic::CurveAffine`; without it this crate builds only
+# through the app's feature unification, never standalone.
+# `repr-c` is load-bearing, not cosmetic: `projective_point` transmutes into `pallas::Point`, whose
+# `repr(C)` is behind this feature (`#[cfg_attr(feature = "repr-c", repr(C))]`). Without it the field
+# order is unspecified and that transmute is unsound.
+pasta_curves = { version = "0.5", default-features = false, features = ["alloc", "repr-c"] }
+zeroize = { workspace = true }
+
+[features]
+# Enables the Ledger SDK on-device unit-test framework (TestType / sdk_test_runner). The
+# runner needs a device target:
+#   QT_QPA_PLATFORM=offscreen cargo test -p ledger_zcash_crypto --features unit_test \
+#       --target apex_p
+unit_test = ["ledger_device_sdk/unit_test"]

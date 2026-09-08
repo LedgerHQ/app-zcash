@@ -22,50 +22,76 @@ mod app_ui;
 
 mod handlers {
     pub mod get_public_key;
+    pub mod get_shielded_addr;
     pub mod get_trusted_input;
     pub mod get_version;
-    pub mod sign_msg;
+    pub mod get_vk;
+    #[cfg(feature = "heap_probe")]
+    pub mod heap_probe;
+    pub mod pczt;
     pub mod sign_tx;
 }
 
 mod consts;
+#[cfg(feature = "heap_probe")]
+mod heap_probe;
 mod parser;
+mod rng;
 mod settings;
 mod swap;
 mod tx;
 mod utils;
+mod zip32;
 
-use core::mem;
+use alloc::boxed::Box;
+use core::mem::{self, MaybeUninit};
 
 use app_ui::menu::ui_menu_main;
-use handlers::{get_public_key::handler_get_public_key, get_version::handler_get_version};
+use handlers::{
+    get_public_key::handler_get_public_key, get_shielded_addr::handler_get_shielded_addr,
+    get_version::handler_get_version, get_vk::handler_get_vk,
+};
 use ledger_device_sdk::log::{debug, error};
 use ledger_device_sdk::nbgl::StatusType;
 use ledger_device_sdk::{io::StatusWords, libcall::swap::CreateTxParams};
 use ledger_device_sdk::{
     io::{ApduHeader, Comm, Reply},
     nbgl::init_comm,
-    random::rand_bytes,
 };
 use tx::TxContext;
 use zeroize::Zeroizing;
 
+#[cfg(feature = "heap_probe")]
+use crate::consts::INS_HEAP_PROBE;
 use crate::consts::{
+    INS_GET_SHIELD_ADDR, MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
     P1_FINALIZE_FULL_CHANGEINFO, P1_FINALIZE_FULL_LAST, P1_FINALIZE_FULL_MORE, P1_FIRST,
-    P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_HASH_INPUT_START_FIRST,
-    P1_HASH_INPUT_START_NEXT, P1_NEXT, P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE,
-    P2_HASH_INPUT_START_SAPLING,
+    P1_GET_PUBLIC_KEY_DISPLAY, P1_GET_PUBLIC_KEY_NO_DISPLAY, P1_GET_VK_CONTINUE, P1_GET_VK_FIRST,
+    P1_HASH_INPUT_START_FIRST, P1_HASH_INPUT_START_NEXT, P1_LAST, P1_NEXT,
+    P2_FINALIZE_FULL_DEFAULT, P2_HASH_INPUT_START_CONTINUE, P2_HASH_INPUT_START_SAPLING,
+    P2_PCZT_CONTINUE, P2_PCZT_FINISHED, P2ShieldedAddrMode, P2VkMode,
 };
+use crate::consts::{
+    INS_PCZT_IRONWOOD_ACTION, INS_PCZT_SIGN_IRONWOOD, MAX_PCZT_IRONWOOD_ACTIONS_NUMBER,
+};
+#[cfg(feature = "heap_probe")]
+use crate::handlers::heap_probe::handler_heap_probe;
+use crate::handlers::pczt::{handler_pczt_ironwood_action, handler_pczt_sign_ironwood};
 use crate::swap::panic_handler::get_swap_panic_handler;
 use crate::{
     consts::{
-        INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_WALLET_PUBLIC_KEY,
-        INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN, INS_SIGN_MESSAGE,
-        ZCASH_CLA,
+        INS_GET_FIRMWARE_VERSION, INS_GET_TRUSTED_INPUT, INS_GET_VK, INS_GET_WALLET_PUBLIC_KEY,
+        INS_HASH_INPUT_FINALIZE_FULL, INS_HASH_INPUT_START, INS_HASH_SIGN, INS_PCZT_HEADER,
+        INS_PCZT_ORCHARD_ACTION, INS_PCZT_SIGN_ORCHARD, INS_PCZT_SIGN_TRANSPARENT,
+        INS_PCZT_TRANSPARENT_INPUT, INS_PCZT_TRANSPARENT_OUTPUT, ZCASH_CLA,
     },
     handlers::{
         get_trusted_input::handler_get_trusted_input,
-        sign_msg::handler_sign_msg,
+        pczt::{
+            handler_pczt_header, handler_pczt_orchard_action, handler_pczt_sign_orchard,
+            handler_pczt_sign_transparent, handler_pczt_transparent_input,
+            handler_pczt_transparent_output,
+        },
         sign_tx::{handler_hash_input_finalize_full, handler_hash_input_start, handler_hash_sign},
     },
     settings::Settings,
@@ -83,6 +109,8 @@ pub enum AppSW {
     ExecutionError = 0x6400,
     WrongApduLength = 0x6700, // Normally we should use StatusWord::BadLen(0x6e03)
     CommandIncompatibleFileStructure = 0x6981,
+    // Aliased on purpose: the legacy protocol this app must stay wire-compatible with reports
+    // both conditions with the same word.
     SecurityStatusNotSatisfied = StatusWords::NothingReceived as u16,
     IncorrectData = 0x6A80,
     NotEnoughMemorySpace = 0x6A84,
@@ -109,11 +137,15 @@ pub enum AppSW {
     Licensing = 0x6F42,
     Halted = 0x6FAA,
     Deny = StatusWords::UserCancelled as u16,
-    ConditionsOfUseNotSatisfied = 0x6986, // 0x6985
+    // 0x6986, not the 0x6985 an ISO reading would suggest: the legacy protocol uses 0x6985 for a
+    // user denial (see `Deny`), so this condition takes the adjacent word.
+    ConditionsOfUseNotSatisfied = 0x6986,
     //TxWrongLength = 0x6F00,
     TechnicalProblem = 0x6F00,
     VersionParsingFail = 0x6F01,
     TxParsingFail = 0x6F02,
+    RngFailure = 0x6F03,
+    BadState = 0xB007,
     Ok = StatusWords::Ok as u16,
 }
 
@@ -127,12 +159,62 @@ impl From<AppSW> for Reply {
 #[derive(Debug)]
 pub enum Instruction {
     GetVersion,
-    GetPubkey { display: bool },
-    GetTrustedInput { first: bool, next: bool },
-    HashInputStart { first: bool, continue_hashing: bool },
-    HashFinalizeFull { is_change: bool },
+    GetPubkey {
+        display: bool,
+    },
+    GetShieldedAddr {
+        display: bool,
+        mode: P2ShieldedAddrMode,
+    },
+    GetVk {
+        mode: P2VkMode,
+        continue_response: bool,
+    },
+    GetTrustedInput {
+        first: bool,
+        next: bool,
+    },
+    HashInputStart {
+        first: bool,
+        continue_hashing: bool,
+    },
+    HashFinalizeFull {
+        is_change: bool,
+    },
     HashSign,
-    SignMessage { first: bool, next: bool },
+    PcztHeader,
+    PcztTransparentInput {
+        first: bool,
+        last: bool,
+    },
+    PcztTransparentOutput {
+        first: bool,
+        last: bool,
+    },
+    PcztOrchardAction {
+        first: bool,
+        last: bool,
+        finished: bool,
+    },
+    PcztSignTransparent {
+        input_index: usize,
+    },
+    PcztSignOrchard {
+        action_index: usize,
+    },
+    PcztIronwoodAction {
+        first: bool,
+        last: bool,
+        finished: bool,
+    },
+    PcztSignIronwood {
+        action_index: usize,
+    },
+    PcztInvalid {
+        sw: AppSW,
+    },
+    #[cfg(feature = "heap_probe")]
+    HeapProbe,
 }
 
 impl TryFrom<ApduHeader> for Instruction {
@@ -159,10 +241,22 @@ impl TryFrom<ApduHeader> for Instruction {
             ) => Ok(Instruction::GetPubkey {
                 display: value.p1 == P1_GET_PUBLIC_KEY_DISPLAY,
             }),
-            (INS_GET_TRUSTED_INPUT, p1, 0) => Ok(Instruction::GetTrustedInput {
-                first: p1 == P1_FIRST,
-                next: p1 == P1_NEXT,
+            (INS_GET_VK, P1_GET_VK_FIRST | P1_GET_VK_CONTINUE, p2) => Ok(Instruction::GetVk {
+                mode: P2VkMode::try_from(p2)?,
+                continue_response: value.p1 == P1_GET_VK_CONTINUE,
             }),
+            (INS_GET_SHIELD_ADDR, P1_GET_PUBLIC_KEY_NO_DISPLAY | P1_GET_PUBLIC_KEY_DISPLAY, p2) => {
+                Ok(Instruction::GetShieldedAddr {
+                    mode: P2ShieldedAddrMode::try_from(p2)?,
+                    display: (value.p1 & P1_GET_PUBLIC_KEY_DISPLAY) != 0,
+                })
+            }
+            (INS_GET_TRUSTED_INPUT, p1, 0) if p1 == P1_FIRST || p1 == P1_NEXT => {
+                Ok(Instruction::GetTrustedInput {
+                    first: p1 == P1_FIRST,
+                    next: p1 == P1_NEXT,
+                })
+            }
             (
                 INS_HASH_INPUT_START,
                 P1_HASH_INPUT_START_FIRST | P1_HASH_INPUT_START_NEXT,
@@ -180,16 +274,92 @@ impl TryFrom<ApduHeader> for Instruction {
                 is_change: value.p1 == P1_FINALIZE_FULL_CHANGEINFO,
             }),
             (INS_HASH_SIGN, 0, 0) => Ok(Instruction::HashSign),
-            (INS_SIGN_MESSAGE, p1, 0) => Ok(Instruction::SignMessage {
-                first: p1 == P1_FIRST,
-                next: p1 == P1_NEXT,
-            }),
-            (_, _, _) => {
-                if value.p1 != 0 || value.p2 != 0 {
-                    return Err(AppSW::WrongP1P2);
-                }
-                Err(AppSW::InsNotSupported)
+            (INS_PCZT_HEADER, P1_FIRST, P2_PCZT_CONTINUE) => Ok(Instruction::PcztHeader),
+            (INS_PCZT_TRANSPARENT_INPUT, p1, P2_PCZT_CONTINUE)
+                if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
+            {
+                Ok(Instruction::PcztTransparentInput {
+                    first: value.p1 == P1_FIRST,
+                    last: value.p1 == P1_LAST,
+                })
             }
+            (INS_PCZT_TRANSPARENT_OUTPUT, p1, P2_PCZT_CONTINUE)
+                if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
+            {
+                Ok(Instruction::PcztTransparentOutput {
+                    first: value.p1 == P1_FIRST,
+                    last: value.p1 == P1_LAST,
+                })
+            }
+            (INS_PCZT_ORCHARD_ACTION, p1, P2_PCZT_CONTINUE | P2_PCZT_FINISHED)
+                if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
+            {
+                Ok(Instruction::PcztOrchardAction {
+                    first: value.p1 == P1_FIRST,
+                    last: value.p1 == P1_LAST,
+                    finished: value.p2 == P2_PCZT_FINISHED,
+                })
+            }
+            (INS_PCZT_SIGN_TRANSPARENT, 0, p2)
+                if (p2 as usize) < MAX_PCZT_TRANSPARENT_INPUTS_NUMBER =>
+            {
+                Ok(Instruction::PcztSignTransparent {
+                    input_index: p2 as usize,
+                })
+            }
+            (INS_PCZT_SIGN_ORCHARD, 0, p2) if (p2 as usize) < MAX_PCZT_ORCHARD_ACTIONS_NUMBER => {
+                Ok(Instruction::PcztSignOrchard {
+                    action_index: p2 as usize,
+                })
+            }
+            (INS_PCZT_IRONWOOD_ACTION, p1, P2_PCZT_CONTINUE | P2_PCZT_FINISHED)
+                if p1 == P1_FIRST || p1 == P1_NEXT || p1 == P1_LAST =>
+            {
+                Ok(Instruction::PcztIronwoodAction {
+                    first: value.p1 == P1_FIRST,
+                    last: value.p1 == P1_LAST,
+                    finished: value.p2 == P2_PCZT_FINISHED,
+                })
+            }
+            (INS_PCZT_SIGN_IRONWOOD, 0, p2) if (p2 as usize) < MAX_PCZT_IRONWOOD_ACTIONS_NUMBER => {
+                Ok(Instruction::PcztSignIronwood {
+                    action_index: p2 as usize,
+                })
+            }
+            (
+                INS_PCZT_HEADER
+                | INS_PCZT_TRANSPARENT_INPUT
+                | INS_PCZT_TRANSPARENT_OUTPUT
+                | INS_PCZT_ORCHARD_ACTION
+                | INS_PCZT_SIGN_TRANSPARENT
+                | INS_PCZT_SIGN_ORCHARD,
+                _,
+                _,
+            ) => Ok(Instruction::PcztInvalid {
+                sw: AppSW::WrongP1P2,
+            }),
+            (INS_PCZT_IRONWOOD_ACTION | INS_PCZT_SIGN_IRONWOOD, _, _) => {
+                Ok(Instruction::PcztInvalid {
+                    sw: AppSW::WrongP1P2,
+                })
+            }
+            #[cfg(feature = "heap_probe")]
+            (INS_HEAP_PROBE, 0, 0) => Ok(Instruction::HeapProbe),
+            // A routed instruction lands here on an unmatched P1/P2; an unrouted one never had
+            // P1/P2 semantics, so its reply does not depend on them.
+            (
+                INS_GET_WALLET_PUBLIC_KEY
+                | INS_GET_TRUSTED_INPUT
+                | INS_HASH_INPUT_START
+                | INS_HASH_SIGN
+                | INS_HASH_INPUT_FINALIZE_FULL
+                | INS_GET_FIRMWARE_VERSION
+                | INS_GET_VK
+                | INS_GET_SHIELD_ADDR,
+                _,
+                _,
+            ) => Err(AppSW::WrongP1P2),
+            (_, _, _) => Err(AppSW::InsNotSupported),
         }
     }
 }
@@ -203,8 +373,33 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
         (Instruction::GetPubkey { display: true }, AppSW::Deny | AppSW::Ok) => {
             (true, StatusType::Address)
         }
+        (
+            Instruction::GetShieldedAddr {
+                display: true,
+                mode: P2ShieldedAddrMode::UAddress,
+            },
+            AppSW::Deny | AppSW::Ok,
+        ) => (true, StatusType::Address),
+        (Instruction::GetVk { .. }, AppSW::Deny | AppSW::Ok) if tx_ctx.is_vk_display_finished => {
+            tx_ctx.is_vk_display_finished = false;
+            (true, StatusType::Address)
+        }
+        // The legacy review runs on HASH_SIGN, which is where the transaction header completes it,
+        // so both its outcomes are reported there. HASH_INPUT_FINALIZE_FULL keeps its refusal arm
+        // for the errors the output parser itself raises.
         (Instruction::HashFinalizeFull { .. }, AppSW::Deny)
-        | (Instruction::HashSign, AppSW::Ok)
+        | (Instruction::HashSign, AppSW::Ok | AppSW::Deny)
+            if tx_ctx.is_finished() =>
+        {
+            (true, StatusType::Transaction)
+        }
+        (Instruction::PcztOrchardAction { .. }, AppSW::Deny)
+        | (
+            Instruction::PcztSignTransparent { .. } | Instruction::PcztSignOrchard { .. },
+            AppSW::Ok,
+        ) if tx_ctx.is_finished() => (true, StatusType::Transaction),
+        (Instruction::PcztIronwoodAction { .. }, AppSW::Deny)
+        | (Instruction::PcztSignIronwood { .. }, AppSW::Ok)
             if tx_ctx.is_finished() =>
         {
             (true, StatusType::Transaction)
@@ -230,7 +425,13 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
 fn init_trusted_input_key_storage() {
     if Settings.trusted_input_key().is_none() {
         let mut rng = Zeroizing::new([0u8; 32]);
-        rand_bytes(&mut rng[..]);
+        // Persisting a key drawn from a failed RNG would burn a predictable HMAC key into NVM for
+        // the lifetime of the installation. Leaving the slot empty instead makes the trusted-input
+        // handlers fail cleanly while the rest of the app stays usable.
+        if rng::fill_bytes(&mut rng[..]).is_err() {
+            error!("Could not draw a trusted input key: leaving the slot uninitialized");
+            return;
+        }
 
         Settings.set_trusted_input_key(&rng);
         debug!("Initialized trusted input key storage");
@@ -266,7 +467,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
     // Create the communication manager, and configure it to accept only APDU from the 0xe0 class.
     // If any APDU with a wrong class value is received, comm will respond automatically with
     // BadCla status word.
-    let mut comm = Comm::new().set_expected_cla(ZCASH_CLA);
+    let mut comm = Box::new(Comm::new().set_expected_cla(ZCASH_CLA));
     init_comm(&mut comm);
 
     init_trusted_input_key_storage();
@@ -277,9 +478,15 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
         debug!("App started");
     }
 
-    let mut tx_ctx = TxContext::new(swap_params, Default::default());
+    static mut TX_CTX: MaybeUninit<TxContext<'static>> = MaybeUninit::uninit();
+    // SAFETY: `TX_CTX` is used higher up in this function’s call stack and is initialized before any use.
+    let tx_ctx = unsafe {
+        let tx_ctx = (&raw mut TX_CTX).cast::<TxContext<'_>>();
+        TxContext::init_in_place(tx_ctx, swap_params, Default::default());
+        &mut *tx_ctx
+    };
 
-    debug!("TxContext size {} bytes", mem::size_of_val(&tx_ctx));
+    debug!("TxContext size {} bytes", mem::size_of::<TxContext>());
 
     if swap_params.is_none() {
         tx_ctx.home = ui_menu_main(&mut comm);
@@ -291,7 +498,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
 
         debug!("Received APDU {:?}", ins);
 
-        let status = match handle_apdu(&mut comm, &ins, &mut tx_ctx) {
+        let status = match handle_apdu(&mut comm, &ins, tx_ctx) {
             Ok(()) => {
                 comm.reply_ok();
                 AppSW::Ok
@@ -301,7 +508,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
                 sw
             }
         };
-        show_status_and_home_if_needed(&ins, &mut tx_ctx, &status);
+        show_status_and_home_if_needed(&ins, tx_ctx, &status);
 
         let is_error = status != AppSW::Ok;
         let is_finished = tx_ctx.is_finished();
@@ -311,7 +518,21 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
             Instruction::GetTrustedInput { .. }
             | Instruction::HashInputStart { .. }
             | Instruction::HashFinalizeFull { .. }
-            | Instruction::HashSign,
+            | Instruction::HashSign
+            | Instruction::PcztHeader
+            | Instruction::PcztTransparentInput { .. }
+            | Instruction::PcztTransparentOutput { .. }
+            | Instruction::PcztOrchardAction { .. }
+            | Instruction::PcztSignTransparent { .. }
+            | Instruction::PcztSignOrchard { .. }
+            | Instruction::PcztInvalid { .. },
+            true,
+        ) = (&ins, is_error)
+        {
+            tx_ctx.reset(Default::default());
+        }
+        if let (
+            Instruction::PcztIronwoodAction { .. } | Instruction::PcztSignIronwood { .. },
             true,
         ) = (ins, is_error)
         {
@@ -330,6 +551,13 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
     match ins {
         Instruction::GetVersion => handler_get_version(comm),
         Instruction::GetPubkey { display } => handler_get_public_key(comm, *display),
+        Instruction::GetVk {
+            mode,
+            continue_response,
+        } => handler_get_vk(comm, ctx, *mode, *continue_response),
+        Instruction::GetShieldedAddr { mode, display } => {
+            handler_get_shielded_addr(comm, *mode, *display)
+        }
         Instruction::GetTrustedInput { first, next } => {
             handler_get_trusted_input(comm, ctx, *first, *next)
         }
@@ -341,7 +569,38 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
             handler_hash_input_finalize_full(comm, ctx, *is_change)
         }
         Instruction::HashSign => handler_hash_sign(comm, ctx),
-        Instruction::SignMessage { first, next } => handler_sign_msg(comm, ctx, *first, *next),
+        Instruction::PcztHeader => handler_pczt_header(comm, ctx),
+        Instruction::PcztTransparentInput { first, last } => {
+            handler_pczt_transparent_input(comm, ctx, *first, *last)
+        }
+        Instruction::PcztTransparentOutput { first, last } => {
+            handler_pczt_transparent_output(comm, ctx, *first, *last)
+        }
+        Instruction::PcztOrchardAction {
+            first,
+            last,
+            finished,
+        } => handler_pczt_orchard_action(comm, ctx, *first, *last, *finished),
+        Instruction::PcztSignTransparent { input_index } => {
+            handler_pczt_sign_transparent(comm, ctx, *input_index)
+        }
+        Instruction::PcztSignOrchard { action_index } => {
+            handler_pczt_sign_orchard(comm, ctx, *action_index)
+        }
+        Instruction::PcztIronwoodAction {
+            first,
+            last,
+            finished,
+        } => handler_pczt_ironwood_action(comm, ctx, *first, *last, *finished),
+        Instruction::PcztSignIronwood { action_index } => {
+            handler_pczt_sign_ironwood(comm, ctx, *action_index)
+        }
+        Instruction::PcztInvalid { sw } => {
+            ctx.pczt_parser.reset();
+            Err(*sw)
+        }
+        #[cfg(feature = "heap_probe")]
+        Instruction::HeapProbe => handler_heap_probe(comm),
     }
 }
 

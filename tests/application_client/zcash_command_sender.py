@@ -1,13 +1,28 @@
+# pylint: disable=too-many-lines
+
+import struct
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import IntEnum
-import struct
-from typing import Generator, List, Optional, Tuple
-from contextlib import contextmanager
 from struct import pack
 
-from ragger.backend.interface import BackendInterface, RAPDU
-from ragger.bip import pack_derivation_path
+from ragger.backend.interface import RAPDU, BackendInterface
+from ragger.bip import (
+    CurveChoice,
+    calculate_public_key_and_chaincode,
+    pack_derivation_path,
+)
 
+from application_client.pczt import (
+    PCZT_DEFAULT_SEED_FINGERPRINT,
+    PcztGlobal,
+    PcztIronwoodBundle,
+    PcztOrchardBundle,
+    PcztTransparentInput,
+    PcztTransparentOutput,
+    pczt_orchard_bundle_from_raw_tx,
+)
 from application_client.zcash_transaction import (
     split_tx_to_chunks,
     split_tx_v5_for_hash_input,
@@ -18,18 +33,42 @@ MAGIC_TRUSTED_INPUT: int = 0x32
 
 MAX_APDU_LEN: int = 255
 
+# The device streams a viewing key in chunks of MAX_APDU_LEN (VK_RESPONSE_CHUNK_LEN in
+# src/handlers/get_vk.rs), the first response carrying the two big-endian length bytes ahead of
+# the first chunk. A unified viewing key runs a little over 300 bytes, so one continuation is the
+# real case and the Orchard-only mode needs none. This ceiling is several times that, high enough
+# never to trip on a longer key, and exists so a device announcing a response it will not deliver
+# cannot hold the test process forever.
+MAX_VK_CONTINUATIONS: int = 4
+
+# Mirrors MAX_PCZT_TRANSPARENT_INPUTS_NUMBER in src/consts.rs. The signing instruction carries the
+# input index in P2, so this is also the first index the dispatcher refuses — which is what makes it
+# the value a P1/P2 rejection test has to use rather than a literal that silently becomes valid the
+# next time the bound moves.
+MAX_PCZT_TRANSPARENT_INPUTS: int = 32
+
 CLA: int = 0xE0
+
+# P2PKH script of the UTXO that `forge_and_get_trusted_input` pays to, and therefore the script
+# `forge_tx_v5` spends. Exported so a test crafting the same spend on another signing path can
+# reuse it instead of restating the bytes.
+FORGED_UTXO_SCRIPT_PUBKEY: bytes = bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
+
 
 class P1(IntEnum):
     # Parameter 1 for first APDU number.
     P1_FIRST = 0x00
     # Parameter 1 for next APDU numbers.
     P1_NEXT = 0x80
+    # Parameter 1 for last APDU number.
+    P1_LAST = 0x01
 
     # Parameter 1 for no screen confirmation for GET_PUBLIC_KEY.
     P1_GET_PUBLIC_KEY_NO_DISPLAY = 0x00
     # Parameter 1 for screen confirmation for GET_PUBLIC_KEY.
     P1_GET_PUBLIC_KEY_DISPLAY = 0x01
+    P1_GET_VK_FIRST = 0x00
+    P1_GET_VK_CONTINUE = 0x80
 
     # Parameter 1 for first APDU number for HASH_INPUT_START.
     P1_HASH_INPUT_START_FIRST = 0x00
@@ -42,6 +81,7 @@ class P1(IntEnum):
     P1_FINALIZE_FULL_LAST = 0x80
     # Parameter 1 for change information for HASH_INPUT_FINALIZE_FULL.
     P1_FINALIZE_FULL_CHANGEINFO = 0xFF
+
 
 class P2(IntEnum):
     # Parameter 2 default value
@@ -57,6 +97,10 @@ class P2(IntEnum):
     # Parameter 2 for HASH_INPUT_FINALIZE_FULL
     P2_FINALIZE_FULL_DEFAULT = 0x00
 
+    # Parameter 2 for the last PCZT data APDU.
+    P2_PCZT_FINISHED = 0x01
+
+
 class InsType(IntEnum):
     GET_VERSION = 0xC4
     GET_APP_NAME = 0x04
@@ -65,14 +109,40 @@ class InsType(IntEnum):
     HASH_INPUT_START = 0x44
     HASH_INPUT_FINALIZE_FULL = 0x4A
     HASH_SIGN = 0x48
+    GET_VK = 0x50
+    GET_SHIELDED_ADDRESS = 0x51
+    PCZT_HEADER = 0x52
+    PCZT_TRANSPARENT_INPUT = 0x53
+    PCZT_TRANSPARENT_OUTPUT = 0x54
+    PCZT_SIGN_TRANSPARENT = 0x55
+    PCZT_ORCHARD_ACTION = 0x56
+    PCZT_SIGN_ORCHARD = 0x57
+    PCZT_IRONWOOD_ACTION = 0x58
+    PCZT_SIGN_IRONWOOD = 0x59
+    # Answered only by a build carrying the `heap_probe` cargo feature, which no released
+    # application does. A build without it refuses this instruction, and a test relying on it
+    # must treat that refusal as the expected answer rather than a failure.
+    HEAP_PROBE = 0xF0
+
+
+class GetVkMode(IntEnum):
+    UFVK = 0x00
+    ORCHARD_FVK = 0x01
+
+
+class GetShieldedAddressMode(IntEnum):
+    UADDRESS = 0x00
+    ORCHARD_RAW_ADDRESS = 0x01
 
 
 class Errors(IntEnum):
     SW_DENY = 0x6985
+    SW_CONDITIONS_OF_USE_NOT_SATISFIED = 0x6986
     SW_WRONG_P1P2 = 0x6B00
     SW_INS_NOT_SUPPORTED = 0x6D00
     SW_CLA_NOT_SUPPORTED = 0x6E00
     SW_WRONG_APDU_LENGTH = 0x6E03
+    SW_APP_WRONG_APDU_LENGTH = 0x6700
     SW_WRONG_RESPONSE_LENGTH = 0xB000
     SW_DISPLAY_BIP32_PATH_FAIL = 0xB001
     SW_DISPLAY_ADDRESS_FAIL = 0xB002
@@ -82,11 +152,13 @@ class Errors(IntEnum):
     SW_TX_HASH_FAIL = 0xB006
     SW_BAD_STATE = 0xB007
     SW_SIGNATURE_FAIL = 0xB008
-    SW_INVALID_TRANSACTION = 0X6A80
+    SW_INVALID_TRANSACTION = 0x6A80
+    SW_NOT_ENOUGH_MEMORY_SPACE = 0x6A84
 
 
-def split_message(message: bytes, max_size: int) -> List[bytes]:
+def split_message(message: bytes, max_size: int) -> list[bytes]:
     return [message[x : x + max_size] for x in range(0, len(message), max_size)]
+
 
 @dataclass
 class ForgeTxParams:
@@ -97,13 +169,23 @@ class ForgeTxParams:
     locktime: int
     expiry: int
 
+
+@dataclass
+class ApduResponse:
+    status: int
+    data: bytes
+
+
 class ZcashCommandSender:
     def __init__(self, backend: BackendInterface) -> None:
         self.backend = backend
         self.tx_chunks: dict = {}
         self.trusted_inputs: list[bytes] = []
+        self.pczt_transparent_inputs: list[PcztTransparentInput] = []
+        self.pczt_transparent_outputs: list[PcztTransparentOutput] = []
+        self.last_response: ApduResponse | RAPDU | None = None
 
-    def exchange_raw(self, data: str) -> Tuple[int, bytes]:
+    def exchange_raw(self, data: str) -> tuple[int, bytes]:
         data_bytes = bytes.fromhex(data)
         res = self.backend.exchange_raw(data_bytes)
         return res.status, res.data
@@ -124,14 +206,10 @@ class ZcashCommandSender:
         )
 
     def get_version(self) -> RAPDU:
-        return self.backend.exchange(
-            cla=CLA, ins=InsType.GET_VERSION, p1=P1.P1_FIRST, p2=P2.P2_NONE, data=b""
-        )
+        return self.backend.exchange(cla=CLA, ins=InsType.GET_VERSION, p1=P1.P1_FIRST, p2=P2.P2_NONE, data=b"")
 
     def get_app_name(self) -> RAPDU:
-        return self.backend.exchange(
-            cla=CLA, ins=InsType.GET_APP_NAME, p1=P1.P1_FIRST, p2=P2.P2_NONE, data=b""
-        )
+        return self.backend.exchange(cla=CLA, ins=InsType.GET_APP_NAME, p1=P1.P1_FIRST, p2=P2.P2_NONE, data=b"")
 
     def get_public_key(self, path: str) -> RAPDU:
         return self.backend.exchange(
@@ -142,10 +220,105 @@ class ZcashCommandSender:
             data=pack_derivation_path(path),
         )
 
+    @staticmethod
+    def _pack_derivation_paths(path: str, transparent_path: str | None = None) -> bytes:
+        data = pack_derivation_path(path)
+        if transparent_path is not None:
+            data += pack_derivation_path(transparent_path)
+        return data
+
+    def get_shielded_address(
+        self,
+        path: str,
+        mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS,
+        transparent_path: str | None = None,
+        display: bool = False,
+    ) -> RAPDU:
+        # Synchronous even with `display`, for the modes that answer the flag without a screen.
+        # A mode that does show one needs `get_shielded_address_with_confirmation` instead.
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.GET_SHIELDED_ADDRESS,
+            p1=P1.P1_GET_PUBLIC_KEY_DISPLAY if display else P1.P1_FIRST,
+            p2=mode,
+            data=self._pack_derivation_paths(path, transparent_path),
+        )
+
+    def _collect_ufvk_response(
+        self,
+        response: RAPDU,
+        mode: GetVkMode,
+        continue_response: bool = False,
+    ) -> RAPDU:
+        if continue_response or mode != GetVkMode.UFVK or len(response.data) < 2:
+            return response
+
+        total_response_len = 2 + int.from_bytes(response.data[:2], byteorder="big")
+        max_response_len = 2 + MAX_APDU_LEN * (MAX_VK_CONTINUATIONS + 1)
+        if total_response_len > max_response_len:
+            raise ValueError(
+                f"Device announced a {total_response_len}-byte viewing-key response, "
+                f"beyond the {max_response_len} bytes this collector will assemble"
+            )
+
+        response_data = bytearray(response.data)
+        continuations = 0
+
+        while len(response_data) < total_response_len:
+            if continuations >= MAX_VK_CONTINUATIONS:
+                raise ValueError(
+                    f"Viewing-key response still short of the announced {total_response_len} "
+                    f"bytes after {continuations} continuations"
+                )
+
+            continuation = self.backend.exchange(
+                cla=CLA,
+                ins=InsType.GET_VK,
+                p1=P1.P1_GET_VK_CONTINUE,
+                p2=mode,
+                data=b"",
+            )
+            # A continuation that carries nothing would leave the accumulated length where it
+            # was, so the loop would keep asking. The backend's raise policy already stops a
+            # non-success status, but an empty success is silent and has to be caught here.
+            if not continuation.data:
+                raise ValueError(
+                    f"Viewing-key continuation returned no data, {len(response_data)} of {total_response_len} bytes collected"
+                )
+
+            response_data.extend(continuation.data)
+            response = continuation
+            continuations += 1
+
+        return ApduResponse(status=response.status, data=bytes(response_data))
+
     @contextmanager
-    def get_public_key_with_confirmation(
-        self, path: str
-    ) -> Generator[None, None, None]:
+    def get_vk_with_confirmation(
+        self,
+        path: str,
+        navigate: Callable[[], None],
+        mode: GetVkMode = GetVkMode.UFVK,
+        transparent_path: str | None = None,
+    ) -> Generator[ApduResponse | RAPDU | None, None, None]:
+        self.last_response = None
+
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.GET_VK,
+            p1=P1.P1_GET_VK_FIRST,
+            p2=mode,
+            data=self._pack_derivation_paths(path, transparent_path),
+        ):
+            navigate()
+
+        response = self.backend.last_async_response
+        if response is not None:
+            self.last_response = self._collect_ufvk_response(response, mode)
+
+        yield self.last_response
+
+    @contextmanager
+    def get_public_key_with_confirmation(self, path: str) -> Generator[None, None, None]:
         with self.backend.exchange_async(
             cla=CLA,
             ins=InsType.GET_WALLET_PUBLIC_KEY,
@@ -155,11 +328,23 @@ class ZcashCommandSender:
         ) as response:
             yield response
 
-    def get_trusted_input(
-        self, transaction: bytes,
-        trusted_input_idx: int,
-        is_v4_nu6: bool = False
-    )  -> RAPDU:
+    @contextmanager
+    def get_shielded_address_with_confirmation(
+        self,
+        path: str,
+        mode: GetShieldedAddressMode = GetShieldedAddressMode.UADDRESS,
+        transparent_path: str | None = None,
+    ) -> Generator[None, None, None]:
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.GET_SHIELDED_ADDRESS,
+            p1=P1.P1_GET_PUBLIC_KEY_DISPLAY,
+            p2=mode,
+            data=self._pack_derivation_paths(path, transparent_path),
+        ) as response:
+            yield response
+
+    def get_trusted_input(self, transaction: bytes, trusted_input_idx: int, is_v4_nu6: bool = False) -> RAPDU:
         chunks = split_tx_to_chunks(transaction, is_v4_nu6)
         # convert trusted-input index to 4 bytes big endian
         trusted_idx = pack(">I", trusted_input_idx)
@@ -169,9 +354,7 @@ class ZcashCommandSender:
         p1 = P1.P1_FIRST
 
         for c in chunks[:-1]:
-            self.backend.exchange(
-                cla=CLA, ins=InsType.GET_TRUSTED_INPUT, p1=p1, p2=P2.P2_NONE, data=c
-            )
+            self.backend.exchange(cla=CLA, ins=InsType.GET_TRUSTED_INPUT, p1=p1, p2=P2.P2_NONE, data=c)
             p1 = P1.P1_NEXT
 
         return self.backend.exchange(
@@ -192,11 +375,7 @@ class ZcashCommandSender:
             cla=CLA,
             ins=InsType.HASH_INPUT_START,
             p1=P1.P1_FIRST,
-            p2=(
-                P2.P2_HASH_INPUT_START_CONTINUE
-                if continue_hashing
-                else P2.P2_HASH_INPUT_START_SAPLING
-            ),
+            p2=(P2.P2_HASH_INPUT_START_CONTINUE if continue_hashing else P2.P2_HASH_INPUT_START_SAPLING),
             data=header + inputs_num.to_bytes(1, byteorder="big"),
         )
 
@@ -228,20 +407,12 @@ class ZcashCommandSender:
                 data=script + sequence,
             )
 
-    @contextmanager
-    def hash_input(
+    def _hash_input_finalize_outputs(
         self,
-        transaction: bytes,
-        trusted_inputs: list[bytes],
         change_path: str | None = None,
-    ) -> Generator[None, None, None]:
-        self.tx_chunks = split_tx_v5_for_hash_input(transaction)
-        self.trusted_inputs = trusted_inputs
-
-        self._send_trusted_inputs_and_header(continue_hashing=False)
-
+    ) -> None:
         # Send outputs chunks
-        outputs: dict = self.tx_chunks["outputs"] # type: ignore
+        outputs: list[dict] = self.tx_chunks["outputs"]  # type: ignore
         outputs_num = len(outputs)
         outputs_num_bytes = outputs_num.to_bytes(1, byteorder="big")
 
@@ -273,20 +444,619 @@ class ZcashCommandSender:
         script = outputs[-1]["script"]
         script_len = len(script)
 
-        with self.backend.exchange_async(
+        self.backend.exchange(
             cla=CLA,
             ins=InsType.HASH_INPUT_FINALIZE_FULL,
             p1=P1.P1_FINALIZE_FULL_MORE,
             p2=P2.P2_FINALIZE_FULL_DEFAULT,
             data=outputs_num_bytes + value + script_len.to_bytes(1, byteorder="big") + script,
+        )
+
+    def hash_input(
+        self,
+        transaction: bytes,
+        trusted_inputs: list[bytes],
+        change_path: str | None = None,
+    ) -> None:
+        """Stream the transaction's inputs and outputs.
+
+        Nothing is displayed at this point: the legacy review runs on the header APDU that
+        `hash_sign_header` sends, once the transaction's validity window is known too.
+        """
+        self.tx_chunks = split_tx_v5_for_hash_input(transaction)
+        self.trusted_inputs = trusted_inputs
+        self.pczt_transparent_inputs = []
+        self.pczt_transparent_outputs = []
+
+        self._send_trusted_inputs_and_header(continue_hashing=False)
+        self._hash_input_finalize_outputs(change_path)
+
+    def _pczt_optional_u32(self, value: int | None) -> bytes:
+        if value is None:
+            return b"\x00"
+        return b"\x01" + value.to_bytes(4, byteorder="little")
+
+    def _compressed_pubkey_from_path(self, path: str) -> bytes:
+        public_key, _ = calculate_public_key_and_chaincode(CurveChoice.Secp256k1, path=path)
+        pubkey = bytes.fromhex(public_key)
+
+        if len(pubkey) != 65:
+            raise ValueError("Unexpected public key length")
+
+        prefix = b"\x02" if pubkey[64] % 2 == 0 else b"\x03"
+        return prefix + pubkey[1:33]
+
+    def _build_pczt_header_and_global_payload(
+        self,
+        pczt_global: PcztGlobal,
+        pczt_version: int | None = None,
+    ) -> bytes:
+        if pczt_version is None:
+            pczt_version = 2 if pczt_global.tx_version == 6 else 1
+        payload = bytearray(b"PCZT")
+        payload.extend(pczt_version.to_bytes(4, byteorder="little"))
+        payload.extend(pczt_global.tx_version.to_bytes(4, byteorder="little"))
+        payload.extend(pczt_global.version_group_id.to_bytes(4, byteorder="little"))
+        payload.extend(pczt_global.consensus_branch_id.to_bytes(4, byteorder="little"))
+        payload.extend(self._pczt_optional_u32(pczt_global.fallback_lock_time))
+        payload.extend(pczt_global.expiry_height.to_bytes(4, byteorder="little"))
+        payload.extend(pczt_global.coin_type.to_bytes(4, byteorder="little"))
+        payload.extend(pczt_global.tx_modifiable.to_bytes(1, byteorder="little"))
+
+        return bytes(payload)
+
+    def _checked_pczt_packet(self, payload: bytes, label: str) -> bytes:
+        if len(payload) > MAX_APDU_LEN:
+            raise ValueError(f"{label} PCZT APDU packet exceeds {MAX_APDU_LEN} bytes")
+        return payload
+
+    def _split_pczt_field_packet(self, payload: bytes) -> list[bytes]:
+        return split_message(payload, MAX_APDU_LEN)
+
+    def _build_pczt_bip32_derivation_packet(
+        self,
+        signing_path: str | None,
+        pubkey: bytes | None = None,
+    ) -> bytes:
+        payload = bytearray()
+        if signing_path is None:
+            if pubkey is not None:
+                raise ValueError("bip32_derivation pubkey requires a signing path")
+            payload.extend(write_varint(0))
+        else:
+            payload.extend(write_varint(1))
+            if pubkey is None:
+                pubkey = self._compressed_pubkey_from_path(signing_path)
+            if len(pubkey) != 33:
+                raise ValueError("Unexpected compressed public key length")
+            payload.extend(pubkey)
+            payload.extend(PCZT_DEFAULT_SEED_FINGERPRINT)
+            payload.extend(pack_derivation_path(signing_path))
+
+        return self._checked_pczt_packet(bytes(payload), "bip32_derivation")
+
+    def _build_pczt_zip32_derivation_packet(self, signing_path: str) -> bytes:
+        payload = bytearray(PCZT_DEFAULT_SEED_FINGERPRINT)
+        payload.extend(pack_derivation_path(signing_path))
+
+        return self._checked_pczt_packet(bytes(payload), "zip32_derivation")
+
+    def _build_pczt_transparent_input_packets(
+        self,
+        transparent_inputs: list[PcztTransparentInput],
+    ) -> list[bytes]:
+        packets = [
+            self._checked_pczt_packet(
+                write_varint(len(transparent_inputs)),
+                "transparent inputs header",
+            )
+        ]
+
+        for inp in transparent_inputs:
+            packet = bytearray()
+            packet.extend(inp.prevout_txid)
+            packet.extend(inp.prevout_index.to_bytes(4, byteorder="little"))
+            sequence = int.from_bytes(inp.sequence, byteorder="little")
+            packet.extend(self._pczt_optional_u32(sequence))
+            packet.extend(inp.value.to_bytes(8, byteorder="little"))
+            packets.append(self._checked_pczt_packet(bytes(packet), "transparent input small fields"))
+
+            packets.extend(self._split_pczt_field_packet(write_varint(len(inp.script_pubkey)) + inp.script_pubkey))
+
+            packets.append(
+                self._checked_pczt_packet(
+                    inp.sighash_type.to_bytes(1, byteorder="little") + self._build_pczt_bip32_derivation_packet(inp.signing_path),
+                    "transparent input sighash and bip32_derivation",
+                )
+            )
+
+        return packets
+
+    def _build_pczt_transparent_output_packets(
+        self,
+        transparent_outputs: list[PcztTransparentOutput],
+    ) -> list[bytes]:
+        packets = [
+            self._checked_pczt_packet(
+                write_varint(len(transparent_outputs)),
+                "transparent outputs header",
+            )
+        ]
+
+        for out in transparent_outputs:
+            packets.append(
+                self._checked_pczt_packet(
+                    out.value.to_bytes(8, byteorder="little"),
+                    "transparent output value",
+                )
+            )
+            packets.extend(self._split_pczt_field_packet(write_varint(len(out.script_pubkey)) + out.script_pubkey))
+            packets.append(
+                self._build_pczt_bip32_derivation_packet(
+                    out.signing_path,
+                    out.bip32_derivation_pubkey,
+                )
+            )
+
+        return packets
+
+    def _build_pczt_orchard_action_packets(
+        self,
+        orchard_bundle: PcztOrchardBundle,
+        include_rcv: bool = True,
+    ) -> list[bytes]:
+        # pylint: disable=too-many-branches
+        packets = [
+            self._checked_pczt_packet(
+                write_varint(len(orchard_bundle.actions)),
+                "orchard actions header",
+            )
+        ]
+
+        if not orchard_bundle.actions:
+            return packets
+
+        for action in orchard_bundle.actions:
+            if len(action.alpha) != 32:
+                raise ValueError("Orchard alpha must be 32 bytes")
+            if len(action.spend_recipient) != 43:
+                raise ValueError("Orchard spend recipient must be 43 bytes")
+            if len(action.spend_rho) != 32:
+                raise ValueError("Orchard spend rho must be 32 bytes")
+            if len(action.spend_rseed) != 32:
+                raise ValueError("Orchard spend rseed must be 32 bytes")
+            if len(action.recipient) != 43:
+                raise ValueError("Orchard recipient must be 43 bytes")
+            if include_rcv and action.rcv is None:
+                raise ValueError("Orchard rcv is required")
+            if action.rcv is not None and len(action.rcv) != 32:
+                raise ValueError("Orchard rcv must be 32 bytes")
+            if len(action.rseed) != 32:
+                raise ValueError("Orchard output rseed must be 32 bytes")
+            if not 0 <= action.spend_value <= 0x7FFF_FFFF_FFFF_FFFF:
+                raise ValueError("Orchard spend value out of range")
+            if not 0 <= action.value <= 0x7FFF_FFFF_FFFF_FFFF:
+                raise ValueError("Orchard output value out of range")
+
+            packets.append(
+                self._checked_pczt_packet(
+                    action.cv_net
+                    + action.nullifier
+                    + action.rk
+                    + action.spend_recipient
+                    + action.spend_value.to_bytes(8, byteorder="little")
+                    + action.spend_rho
+                    + action.spend_rseed
+                    + action.alpha,
+                    "orchard action spend small fields",
+                )
+            )
+            packets.append(self._build_pczt_zip32_derivation_packet(action.signing_path))
+            packets.append(
+                self._checked_pczt_packet(
+                    action.cmx + action.ephemeral_key,
+                    "orchard action output small fields",
+                )
+            )
+            packets.extend(self._split_pczt_field_packet(write_varint(len(action.enc_ciphertext)) + action.enc_ciphertext))
+            packets.extend(self._split_pczt_field_packet(write_varint(len(action.out_ciphertext)) + action.out_ciphertext))
+            output_metadata = action.recipient + action.value.to_bytes(8, byteorder="little") + action.rseed
+            if include_rcv:
+                output_metadata += action.rcv
+            packets.append(
+                self._checked_pczt_packet(
+                    output_metadata,
+                    "orchard action output metadata",
+                )
+            )
+
+        trailer = bytearray()
+        value_balance = orchard_bundle.value_balance
+        trailer.extend(orchard_bundle.flags.to_bytes(1, byteorder="little"))
+        trailer.extend(abs(value_balance).to_bytes(8, byteorder="little"))
+        trailer.extend((1 if value_balance < 0 else 0).to_bytes(1, byteorder="little"))
+        trailer.extend(orchard_bundle.anchor)
+        packets.append(self._checked_pczt_packet(bytes(trailer), "orchard bundle trailer"))
+
+        return packets
+
+    def _build_pczt_ironwood_action_packets(
+        self,
+        ironwood_bundle: PcztIronwoodBundle,
+        include_rcv: bool = True,
+    ) -> list[bytes]:
+        # pylint: disable=too-many-branches
+        packets = [
+            self._checked_pczt_packet(
+                write_varint(len(ironwood_bundle.actions)),
+                "ironwood actions header",
+            )
+        ]
+
+        if not ironwood_bundle.actions:
+            return packets
+
+        for action in ironwood_bundle.actions:
+            if len(action.alpha) != 32:
+                raise ValueError("Ironwood alpha must be 32 bytes")
+            if len(action.spend_recipient) != 43:
+                raise ValueError("Ironwood spend recipient must be 43 bytes")
+            if len(action.spend_rho) != 32:
+                raise ValueError("Ironwood spend rho must be 32 bytes")
+            if len(action.spend_rseed) != 32:
+                raise ValueError("Ironwood spend rseed must be 32 bytes")
+            if len(action.recipient) != 43:
+                raise ValueError("Ironwood recipient must be 43 bytes")
+            if include_rcv and action.rcv is None:
+                raise ValueError("Ironwood rcv is required")
+            if action.rcv is not None and len(action.rcv) != 32:
+                raise ValueError("Ironwood rcv must be 32 bytes")
+            if len(action.rseed) != 32:
+                raise ValueError("Ironwood output rseed must be 32 bytes")
+            if not 0 <= action.spend_value <= 0x7FFF_FFFF_FFFF_FFFF:
+                raise ValueError("Ironwood spend value out of range")
+            if not 0 <= action.value <= 0x7FFF_FFFF_FFFF_FFFF:
+                raise ValueError("Ironwood output value out of range")
+
+            packets.append(
+                self._checked_pczt_packet(
+                    action.cv_net
+                    + action.nullifier
+                    + action.rk
+                    + action.spend_recipient
+                    + action.spend_value.to_bytes(8, byteorder="little")
+                    + action.spend_rho
+                    + action.spend_rseed
+                    + action.alpha,
+                    "ironwood action spend small fields",
+                )
+            )
+            packets.append(self._build_pczt_zip32_derivation_packet(action.signing_path))
+            packets.append(
+                self._checked_pczt_packet(
+                    action.cmx + action.ephemeral_key,
+                    "ironwood action output small fields",
+                )
+            )
+            packets.extend(self._split_pczt_field_packet(write_varint(len(action.enc_ciphertext)) + action.enc_ciphertext))
+            packets.extend(self._split_pczt_field_packet(write_varint(len(action.out_ciphertext)) + action.out_ciphertext))
+            output_metadata = action.recipient + action.value.to_bytes(8, byteorder="little") + action.rseed
+            if include_rcv:
+                output_metadata += action.rcv
+            if action.note_plaintext_version is not None:
+                output_metadata += bytes([action.note_plaintext_version])
+            packets.append(
+                self._checked_pczt_packet(
+                    output_metadata,
+                    "ironwood action output metadata",
+                )
+            )
+
+        trailer = bytearray()
+        value_balance = ironwood_bundle.value_balance
+        trailer.extend(ironwood_bundle.flags.to_bytes(1, byteorder="little"))
+        trailer.extend(abs(value_balance).to_bytes(8, byteorder="little"))
+        trailer.extend((1 if value_balance < 0 else 0).to_bytes(1, byteorder="little"))
+        trailer.extend(ironwood_bundle.anchor)
+        packets.append(self._checked_pczt_packet(bytes(trailer), "ironwood bundle trailer"))
+
+        return packets
+
+    def _pczt_chunk_p1(self, idx: int, total_chunks: int) -> P1:
+        if idx == 0:
+            return P1.P1_FIRST
+        if idx == total_chunks - 1:
+            return P1.P1_LAST
+        return P1.P1_NEXT
+
+    def _pczt_chunk_p2(self, idx: int, total_chunks: int, pczt_finished: bool = False) -> P2:
+        if pczt_finished and idx == total_chunks - 1:
+            return P2.P2_PCZT_FINISHED
+        return P2.P2_NONE
+
+    def _send_pczt_header(
+        self,
+        pczt_global: PcztGlobal,
+        pczt_version: int | None = None,
+    ) -> None:
+        self.backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_HEADER,
+            p1=P1.P1_FIRST,
+            p2=P2.P2_NONE,
+            data=self._build_pczt_header_and_global_payload(pczt_global, pczt_version),
+        )
+
+    def _send_pczt_transparent_inputs(
+        self,
+        transparent_inputs: list[PcztTransparentInput],
+    ) -> None:
+        packets = self._build_pczt_transparent_input_packets(
+            transparent_inputs,
+        )
+
+        for idx, packet in enumerate(packets):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_TRANSPARENT_INPUT,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=P2.P2_NONE,
+                data=packet,
+            )
+
+    @contextmanager
+    def _send_pczt_transparent_outputs(
+        self,
+        transparent_outputs: list[PcztTransparentOutput],
+    ) -> Generator[None, None, None]:
+        packets = self._build_pczt_transparent_output_packets(
+            transparent_outputs,
+        )
+
+        for idx, packet in enumerate(packets[:-1]):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_TRANSPARENT_OUTPUT,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=P2.P2_NONE,
+                data=packet,
+            )
+
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.PCZT_TRANSPARENT_OUTPUT,
+            p1=self._pczt_chunk_p1(len(packets) - 1, len(packets)),
+            p2=P2.P2_NONE,
+            data=packets[-1],
         ) as response:
             yield response
 
-    def hash_sign(
-        self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01
+    def _send_pczt_transparent_outputs_sync(
+        self,
+        transparent_outputs: list[PcztTransparentOutput],
+    ) -> None:
+        packets = self._build_pczt_transparent_output_packets(
+            transparent_outputs,
+        )
+
+        for idx, packet in enumerate(packets):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_TRANSPARENT_OUTPUT,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=P2.P2_NONE,
+                data=packet,
+            )
+
+    def _send_pczt_orchard_actions_sync(
+        self,
+        orchard_bundle: PcztOrchardBundle,
+        include_rcv: bool = True,
+    ) -> None:
+        packets = self._build_pczt_orchard_action_packets(
+            orchard_bundle,
+            include_rcv=include_rcv,
+        )
+
+        for idx, packet in enumerate(packets):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_ORCHARD_ACTION,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=P2.P2_NONE,
+                data=packet,
+            )
+
+    @contextmanager
+    def _send_pczt_orchard_actions(
+        self,
+        orchard_bundle: PcztOrchardBundle,
+        pczt_finished: bool = False,
+        include_rcv: bool = True,
+    ) -> Generator[None, None, None]:
+        packets = self._build_pczt_orchard_action_packets(
+            orchard_bundle,
+            include_rcv=include_rcv,
+        )
+
+        for idx, packet in enumerate(packets[:-1]):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_ORCHARD_ACTION,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                data=packet,
+            )
+
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.PCZT_ORCHARD_ACTION,
+            p1=self._pczt_chunk_p1(len(packets) - 1, len(packets)),
+            p2=self._pczt_chunk_p2(len(packets) - 1, len(packets), pczt_finished),
+            data=packets[-1],
+        ) as response:
+            yield response
+
+    @contextmanager
+    def _send_pczt_ironwood_actions(
+        self,
+        ironwood_bundle: PcztIronwoodBundle,
+        pczt_finished: bool = False,
+        include_rcv: bool = True,
+    ) -> Generator[None, None, None]:
+        packets = self._build_pczt_ironwood_action_packets(
+            ironwood_bundle,
+            include_rcv=include_rcv,
+        )
+
+        for idx, packet in enumerate(packets[:-1]):
+            self.backend.exchange(
+                cla=CLA,
+                ins=InsType.PCZT_IRONWOOD_ACTION,
+                p1=self._pczt_chunk_p1(idx, len(packets)),
+                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                data=packet,
+            )
+
+        with self.backend.exchange_async(
+            cla=CLA,
+            ins=InsType.PCZT_IRONWOOD_ACTION,
+            p1=self._pczt_chunk_p1(len(packets) - 1, len(packets)),
+            p2=self._pczt_chunk_p2(len(packets) - 1, len(packets), pczt_finished),
+            data=packets[-1],
+        ) as response:
+            yield response
+
+    def pczt_orchard_bundle_from_raw_tx(
+        self,
+        raw_transaction: bytes,
+        signing_path: str,
+        alpha: bytes,
+        rcv_values: list[bytes] | None = None,
+        spend_note_fields: list[tuple[bytes, bytes, bytes]] | None = None,
+    ) -> PcztOrchardBundle:
+        # pylint: disable=too-many-positional-arguments
+        return pczt_orchard_bundle_from_raw_tx(
+            raw_transaction,
+            signing_path,
+            alpha,
+            rcv_values=rcv_values,
+            spend_note_fields=spend_note_fields,
+        )
+
+    def pczt_sign_transparent(
+        self,
+        input_index: int = 0,
     ) -> RAPDU:
-        # Send extra header data
-        self.backend.exchange(
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_SIGN_TRANSPARENT,
+            p1=P1.P1_FIRST,
+            p2=input_index,
+            data=b"",
+        )
+
+    def heap_probe(self) -> RAPDU:
+        """Largest block the device allocator can still serve, as a big-endian u32.
+
+        Raises through the backend when the application was built without the `heap_probe`
+        feature, which is how a released build answers.
+        """
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.HEAP_PROBE,
+            p1=0,
+            p2=0,
+            data=b"",
+        )
+
+    def pczt_sign_orchard(
+        self,
+        action_index: int = 0,
+    ) -> RAPDU:
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_SIGN_ORCHARD,
+            p1=P1.P1_FIRST,
+            p2=action_index,
+            data=b"",
+        )
+
+    def pczt_sign_ironwood(
+        self,
+        action_index: int = 0,
+    ) -> RAPDU:
+        return self.backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_SIGN_IRONWOOD,
+            p1=P1.P1_FIRST,
+            p2=action_index,
+            data=b"",
+        )
+
+    @contextmanager
+    def send_pczt(
+        self,
+        pczt_global: PcztGlobal,
+        transparent_inputs: list[PcztTransparentInput],
+        transparent_outputs: list[PcztTransparentOutput],
+        orchard_bundle: PcztOrchardBundle | None = None,
+        ironwood_bundle: PcztIronwoodBundle | None = None,
+        pczt_version: int | None = None,
+    ) -> Generator[None, None, None]:
+        self.trusted_inputs = []
+        self.pczt_transparent_inputs = transparent_inputs
+        self.pczt_transparent_outputs = transparent_outputs
+
+        self._send_pczt_header(pczt_global, pczt_version)
+        self._send_pczt_transparent_inputs(transparent_inputs)
+        self._send_pczt_transparent_outputs_sync(
+            self.pczt_transparent_outputs,
+        )
+
+        if ironwood_bundle is None:
+            if orchard_bundle is None:
+                orchard_bundle = PcztOrchardBundle(
+                    actions=[],
+                    flags=0,
+                    value_balance=0,
+                    anchor=bytes(32),
+                )
+            with self._send_pczt_orchard_actions(
+                orchard_bundle,
+                pczt_finished=True,
+            ) as response:
+                yield response
+        else:
+            if orchard_bundle is None:
+                # V6 Ironwood: advance the state machine through OrchardActionsDone.
+                orchard_bundle = PcztOrchardBundle(
+                    actions=[],
+                    flags=0,
+                    value_balance=0,
+                    anchor=bytes(32),
+                )
+            self._send_pczt_orchard_actions_sync(orchard_bundle)
+            with self._send_pczt_ironwood_actions(
+                ironwood_bundle,
+                pczt_finished=True,
+            ) as response:
+                yield response
+
+    @contextmanager
+    def hash_sign_header(
+        self,
+        locktime: int,
+        expiry: int,
+        sighash_type: int = 0x01,
+    ) -> Generator[None, None, None]:
+        """Send the transaction header, which is what triggers the legacy review.
+
+        Exposed separately from `hash_sign` because the review happens here: the header carries the
+        locktime and the expiry height, so this is the first point at which the whole transaction is
+        known to the device.
+        """
+        with self.backend.exchange_async(
             cla=CLA,
             ins=InsType.HASH_SIGN,
             p1=P1.P1_FIRST,
@@ -295,8 +1065,11 @@ class ZcashCommandSender:
             + locktime.to_bytes(4, byteorder="big")
             + sighash_type.to_bytes(1, byteorder="big")
             + expiry.to_bytes(4, byteorder="big"),
-        )
+        ) as response:
+            yield response
 
+    def hash_sign(self, path: str, locktime: int, expiry: int, sighash_type: int = 0x01) -> RAPDU:
+        """Sign one input. The header must already have been sent and approved."""
         self._send_trusted_inputs_and_header(continue_hashing=True)
 
         return self.backend.exchange(
@@ -315,22 +1088,22 @@ class ZcashCommandSender:
         amount_hex = send_amount.to_bytes(8, byteorder="little").hex()
 
         tx = bytes.fromhex(
-            "050000800a27a726b4d0d6c2" + "0000000000000000" + "01" +
-            "7acad6b8eec3158ecee566c0f08ff721d94d44b0cf66ee220ad4f9d1692d2ab5000000006a" +
-            "47304402200d6900cafe4189b9dfebaa965584f39e07cf6086ed5a97c84a5a76035dddcf7302206263c8b7202227e0ab33dd" +
-            "263e04f7a4384d34daa9279bfdebb03bf4b62123590121023e7c3ab4b4a42466f2c72c79afd426a0714fed74f884cd11abb4" +
-            "d76a72fa4a6900000000" +
-            "01" +
-            amount_hex + "1976a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac" +
-            "000000"
+            "050000800a27a726b4d0d6c2"
+            + "0000000000000000"
+            + "01"
+            + "7acad6b8eec3158ecee566c0f08ff721d94d44b0cf66ee220ad4f9d1692d2ab5000000006a"
+            + "47304402200d6900cafe4189b9dfebaa965584f39e07cf6086ed5a97c84a5a76035dddcf7302206263c8b7202227e0ab33dd"
+            + "263e04f7a4384d34daa9279bfdebb03bf4b62123590121023e7c3ab4b4a42466f2c72c79afd426a0714fed74f884cd11abb4"
+            + "d76a72fa4a6900000000"
+            + "01"
+            + amount_hex
+            + "1976a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac"
+            + "000000"
         )
 
         return self.get_trusted_input(tx, trusted_input_idx=trusted_input_idx).data
 
-    def forge_tx_v5(
-        self,
-        params: ForgeTxParams
-    ) -> bytes:
+    def forge_tx_v5(self, params: ForgeTxParams) -> bytes:
         # Zcash NU5 header fields
         version = 0x80000005
         version_group_id = 0x26A7270A
@@ -338,7 +1111,7 @@ class ZcashCommandSender:
         locktime = params.locktime
         expiry = params.expiry
 
-        script_pubkey_in = bytes.fromhex("76a914effcdc2e850d1c35fa25029ddbfad5928c9d702f88ac")
+        script_pubkey_in = FORGED_UTXO_SCRIPT_PUBKEY
         sequence = bytes.fromhex("00000000")
 
         script_pubkey_out = bytes.fromhex("76a914") + bytes.fromhex(params.recipient_publickey) + bytes.fromhex("88ac")
@@ -368,5 +1141,5 @@ class ZcashCommandSender:
 
         return tx
 
-    def get_async_response(self) -> Optional[RAPDU]:
-        return self.backend.last_async_response
+    def get_async_response(self) -> ApduResponse | RAPDU | None:
+        return self.last_response or self.backend.last_async_response

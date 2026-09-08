@@ -1,40 +1,54 @@
+[workspace]
+members = ["ledger_zcash_crypto"]
+default-members = ["."]
+exclude = ["vendor/rust-secp256k1"]
+
+[workspace.dependencies]
+# Floor at 1.37: earlier releases accept an APDU while a command is still being processed, so a
+# transport can be answered mid-review. The app does not enable `io_new`, so it runs the legacy I/O
+# path, which is where that release added the guard. Expressed as a requirement rather than left to
+# the lock file, which a regeneration could move on its own.
+ledger_device_sdk = { version = "1.37", features = ["sys"] }
+zeroize = { version = "1.6.0", default-features = false }
+
 [package]
 name = "zcash"
-version = "3.0.2"
+version = "3.9.3"
 authors = ["Ledger"]
 edition = "2024"
 
 [dependencies]
-ledger_device_sdk = { version = "1.36.0", features = ["sys"] }
+ledger_device_sdk = { workspace = true }
+ledger_zcash_crypto = { path = "ledger_zcash_crypto" }
 corez = { version = "0.1.1", default-features = false, features = ["alloc"] }
-hex = { version = "0.4.3", default-features = false, features = [
-    "serde",
-    "alloc",
-] }
 arrayvec = { version = "0.7.6", default-features = false }
 bs58 = { version = "0.5.1", default-features = false }
 
-zcash_primitives = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
-zcash_protocol = { version = "0.10.0", default-features = false }
-zcash_encoding = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
-zcash_transparent = { git = "https://github.com/Fingolfin69/librustzcash.git", branch = "bn-zcash-device-app", default-features = false }
+zcash_primitives = { version = "0.30.0", default-features = false }
+zcash_protocol = { version = "0.10.4", default-features = false }
+# Held at 0.4: zcash_{primitives,transparent,address} all resolve 0.4, so moving alone double-links.
+zcash_encoding = { version = "0.4.0", default-features = false }
+zcash_transparent = { version = "0.10.0", default-features = false }
 zcash_address = { version = "0.13.0", default-features = false }
 
-orchard = { path = "./vendor/orchard", default-features = false }
+orchard = { path = "./vendor/orchard", default-features = false, features = ["ledger"] }
 num_enum = { version = "0.7.5", default-features = false }
-zeroize = { version = "1.6.0", default-features = false }
+zeroize = { workspace = true }
 
 [patch.crates-io]
-# Used in orchard
+# Pulled by bitvec (via orchard)
 radium = { path = "./vendor/radium" }
-# Used in bip32 in librustzcash
+# Pulled by bip32 (zcash_transparent) and zcash_script
 secp256k1 = { path = "./vendor/rust-secp256k1" }
-# Used in librustzcash
+# Used directly and by zcash_primitives
 orchard = { path = "./vendor/orchard" }
+# Pulled by zcash_primitives
 sapling-crypto = { path = "./vendor/sapling-crypto" }
-# Used by multiple deps
+# Pulled by lazy_static
 spin = { path = "./vendor/spin" }
 portable-atomic = { git = "https://github.com/taiki-e/portable-atomic.git", tag = "v1.12.0" }
+# Pulled by orchard and redjubjub
+reddsa = { path = "./vendor/reddsa" }
 
 [build-dependencies]
 image = "0.25.7"
@@ -43,17 +57,36 @@ image = "0.25.7"
 opt-level = 'z'
 lto = 'fat'
 
+[profile.release.package.orchard]
+debug = true
+
+[profile.bench.package.orchard]
+debug = true
+
 [features]
 default = ["ledger_device_sdk/nano_nbgl", "legacy_path"]
+
+testnet = []
 
 # Enables debug logging
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
 
+# Answers how much heap the allocator can still serve, over an instruction of its own. For capacity
+# measurement runs only — never enable it on a build that reaches a user, for the reason stated in
+# `src/heap_probe.rs`.
+heap_probe = []
+
+# Raises the shielded bundle bounds to what the signing instructions can address, so that a run
+# finds the action count the device stops at instead of the one the shipped bound stops at. A build
+# carrying this accepts bundles no measurement has cleared yet, so it is a measurement instrument
+# and never a shippable configuration.
+capacity_probe = []
+
 legacy_path = []
 
 [package.metadata.ledger]
-curve = ["secp256k1"]
-path = ["44'/133'"]
+curve = ["secp256k1", "jubjub"]
+path = ["44'/133'", "32'/133'"]
 name = "Zcash"
 flags = "0x800"
 

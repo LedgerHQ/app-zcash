@@ -48,6 +48,46 @@ impl NonIdentityPallasPoint {
         pallas::Point::from_bytes(bytes)
             .and_then(|p| CtOption::new(NonIdentityPallasPoint(p), !p.is_identity()))
     }
+
+    /// Constructs a wrapper for a point that is guaranteed to be non-identity
+    /// (such as the product of a non-zero scalar and a non-identity point in
+    /// the prime-order Pallas group).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `p.is_identity()`.
+    pub(crate) fn expect_non_identity(p: pallas::Point) -> Self {
+        assert!(!bool::from(p.is_identity()));
+        NonIdentityPallasPoint(p)
+    }
+
+    #[cfg(feature = "ledger")]
+    pub(crate) fn from_bytes_ledger(bytes: &[u8; 32]) -> Result<Self, ledger_zcash_crypto::Error> {
+        let point = ledger_zcash_crypto::nonidentity_pallas_point_from_bytes(bytes)?;
+        let x = pallas::Base::from_repr(point.x);
+        if !bool::from(x.is_some()) {
+            return Err(ledger_zcash_crypto::Error::MalformedPallasBase);
+        }
+        let x = x.unwrap();
+
+        let y = pallas::Base::from_repr(point.y);
+        if !bool::from(y.is_some()) {
+            return Err(ledger_zcash_crypto::Error::MalformedPallasBase);
+        }
+        let y = y.unwrap();
+
+        let affine = pallas::Affine::from_xy(x, y);
+        if !bool::from(affine.is_some()) {
+            return Err(ledger_zcash_crypto::Error::MalformedPallasPoint);
+        }
+
+        let point = pallas::Point::from(affine.unwrap());
+        if bool::from(point.is_identity()) {
+            return Err(ledger_zcash_crypto::Error::MalformedPallasPoint);
+        }
+
+        Ok(NonIdentityPallasPoint(point))
+    }
 }
 
 impl Deref for NonIdentityPallasPoint {
@@ -160,7 +200,12 @@ impl PreparedNonIdentityBase {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PreparedNonZeroScalar(WnafScalar<pallas::Scalar, PREPARED_WINDOW_SIZE>);
+pub(crate) struct PreparedNonZeroScalar(
+    WnafScalar<pallas::Scalar, PREPARED_WINDOW_SIZE>,
+    // The scalar itself, retained for the GLV ladder in `pasta_curves::glv`, which
+    // decomposes the scalar rather than consuming the wNAF form.
+    pallas::Scalar,
+);
 
 #[cfg(feature = "std")]
 impl DynamicUsage for PreparedNonZeroScalar {
@@ -175,7 +220,12 @@ impl DynamicUsage for PreparedNonZeroScalar {
 
 impl PreparedNonZeroScalar {
     pub(crate) fn new(scalar: &NonZeroPallasScalar) -> Self {
-        PreparedNonZeroScalar(WnafScalar::new(scalar))
+        PreparedNonZeroScalar(WnafScalar::new(scalar), **scalar)
+    }
+
+    /// The raw scalar, for the GLV ladder in `pasta_curves::glv`.
+    pub(crate) fn raw_scalar(&self) -> pallas::Scalar {
+        self.1
     }
 }
 

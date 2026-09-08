@@ -90,10 +90,23 @@ pub struct ParserError {
 impl ParserError {
     #[track_caller]
     pub fn from_str(reason: &'static str) -> ParserError {
+        // `file!()`/`line!()` would expand here, in this file, and report the same line for every
+        // caller. `Location::caller()` is what `#[track_caller]` actually provides.
+        let caller = core::panic::Location::caller();
         ParserError {
             source: reason.into(),
-            file: file!(),
-            line: line!(),
+            file: caller.file(),
+            line: caller.line(),
+        }
+    }
+
+    #[track_caller]
+    pub fn from_sw(sw: AppSW) -> ParserError {
+        let caller = core::panic::Location::caller();
+        ParserError {
+            source: sw.into(),
+            file: caller.file(),
+            line: caller.line(),
         }
     }
 

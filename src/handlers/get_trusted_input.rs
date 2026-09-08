@@ -1,7 +1,8 @@
 use crate::{
     AppSW,
     consts::TRUSTED_INPUT_SIZE,
-    parser::{ParserCtx, ParserMode, ParserSourceError},
+    parser::{LegacyParserCtx, LegacyParserMode, ParserSourceError},
+    rng,
     settings::Settings,
     tx::TxContext,
     utils::{Endianness, HexSlice, read_u32},
@@ -10,7 +11,6 @@ use ledger_device_sdk::{
     hmac::{HMACInit, sha2::Sha2_256 as HmacSha256},
     io::Comm,
     log::{debug, error, info},
-    random::rand_bytes,
 };
 
 const MAGIC_TRUSTED_INPUT: u8 = 0x32;
@@ -23,9 +23,25 @@ pub fn handler_get_trusted_input(
 ) -> Result<(), AppSW> {
     let mut data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
 
+    // Only the first packet resets the context; a continuation parses into the transaction state
+    // already there. During a PCZT session that state is the one the review approved, and the
+    // hashers a continuation re-initialises are the ones its signature digest is built from.
+    if !first && ctx.pczt_parser.is_session_active() {
+        error!("Trusted-input continuation during a PCZT session");
+        return Err(AppSW::BadState);
+    }
+
+    // Likewise once a transaction is finished: its outputs and hashers stay in place, and a
+    // completed PCZT no longer reports an active session, so a continuation would build on the
+    // previous transaction's state instead of a fresh one.
+    if !first && ctx.is_finished() {
+        error!("Trusted-input continuation resuming a finished transaction");
+        return Err(AppSW::BadState);
+    }
+
     if first {
         info!("Reset TX context");
-        ctx.reset(ParserMode::TrustedInput);
+        ctx.reset_for_new_transaction(LegacyParserMode::TrustedInput)?;
 
         let transaction_trusted_input_idx = read_u32(data, Endianness::Big, false)?;
         data = &data[4..];
@@ -34,9 +50,9 @@ pub fn handler_get_trusted_input(
         info!("Trusted input idx: {}", transaction_trusted_input_idx);
     }
 
-    ctx.parser
+    ctx.legacy_parser
         .parse(
-            &mut ParserCtx {
+            &mut LegacyParserCtx {
                 tx_state: &mut ctx.tx_signing_state,
                 tx_info: &mut ctx.tx_info,
                 trusted_input_info: &mut ctx.trusted_input_info,
@@ -52,17 +68,17 @@ pub fn handler_get_trusted_input(
             }
         })?;
 
-    if ctx.parser.is_finished() {
+    if ctx.legacy_parser.is_finished() {
         if !ctx.trusted_input_info.is_input_processed {
             error!("Trusted input index was not processed");
             return Err(AppSW::IncorrectData);
         }
 
-        let mut rng = [0u8; 4];
-        rand_bytes(&mut rng);
+        let mut nonce = [0u8; 4];
+        rng::fill_bytes(&mut nonce)?;
 
         comm.append(&[MAGIC_TRUSTED_INPUT, 0x00]);
-        comm.append(&rng[2..]);
+        comm.append(&nonce[2..]);
         comm.append(&ctx.trusted_input_info.tx_id);
         comm.append(
             ctx.trusted_input_info
