@@ -84,6 +84,11 @@ capacity_probe = []
 
 legacy_path = []
 
+# Enables the Ledger SDK on-device unit-test framework (TestType / sdk_test_runner). The
+# runner needs a device target:
+#   QT_QPA_PLATFORM=offscreen cargo test --features unit_test --target apex_p
+unit_test = ["ledger_device_sdk/unit_test"]
+
 [package.metadata.ledger]
 curve = ["secp256k1", "jubjub"]
 path = ["44'/133'", "32'/133'"]
