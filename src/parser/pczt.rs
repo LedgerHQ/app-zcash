@@ -13,7 +13,7 @@ use ::orchard::keys::Scope as OrchardScope;
 use corez::io::Read;
 use ledger_device_sdk::ecc::Secret;
 use ledger_device_sdk::hash::HashInit as _;
-use ledger_device_sdk::hash::blake2::Blake2b_256;
+use ledger_device_sdk::hash::blake2::{Blake2b_256, Blake2bWithPerso as _};
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::log::{debug, error, info};
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
@@ -191,7 +191,11 @@ fn memo_display(tx_info: &mut TxInfo, memo: &[u8]) -> Result<Option<TxOutputMemo
         return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
     }
 
-    let mut hasher = Blake2b_256::default();
+    // `Blake2b_256::default()` leaves the cx_blake2b_t zeroed, so `update` would dereference a
+    // null cx_hash_info_t. Built here rather than through `HashInit::new`, which discards the
+    // initialization error and would hand back that same unusable context: no salt and no
+    // personalization yields the plain BLAKE2b-256 the review field is meant to show.
+    let mut hasher = ok!(Blake2b_256::new_with_salt_and_perso(None, None));
     ok!(hasher.update(memo));
     let mut hash = [0u8; HASH_SIZE];
     ok!(hasher.finalize(&mut hash));
@@ -897,4 +901,173 @@ impl PcztParser {
 
         self.reset_on_error(result)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_RETAINED_MEMO_BYTES, memo_display};
+    use crate::parser::{HASH_SIZE, ORCHARD_MEMO_SIZE};
+    use crate::tx::TxInfo;
+    use ledger_device_sdk::testing::TestType;
+
+    /// Build the 512-byte memo field a shielded note carries, zero-padded like the real one.
+    fn memo_field(content: &[u8]) -> [u8; ORCHARD_MEMO_SIZE] {
+        let mut memo = [0u8; ORCHARD_MEMO_SIZE];
+        memo[..content.len()].copy_from_slice(content);
+        memo
+    }
+
+    /// Run `memo_display` on a fresh transaction and return the rendered value's bytes.
+    ///
+    /// The returned `String` is heap-allocated, so comparing it needs no relocation of a
+    /// `&'static` pointer — unlike the memo's `label`, which is left alone here.
+    fn rendered(content: &[u8]) -> Result<alloc::string::String, ()> {
+        let mut tx_info = TxInfo::default();
+        match memo_display(&mut tx_info, &memo_field(content)) {
+            Ok(Some(memo)) => Ok(memo.value),
+            _ => Err(()),
+        }
+    }
+
+    /// Baseline: a printable-ASCII memo takes the text branch and is shown verbatim.
+    ///
+    /// Listed first so a run proves the harness itself works before reaching the hash branch.
+    #[test_case]
+    const PRINTABLE_ASCII_MEMO_IS_SHOWN_AS_TEXT: TestType = TestType {
+        modname: module_path!(),
+        name: "printable_ascii_memo_is_shown_as_text",
+        f: || {
+            let value = rendered(b"Vizor memo probe")?;
+            if value.as_bytes() != b"Vizor memo probe" {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// A memo holding one line break is not printable ASCII, so it takes the hash branch.
+    ///
+    /// These five bytes are what wiped the reporter's device. The expected digest is
+    /// BLAKE2b-256, unkeyed and unpersonalized, over the whole 512-byte memo field.
+    #[test_case]
+    const LINE_BREAK_MEMO_IS_HASHED: TestType = TestType {
+        modname: module_path!(),
+        name: "line_break_memo_is_hashed",
+        f: || {
+            let value = rendered(b"test\n")?;
+            if value.as_bytes()
+                != b"158c40577ec4159f67aa9488a866d5dcfcf4008447de0ce44eff3f563de116ae"
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// Non-ASCII UTF-8 takes the hash branch: one Korean word is enough.
+    #[test_case]
+    const NON_ASCII_MEMO_IS_HASHED: TestType = TestType {
+        modname: module_path!(),
+        name: "non_ascii_memo_is_hashed",
+        f: || {
+            let value = rendered("안녕하세요".as_bytes())?;
+            if value.as_bytes()
+                != b"503a4fed723a38f764c4b284257c5f17294cca985a41566d1b688a3a476249e1"
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// A tab is a control character, so it too leaves the printable-ASCII range.
+    #[test_case]
+    const TAB_MEMO_IS_HASHED: TestType = TestType {
+        modname: module_path!(),
+        name: "tab_memo_is_hashed",
+        f: || {
+            let value = rendered(b"first\tsecond")?;
+            if value.as_bytes()
+                != b"1f3cf29aa6495cf63fb12682af2a1a5af3d77da328b6e22680a3d609899081e3"
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// An emoji is multi-byte UTF-8, which the text branch also refuses.
+    #[test_case]
+    const EMOJI_MEMO_IS_HASHED: TestType = TestType {
+        modname: module_path!(),
+        name: "emoji_memo_is_hashed",
+        f: || {
+            let value = rendered("gg 🎉".as_bytes())?;
+            if value.as_bytes()
+                != b"68dcb3e8e0b501eca765f4d918931f6ccf9f55f2b3e506156e5bbf8ef99256f7"
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// A lead byte above the text tag marks a non-text memo, which is hashed whatever follows.
+    #[test_case]
+    const NON_TEXT_TAG_MEMO_IS_HASHED: TestType = TestType {
+        modname: module_path!(),
+        name: "non_text_tag_memo_is_hashed",
+        f: || {
+            let value = rendered(b"\xff abc")?;
+            if value.as_bytes()
+                != b"1ae0dd79905b7a4e3b4d335810901c84052cbfaa3f11d9477f05223d3fce483a"
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// Length alone never reaches the hash branch: a full-length ASCII memo stays text.
+    ///
+    /// Pins the separation between the retention budget and the character-set rule, so a
+    /// later change to one of them cannot be mistaken for the other.
+    #[test_case]
+    const MAX_LENGTH_ASCII_MEMO_IS_SHOWN_AS_TEXT: TestType = TestType {
+        modname: module_path!(),
+        name: "max_length_ascii_memo_is_shown_as_text",
+        f: || {
+            let value = rendered(&[b'x'; ORCHARD_MEMO_SIZE])?;
+            if value.len() != ORCHARD_MEMO_SIZE || value.bytes().any(|byte| byte != b'x') {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// Exhausting the retention budget sends an otherwise displayable memo to the hash branch.
+    ///
+    /// Earlier memos leave 100 bytes of budget: too little for this memo's 512 bytes of text,
+    /// enough for the 64-character digest. That is the one way the hash branch is reached
+    /// without any non-printable byte.
+    #[test_case]
+    const MEMO_OVER_THE_RETENTION_BUDGET_IS_HASHED: TestType = TestType {
+        modname: module_path!(),
+        name: "memo_over_the_retention_budget_is_hashed",
+        f: || {
+            let memo = memo_field(&[b'x'; ORCHARD_MEMO_SIZE]);
+            let mut tx_info = TxInfo {
+                retained_memo_bytes: MAX_RETAINED_MEMO_BYTES - 100,
+                ..Default::default()
+            };
+
+            let Ok(Some(rendered)) = memo_display(&mut tx_info, &memo) else {
+                return Err(());
+            };
+            if rendered.value.len() != 2 * HASH_SIZE {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 }

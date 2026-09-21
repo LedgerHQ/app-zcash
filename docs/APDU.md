@@ -277,12 +277,16 @@ form, including OP_RETURN, is refused with `IncorrectData`.
 This command is still sent when a transaction has no Orchard actions. In that
 case its payload is only the CompactSize action count `0`.
 
-The memo text a transaction's shielded outputs may keep for the review is
-bounded. Past the budget a memo is shown as its hash instead of its text, and
-past that the command returns `NotEnoughMemorySpace` (`0x6A84`). The budget
-holds two maximum-length memos, well above what a wallet-built transaction
-carries. The same applies to `INS_PCZT_IRONWOOD_ACTION`, which shares the
-rendering.
+A shielded output's memo is shown as text only when every one of its bytes is
+printable ASCII (`0x20`–`0x7E`) and it fits the review's retention budget.
+Anything else is shown as a BLAKE2b-256 digest of the whole 512-byte memo field
+instead: a line break, a tab, an accented letter, an emoji, a lead byte above
+the text tag, or a memo longer than the budget still allows. Length alone never
+forces the digest — a maximum-length printable-ASCII memo is shown in full.
+Once even the digest no longer fits the budget the command returns
+`NotEnoughMemorySpace` (`0x6A84`). The budget holds two maximum-length memos,
+well above what a wallet-built transaction carries. The same applies to
+`INS_PCZT_IRONWOOD_ACTION`, which shares the rendering.
 
 For **V5 transactions**, `P2 = 0x01` on the last APDU marks the PCZT payload
 as complete. For **V6 transactions**, the last APDU of this command must use

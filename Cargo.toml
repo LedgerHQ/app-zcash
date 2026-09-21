@@ -13,7 +13,7 @@ zeroize = { version = "1.6.0", default-features = false }
 
 [package]
 name = "zcash"
-version = "3.9.3"
+version = "3.9.4"
 authors = ["Ledger"]
 edition = "2024"
 
@@ -83,6 +83,11 @@ heap_probe = []
 capacity_probe = []
 
 legacy_path = []
+
+# Enables the Ledger SDK on-device unit-test framework (TestType / sdk_test_runner). The
+# runner needs a device target:
+#   QT_QPA_PLATFORM=offscreen cargo test --features unit_test --target apex_p
+unit_test = ["ledger_device_sdk/unit_test"]
 
 [package.metadata.ledger]
 curve = ["secp256k1", "jubjub"]

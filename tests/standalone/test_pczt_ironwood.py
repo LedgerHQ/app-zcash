@@ -197,6 +197,32 @@ _MEMO_ENC_CIPHERTEXT = bytes.fromhex(
     "dacb4fc3769879d72fc21f68116f0af30414236128f8b21f627ec43a1ef1f920"
     "dece1299"
 )  # noqa: E501
+# Same action with the memo "test\n" instead. Not printable ASCII, so the device hashes it
+# rather than showing it. Everything else in the action is unchanged: the memo reaches neither
+# the note commitment nor the outgoing ciphertext. Regenerate with the vendored orchard's
+# gen_v3_memo_action_line_break_vectors.
+_MEMO_LINE_BREAK_ENC_CIPHERTEXT = bytes.fromhex(
+    "feebe7c7d7f8e08fd0baffb71f54ca6fad3b8a1b1702be187bcc24f1874a48bc"
+    "3013c44c8d0aaadfbdbebeb31c3eda96e539d985180e5f4cc42af66b080c3558"
+    "56dc67bf61319f0f1ac890a1cc543f49d32d30b47241d1632e6dcba30492b6a7"
+    "bdbaafb9f9dd1e68c2ac12d17b485aed2fb8ba6162f4ec70f8b3c045c4db74fd"
+    "7861cfb6ce2dc74c2a4219fa429332ed86e891aeca5cf2dfd0517f99fee0f0dd"
+    "cc5a1a2729bac0626f895a1b572fa8eddaf3b72d2cbb6c1681aeb865740d439b"
+    "7c90334512faa315207d540eb411dfe8d38b3f6673cb65e12816f42bee50abb9"
+    "66437fa386c34ac54611c86cc093ddee1cfe098903f3be4a8de20de1c48fdbd8"
+    "ca8a9900eeee734dfff526c39ad353a81de786deb8278bdc870b9d65cc99422e"
+    "54d0bf7e8e0fcf88a0a701ee59195aaa130b8950bf39bc598520f913af4bf770"
+    "dfcf37e1ed4d19549759e1642945affbe385eb80497b9652e33a5366667b4fd9"
+    "c212b061c6c2c47d3f289dee39fea4eba73faf6c91428ca0b97d2be3feb7c0e1"
+    "ea5ee0250aed9a96d7fe9e91c525f46debe71ddbbc0f8d05576ea27a2249f5b9"
+    "a341561772b6b480404d5e839af42a56d71f20ad5538214b9925f7931d926017"
+    "353759398d25a5a2611cf243ff44f732cdc57312b7dfe386118a1e9377f36d7e"
+    "e312be7ce3c0efa96228a83653a607e00d556f8e04defbb39a2179bb2ed8a038"
+    "9bb157c75913236e6f9ddf21dcc7108b804c1fa194b2603058e03da7ab3f6ee5"
+    "dacb4fc3769879d72fc21f68116f0af304142361a65892d289a7c3b7912dbea4"
+    "12e13fed"
+)  # noqa: E501
+
 _MEMO_OUT_CIPHERTEXT = bytes.fromhex(
     "f72616bdd9af44610bf009b2d0e3fd468904f86490eece0bbc1001346aef8f38"
     "dafd8d7b9ca601541c114be9bf855a030d1426aba8369ae3101d154b99774487"
@@ -356,11 +382,14 @@ def _ironwood_shield_bundle() -> PcztIronwoodBundle:
     )
 
 
-def _memo_ironwood_action() -> PcztIronwoodAction:
-    """Dummy padding spend (spend_value=0) whose output carries an ASCII memo.
+def _memo_ironwood_action(
+    enc_ciphertext: bytes = _MEMO_ENC_CIPHERTEXT,
+) -> PcztIronwoodAction:
+    """Dummy padding spend (spend_value=0) whose output carries a memo.
 
-    The enc_ciphertext decrypts via the device's external OVK (m/32'/133'/0') to
-    ASCII memo "PCZT Orchard memo test", exercising the memo display path.
+    The enc_ciphertext decrypts via the device's external OVK (m/32'/133'/0'), by
+    default to the ASCII memo "PCZT Orchard memo test". Pass
+    _MEMO_LINE_BREAK_ENC_CIPHERTEXT for the same action carrying "test\n" instead.
     Parameters are identical to the Orchard action from
     test_pczt_sign_tx_v5_transparent_to_orchard_with_memo because Ironwood uses the
     same note-encryption primitives and signing path.
@@ -376,7 +405,7 @@ def _memo_ironwood_action() -> PcztIronwoodAction:
         signing_path=_SIGNING_PATH,
         cmx=_MEMO_CMX,
         ephemeral_key=_MEMO_EPHEMERAL_KEY,
-        enc_ciphertext=_MEMO_ENC_CIPHERTEXT,
+        enc_ciphertext=enc_ciphertext,
         out_ciphertext=_MEMO_OUT_CIPHERTEXT,
         rcv=_MEMO_RCV,
         rseed=_MEMO_RSEED,
@@ -386,7 +415,9 @@ def _memo_ironwood_action() -> PcztIronwoodAction:
     )
 
 
-def _ironwood_memo_bundle() -> PcztIronwoodBundle:
+def _ironwood_memo_bundle(
+    enc_ciphertext: bytes = _MEMO_ENC_CIPHERTEXT,
+) -> PcztIronwoodBundle:
     """Shield (transparent→Ironwood) where the single Ironwood output carries an ASCII memo.
 
     spend_value=0 (dummy padding); value_balance=-90000 signals that 90000 zats flow INTO
@@ -394,7 +425,7 @@ def _ironwood_memo_bundle() -> PcztIronwoodBundle:
     (is_change=False) so the device displays it together with the decoded memo text.
     """
     return PcztIronwoodBundle(
-        actions=[_memo_ironwood_action()],
+        actions=[_memo_ironwood_action(enc_ciphertext)],
         flags=3,
         value_balance=-_MEMO_VALUE,
         anchor=bytes(32),
@@ -1592,8 +1623,11 @@ def test_pczt_ironwood_display_private_transfer_with_memo(
     A transparent input of 100000 zats funds the shield; the Ironwood action receives
     90000 zats (value_balance=-90000, fee=10000). The enc_ciphertext decrypts via the
     device's external OVK (m/32'/133'/0') to ASCII memo "PCZT Orchard memo test",
-    exercising ironwood_output_memo_display, ironwood_memo_display,
-    is_ironwood_displayable_ascii_memo, and the BLAKE2b memo-hash fallback path.
+    exercising ironwood_output_memo_display and the text branch of memo_display.
+
+    The memo is printable ASCII, so it does NOT reach that function's BLAKE2b hash
+    fallback. That branch is covered by the Rust unit tests in src/parser/pczt.rs,
+    which call memo_display directly and so need no re-encrypted enc_ciphertext.
 
     The action vector is byte-identical to the Orchard action from
     test_pczt_sign_tx_v5_transparent_to_orchard_with_memo because Ironwood uses the
@@ -1610,6 +1644,42 @@ def test_pczt_ironwood_display_private_transfer_with_memo(
         _review_approve(
             scenario_navigator,
             "test_pczt_ironwood_display_private_transfer_with_memo",
+        )
+
+    auth_sig = client.pczt_sign_transparent(input_index=0).data
+    assert len(auth_sig) >= 70
+
+
+def test_pczt_ironwood_display_private_transfer_with_hashed_memo(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Transparent→Ironwood (shield) with a memo that is not printable ASCII.
+
+    The same action as the test above, with the memo "test\n". That trailing line break
+    puts a byte outside 0x20..=0x7E in the memo, so memo_display hashes it instead of
+    showing it and the review carries a "memo hash" field rather than a "memo" one. The
+    value on screen is BLAKE2b-256 over the whole 512-byte memo field:
+    158c40577ec4159f67aa9488a866d5dcfcf4008447de0ce44eff3f563de116ae
+
+    This is the path that used to fault: the hasher was left uninitialized, and parsing the
+    action killed the app before any review screen appeared. A crash here takes the whole
+    Speculos run down rather than failing this case alone.
+
+    The five memo bytes are the ones a send form produces from the word "test", which is
+    how the fault was first reached on a device.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_100K],
+        transparent_outputs=[],
+        ironwood_bundle=_ironwood_memo_bundle(_MEMO_LINE_BREAK_ENC_CIPHERTEXT),
+    ):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_ironwood_display_private_transfer_with_hashed_memo",
         )
 
     auth_sig = client.pczt_sign_transparent(input_index=0).data

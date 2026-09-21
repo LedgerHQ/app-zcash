@@ -502,7 +502,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
      use zcash_note_encryption::{
          batch, try_compact_note_decryption, try_note_decryption, try_output_recovery_with_ovk,
          BatchDomain, Domain, EphemeralKeyBytes, NoteEncryption,
-@@ -1022,4 +1024,567 @@
+@@ -1022,4 +1024,634 @@
              assert_eq!(batched_wnaf, expected);
          }
      }
@@ -773,11 +773,16 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +    //! (spend_recipient = _SPEND_RECIPIENT), so its nullifier also changes
 +    //! when the firmware switches from V2 → V3 note commitment.
 +    //!
-+    //! Run from the app-zcash worktree root (outside /app to avoid build-std):
++    //! Run from a directory outside the repository, so that cargo does not pick up the
++    //! `.cargo/config.toml` whose `build-std` would rebuild core and alloc against a host target
++    //! that already ships them. `circuit` is off because its proptest strategies no longer
++    //! compile, and nothing here needs a proof.
 +    //! ```sh
 +    //! HOST=$(rustc -vV | awk '/^host:/ {print $2}')
-+    //! cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
-+    //!   --target-dir /tmp/orchard-host -- gen_v3_ext_action_vectors --nocapture
++    //! cd /tmp && cargo test --manifest-path <worktree>/vendor/orchard/Cargo.toml \
++    //!   --target "$HOST" --target-dir /tmp/orchard-host \
++    //!   --no-default-features --features std \
++    //!   -- gen_v3_ext_action_vectors --nocapture
 +    //! ```
 +
 +    use alloc::{string::String, vec::Vec};
@@ -786,7 +791,9 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +    use zcash_note_encryption::Domain;
 +
 +    use crate::{
-+        keys::{DiversifiedTransmissionKey, Diversifier, FullViewingKey, Scope},
++        keys::{
++            DiversifiedTransmissionKey, Diversifier, FullViewingKey, OutgoingViewingKey, Scope,
++        },
 +        note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
 +        note_encryption::{IronwoodDomain, IronwoodNoteEncryption},
 +        value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
@@ -975,18 +982,15 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +        );
 +    }
 +
-+    /// Generate updated V3 memo-action vectors for test_pczt_ironwood.py.
++    /// The note and outgoing viewing key behind the V3 memo action.
 +    ///
-+    /// The memo action is a dummy padding spend whose 90 000-zat output goes to
-+    /// `_EXT_RECIPIENT` and carries an ASCII memo recovered through the external OVK.
-+    ///
-+    /// ```sh
-+    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
-+    /// cargo test --manifest-path vendor/orchard/Cargo.toml --target "$HOST" \
-+    ///   --target-dir /tmp/orchard-host -- gen_v3_memo_action_vectors --nocapture
-+    /// ```
-+    #[test]
-+    fn gen_v3_memo_action_vectors() {
++    /// Rebuilt on each call because encrypting consumes the note. Everything here is fixed:
++    /// the only thing that varies between the memo vectors below is the memo itself, and a
++    /// memo reaches neither the note commitment nor the outgoing ciphertext — the first covers
++    /// the note, the second is keyed by cv_net, cmx and the ephemeral key. So `cmx`,
++    /// `_MEMO_EPHEMERAL_KEY`, `_MEMO_CV_NET` and `_MEMO_OUT_CIPHERTEXT` hold for every memo,
++    /// and a new memo has to regenerate `enc_ciphertext` alone.
++    fn memo_action_note_and_ovk() -> (Note, OutgoingViewingKey) {
 +        let fvk = FullViewingKey::from_bytes(&FVK_BYTES).expect("Speculos Orchard FVK must decode");
 +        let ovk = fvk.to_ovk(Scope::External);
 +
@@ -1023,6 +1027,32 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +        ))
 +        .expect("memo output note must be valid");
 +
++        (note, ovk)
++    }
++
++    /// Pad a memo's content into the 512-byte field a shielded note carries.
++    fn memo_field(content: &[u8]) -> [u8; 512] {
++        let mut memo = [0u8; 512];
++        memo[..content.len()].copy_from_slice(content);
++        memo
++    }
++
++    /// Generate updated V3 memo-action vectors for test_pczt_ironwood.py.
++    ///
++    /// The memo action is a dummy padding spend whose 90 000-zat output goes to
++    /// `_EXT_RECIPIENT` and carries an ASCII memo recovered through the external OVK.
++    ///
++    /// ```sh
++    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
++    /// cd /tmp && cargo test --manifest-path <worktree>/vendor/orchard/Cargo.toml \
++    ///   --target "$HOST" --target-dir /tmp/orchard-host \
++    ///   --no-default-features --features std \
++    ///   -- gen_v3_memo_action_vectors --nocapture
++    /// ```
++    #[test]
++    fn gen_v3_memo_action_vectors() {
++        let (note, ovk) = memo_action_note_and_ovk();
++
 +        let cmx = ExtractedNoteCommitment::from(note.commitment());
 +        println!("\n# ---- V3 memo action (gen_v3_memo_action_vectors) ----");
 +        println!(
@@ -1030,9 +1060,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +            hex_str(&cmx.to_bytes())
 +        );
 +
-+        let mut memo = [0u8; 512];
-+        let text = b"PCZT Orchard memo test";
-+        memo[..text.len()].copy_from_slice(text);
++        let memo = memo_field(b"PCZT Orchard memo test");
 +
 +        let esk = note.esk();
 +        let encryptor = IronwoodNoteEncryption::new_with_esk(esk, Some(ovk), note, memo);
@@ -1067,6 +1095,45 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +        println!(
 +            "_MEMO_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
 +            hex_lines(out_ct.as_ref())
++        );
++    }
++
++    /// Generate the V3 memo-action vector whose memo is not printable ASCII.
++    ///
++    /// `memo_display` renders a memo as text only when every one of its bytes falls in
++    /// 0x20..=0x7E, and hashes it otherwise. Reaching that hash branch over the real APDU path
++    /// therefore needs a ciphertext of its own — the committed one decrypts to printable ASCII
++    /// and takes the text branch. These five bytes are the memo a wallet produced from the word
++    /// `test` typed into a send form.
++    ///
++    /// Only `enc_ciphertext` is emitted; see `memo_action_note_and_ovk` for why the rest of the
++    /// action is unchanged. The commitment and ephemeral key are printed alongside so that a
++    /// reader can confirm it rather than take it on trust.
++    ///
++    /// ```sh
++    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
++    /// cd /tmp && cargo test --manifest-path <worktree>/vendor/orchard/Cargo.toml \
++    ///   --target "$HOST" --target-dir /tmp/orchard-host \
++    ///   --no-default-features --features std \
++    ///   -- gen_v3_memo_action_line_break_vectors --nocapture
++    /// ```
++    #[test]
++    fn gen_v3_memo_action_line_break_vectors() {
++        let (note, ovk) = memo_action_note_and_ovk();
++
++        let cmx = ExtractedNoteCommitment::from(note.commitment());
++        let esk = note.esk();
++        let encryptor =
++            IronwoodNoteEncryption::new_with_esk(esk, Some(ovk), note, memo_field(b"test\n"));
++        let epk_bytes = IronwoodDomain::epk_bytes(encryptor.epk());
++
++        println!("\n# ---- V3 memo action with a line break (gen_v3_memo_action_line_break_vectors) ----");
++        println!("# unchanged, printed to show the memo reaches neither:");
++        println!("#   _MEMO_CMX           = {}", hex_str(&cmx.to_bytes()));
++        println!("#   _MEMO_EPHEMERAL_KEY = {}", hex_str(&epk_bytes.0));
++        println!(
++            "_MEMO_LINE_BREAK_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
++            hex_lines(encryptor.encrypt_note_plaintext().as_ref())
 +        );
 +    }
  }
