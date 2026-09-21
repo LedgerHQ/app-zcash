@@ -17,6 +17,13 @@
 
 #![no_std]
 #![no_main]
+#![feature(custom_test_frameworks)]
+// Under `test` the harness replaces `sample_main`, so nothing reaches the app's own entry points
+// — the swap library path in particular. Their dead-code warnings would bury the test output.
+// The release build lints clean, which is what `check_clippy` gates.
+#![cfg_attr(test, allow(dead_code, unused_imports))]
+#![cfg_attr(test, test_runner(ledger_device_sdk::testing::sdk_test_runner))]
+#![cfg_attr(test, reexport_test_harness_main = "test_main")]
 
 mod app_ui;
 
@@ -100,7 +107,15 @@ use crate::{
 // Required for using String, Vec, format!...
 extern crate alloc;
 
+#[cfg(not(test))]
 ledger_device_sdk::set_panic!(panic_handler);
+
+// Reports a panicking test instead of exiting the app, so the run continues to the next case.
+#[cfg(test)]
+#[panic_handler]
+fn test_panic_handler(info: &core::panic::PanicInfo) -> ! {
+    ledger_device_sdk::testing::test_panic(info)
+}
 
 #[repr(u16)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -438,7 +453,16 @@ fn init_trusted_input_key_storage() {
     }
 }
 
+// On-device unit-test entry point. The C runtime provided by the Ledger SDK calls
+// `sample_main`, which here simply runs the generated test harness.
+#[cfg(test)]
+#[unsafe(no_mangle)]
+extern "C" fn sample_main(_arg0: u32) {
+    test_main();
+}
+
 // --8<-- [start:sample_main]
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn sample_main(arg0: u32) {
     if arg0 != 0 {
@@ -605,6 +629,10 @@ fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Resul
 }
 
 /// In case of runtime problems, return an internal error and exit the app
+///
+/// `PanicInfo` reaches this scope through the `set_panic!` expansion, so both are gated the
+/// same way: under `test` the harness installs its own handler instead.
+#[cfg(not(test))]
 pub fn panic_handler(info: &PanicInfo) -> ! {
     if let Some(swap_panic_handler) = get_swap_panic_handler() {
         // This handler is no-return

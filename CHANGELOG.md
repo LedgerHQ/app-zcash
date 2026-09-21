@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.9.4
+
+- Initialize the BLAKE2b context that hashes a shielded output's memo for the review. A memo
+  holding any byte outside printable ASCII is shown as a digest rather than as text, and that
+  digest was computed with a context the app never initialized
+
 ## 3.9.3
 
 Security release addressing the findings of an external code security scan of 3.9.2.
