@@ -23,7 +23,9 @@ from application_client.zcash_command_sender import (
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
 from application_client.zcash_utils import ripemd160
 from application_client.zcash_verify_sign import (
+    check_orchard_spendauth_signature_validity,
     check_tx_v5_signature_validity,
+    nu5_signature_digests,
 )
 from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
@@ -77,6 +79,8 @@ def _strict_orchard_action(
 def _review_approve(
     scenario_navigator: NavigateWithScenario,
     snapshot_test_name: str,
+    *,
+    compare: bool = True,
 ) -> None:
     scenario = NavigationScenarioData(
         scenario_navigator.device,
@@ -87,6 +91,15 @@ def _review_approve(
 
     if scenario_navigator.device.touchable:
         scenario.validation = scenario.validation[:-1]
+
+    if not compare:
+        scenario_navigator.navigator.navigate_until_text(
+            navigate_instruction=scenario.navigation,
+            validation_instructions=scenario.validation,
+            text=scenario.pattern,
+            screen_change_after_last_instruction=False,
+        )
+        return
 
     scenario_navigator.navigator.navigate_until_text_and_compare(
         navigate_instruction=scenario.navigation,
@@ -161,7 +174,14 @@ def _assert_pczt_orchard_sign_digest(
     ]
     auth_sigs = _sign_all_orchard_actions(client, orchard_bundle)
 
-    assert [sig.hex() for sig in auth_sigs] == [sig.hex() for sig in expected_auth_sigs], [sig.hex() for sig in auth_sigs]
+    # Removing redundant blinded curve operations changes Speculos RNG consumption,
+    # hence the nonce. Both the retained vector and the device signature must
+    # verify against the same independently computed digest and action rk.
+    digest = nu5_signature_digests(tx_bytes, input_amounts)["final_digest"]
+    real_actions = [action for action in orchard_bundle.actions if action.spend_value != 0]
+    for action, signature, expected in zip(real_actions, auth_sigs, expected_auth_sigs, strict=True):
+        assert check_orchard_spendauth_signature_validity(action.rk, expected, digest)
+        assert check_orchard_spendauth_signature_validity(action.rk, signature, digest)
 
     for input_index, (_txin, transparent_sig) in enumerate(zip(transparent_inputs, transparent_sigs, strict=True)):
         assert check_tx_v5_signature_validity(

@@ -15,7 +15,7 @@
  *  limitations under the License.
  *****************************************************************************/
 use ledger_device_sdk::ecc::{Secp256k1, Secret, SeedDerive as _};
-use ledger_device_sdk::io::Comm;
+use ledger_device_sdk::io::{Command, CommandResponse};
 use ledger_device_sdk::log::{debug, error, info};
 use zeroize::Zeroizing;
 
@@ -31,12 +31,12 @@ use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance, derivation_
 use crate::utils::{bip32_path::Bip32Path, extended_public_key::ExtendedPublicKey};
 use crate::zip32::{derive_orchard_ask_from_sk, map_ledger_crypto_error};
 
-pub fn handler_hash_input_start(
-    comm: &mut Comm,
+pub fn handler_hash_input_start<'a>(
+    command: Command<'a>,
     ctx: &mut TxContext,
     first: bool,
     continue_hashing: bool,
-) -> Result<(), AppSW> {
+) -> Result<CommandResponse<'a>, AppSW> {
     // Any shape that does not reset the context reuses the transaction state already there, which is
     // sound only after a legacy round that is still in progress.
     let resets_context = first && !continue_hashing;
@@ -88,7 +88,7 @@ pub fn handler_hash_input_start(
     }
 
     // Try to get data from comm
-    let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
+    let data = command.get_data();
 
     ctx.legacy_parser
         .parse(
@@ -108,15 +108,15 @@ pub fn handler_hash_input_start(
             }
         })?;
 
-    Ok(())
+    Ok(command.into_response())
 }
 
-pub fn handler_hash_input_finalize_full(
-    comm: &mut Comm,
+pub fn handler_hash_input_finalize_full<'a>(
+    command: Command<'a>,
     ctx: &mut TxContext,
     is_change_info: bool,
-) -> Result<(), AppSW> {
-    let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
+) -> Result<CommandResponse<'a>, AppSW> {
+    let data = command.get_data();
 
     if data.is_empty() {
         return Err(AppSW::WrongApduLength);
@@ -152,7 +152,7 @@ pub fn handler_hash_input_finalize_full(
 
         info!("Change pk hash: {}", HexSlice(&change_pk_hash));
 
-        return Ok(());
+        return Ok(command.into_response());
     }
 
     ctx.legacy_output_parser
@@ -191,7 +191,7 @@ pub fn handler_hash_input_finalize_full(
             }
         })?;
 
-    Ok(())
+    Ok(command.into_response())
 }
 
 fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
@@ -218,7 +218,10 @@ fn parse_extra_data(buf: &[u8]) -> Result<(u32, u8, u32), AppSW> {
     Ok((locktime, sighash_type, expiry_height))
 }
 
-pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
+pub fn handler_hash_sign<'a>(
+    command: Command<'a>,
+    ctx: &mut TxContext,
+) -> Result<CommandResponse<'a>, AppSW> {
     // Legacy signing reads the transaction state a legacy round built; during a PCZT session that
     // state belongs to the PCZT.
     if ctx.pczt_parser.is_session_active() {
@@ -226,7 +229,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         return Err(AppSW::BadState);
     }
 
-    let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
+    let data = command.get_data();
 
     if data.is_empty() {
         error!("Not enough data for hash sign");
@@ -257,11 +260,14 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
 
         ctx.set_extra_header_data();
 
+        let comm = command.into_comm();
+
         // Under swap the Exchange approval stands in for the review, and the output parser has
         // already cross-checked the transaction against it.
         if ctx.swap_params.is_none() {
             let transfer_type = TransferType::classify(true, false, &ctx.tx_info.outputs);
             if !ui_display_tx(
+                comm,
                 &ctx.tx_info.outputs,
                 ctx.tx_info.fees,
                 transfer_type,
@@ -277,7 +283,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
 
         ctx.tx_signing_state.is_tx_parsed_once = true;
 
-        return Ok(());
+        return Ok(comm.begin_response());
     }
 
     if !ctx.legacy_parser.is_ready_to_sign() {
@@ -304,8 +310,9 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
     // signature exists, since a released signature cannot be recalled.
     check_change_returns_to_signing_account(&ctx.tx_info, &path)?;
 
+    let mut response = command.into_response();
     append_signature(
-        comm,
+        &mut response,
         &ctx.tx_info.signature_digest,
         &path,
         ctx.tx_info.sighash_type,
@@ -330,11 +337,11 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
         ctx.set_finished();
     }
 
-    Ok(())
+    Ok(response)
 }
 
 pub(crate) fn append_signature(
-    comm: &mut Comm,
+    response: &mut CommandResponse<'_>,
     sig_hash: &[u8; 32],
     path: &Bip32Path,
     sighash_type: u8,
@@ -358,8 +365,8 @@ pub(crate) fn append_signature(
 
     debug!("Signature: {}", HexSlice(&sig[..sig_len as usize]));
 
-    comm.append(&sig[..sig_len as usize]);
-    comm.append(&[sighash_type]);
+    response.append(&sig[..sig_len as usize])?;
+    response.append(&[sighash_type])?;
 
     Ok(())
 }

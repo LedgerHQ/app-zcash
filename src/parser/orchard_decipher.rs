@@ -14,6 +14,8 @@ pub(crate) struct OrchardDecipherKeys {
     pub network: NetworkType,
     pub internal_ivk: [u8; 32],
     pub external_ovk: [u8; 32],
+    // Derived only when a real spend needs membership validation.
+    external_ivk: Option<[u8; 32]>,
 }
 
 /// These are seed-derived viewing keys: they cannot move funds, but they identify and decrypt the
@@ -23,6 +25,7 @@ impl Drop for OrchardDecipherKeys {
     fn drop(&mut self) {
         self.internal_ivk.zeroize();
         self.external_ovk.zeroize();
+        self.external_ivk.zeroize();
     }
 }
 
@@ -43,6 +46,28 @@ impl OrchardDecipherKeys {
             network,
             internal_ivk: internal_ivk_bytes,
             external_ovk,
+            external_ivk: None,
         })
+    }
+
+    /// Reuses the IVK for a scope. `fvk` must be the key passed to `from_fvk`;
+    /// the PCZT parser enforces one account path for this cache's lifetime.
+    pub(crate) fn incoming_viewing_key(
+        &mut self,
+        fvk: &FullViewingKey,
+        scope: Scope,
+    ) -> Result<&[u8; 32], AppSW> {
+        if scope == Scope::Internal {
+            return Ok(&self.internal_ivk);
+        }
+        if self.external_ivk.is_none() {
+            let ivk = zeroize::Zeroizing::new(
+                fvk.to_ivk_ledger(Scope::External)
+                    .map_err(map_ledger_crypto_error)?
+                    .to_bytes(),
+            );
+            self.external_ivk = Some(ivk[32..].try_into().map_err(|_| AppSW::TechnicalProblem)?);
+        }
+        self.external_ivk.as_ref().ok_or(AppSW::TechnicalProblem)
     }
 }

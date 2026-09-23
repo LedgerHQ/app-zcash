@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Use the SDK's new I/O path for immediate replies across supported devices,
+  retaining review-time command rejection and the PIN check before Zcash command
+  dispatch. Use the published SDK for built-in commands and framing checks, which
+  can respond while locked instead of returning the legacy PIN error.
+  Reject APDUs whose payload length differs from their declared length.
+  Return control to Exchange after a swap panic even if its error reply fails.
+
+- Reduce repeated account-key derivation, point decoding, and diversifier hashing
+  while validating shielded transactions, preserving per-action checks. Reuse full
+  coordinates for fixed and locally derived points while retaining Ledger’s
+  randomized multiplication and validation of external points. Retain normalized
+  validation keys across actions under the checked account path and wipe them
+  before review or reset. Return compressed verification keys as typed values
+  until the transaction's encoded key is compared. Combine Sinsemilla additions
+  while preserving their exceptional cases. Compute diversifier square-root
+  ratios without inversion or heap tables.
+
 ## 3.9.3
 
 Security release addressing the findings of an external code security scan of 3.9.2.

@@ -14,6 +14,11 @@ components.
 
 ## Common rules
 
+- Both shielded pools share a transaction-scoped account-key cache. Each action's
+  complete derivation path must match the first action's path, including on cache
+  hits. FVK and viewing-key derivation are reused; randomized verification keys,
+  spend ownership, nullifiers, and commitments are still checked per action.
+  Viewing keys are discarded before review, with IVK and OVK bytes zeroized.
 - The bundle command order is fixed:
   `PCZT_HEADER`, then `PCZT_TRANSPARENT_INPUT`, then
   `PCZT_TRANSPARENT_OUTPUT`, then `PCZT_ORCHARD_ACTION`, and for V6
@@ -283,3 +288,20 @@ leaves the field at that value, so the two encodings agree.
 A V2-format ciphertext therefore does not decrypt in this pool. The output is then only accepted on
 the dummy path, which requires a zero value **and** a `cmx` that matches the V3 recomputation — so a
 genuine V2 note is refused rather than accepted under the V2 formula.
+
+Validation reuses the canonical recipient produced by the same action's account
+membership check when computing its nullifier. The typed value contains both the
+diversifier base and transmission key; raw bytes cannot replace either one after
+validation. Rho, randomness, nullifier and commitment checks still run per action.
+
+The normalized spend authorizing scalar is retained only during validation,
+bound to the complete cached account path. The path is checked even on a cache
+hit and each real action verifies its own randomized key. Leading dummy actions
+prepare the same cache, so later real actions do not repeat key normalization.
+The retained scalar uses wipe-on-drop storage and redacted debug formatting; it
+is discarded before user review and on parser reset or error. Signing still
+derives its key through the original post-approval path.
+
+Computed randomized verification keys stay typed as compressed keys until their
+bytes are compared with the action's wire encoding. This does not add curve-point
+decoding or change the key comparison.

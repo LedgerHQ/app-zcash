@@ -13,12 +13,15 @@ use chacha20::{
 };
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::AeadInPlace};
 use ff::{Field, PrimeField};
+use ledger_device_sdk::ecc::math::EcPoint;
 use ledger_device_sdk::hash::{
     HashInit as _,
     blake2::{Blake2b_256, Blake2bWithPerso},
 };
 use pasta_curves::pallas;
 use zeroize::Zeroizing;
+
+use crate::points::Basepoint;
 
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
@@ -52,10 +55,6 @@ const NOTE_COMMITMENT_MESSAGE_BITS: usize = 32 * 8 + 32 * 8 + 64 + L_ORCHARD_BAS
 const PRF_OCK_ORCHARD_PERSONALIZATION: [u8; 16] = *b"Zcash_Orchardock";
 const KDF_ORCHARD_PERSONALIZATION: [u8; 16] = *b"Zcash_OrchardKDF";
 const NOTE_COMMITMENT_PERSONALIZATION: &str = "z.cash:Orchard-NoteCommit";
-const ORCHARD_NULLIFIER_K_BASEPOINT_BYTES: [u8; HASH_SIZE] = [
-    0x75, 0xca, 0x47, 0xe4, 0xa7, 0x6a, 0x6f, 0xd3, 0x9b, 0xdb, 0xb5, 0xcc, 0x92, 0xb1, 0x7e, 0x5e,
-    0xcf, 0xc9, 0xf4, 0xfa, 0x71, 0x55, 0x37, 0x2e, 0x8d, 0x19, 0xa8, 0x9c, 0x16, 0xaa, 0xe7, 0x25,
-];
 
 #[derive(Clone, Copy, Debug)]
 pub struct OrchardCompactAction {
@@ -98,6 +97,46 @@ pub fn decipher_compact_value(
     try_compact_note_decryption_with_ivk(ivk, compact, expected_note_version)
 }
 
+/// Canonical recipient material with a nonidentity base and transmission key.
+/// Private fields prevent unchecked encodings from reaching the reuse path.
+#[derive(Clone, Copy)]
+pub struct ValidatedRecipient {
+    g_d: [u8; HASH_SIZE],
+    pk_d: [u8; HASH_SIZE],
+}
+
+impl ValidatedRecipient {
+    /// Checks that the claimed key is derived from this base and canonical nonzero IVK.
+    /// The caller binds the base to the note's diversifier and the IVK to its account.
+    /// A mismatch returns `None`; only an exact match permits recipient reuse.
+    pub fn from_ivk(
+        ivk: &[u8; HASH_SIZE],
+        base: &crate::DiversifiedBase,
+        claimed_pk_d: &[u8; HASH_SIZE],
+    ) -> Result<Option<Self>, Error> {
+        let pk_d = crate::orchard_pk_d_from_base(ivk, base)?;
+        Ok(bytes_eq(&pk_d, claimed_pk_d).then(|| Self {
+            g_d: base.to_bytes(),
+            pk_d,
+        }))
+    }
+
+    fn from_raw(raw: &[u8; ORCHARD_RAW_ADDRESS_SIZE]) -> Result<Self, Error> {
+        let mut diversifier = [0u8; DIVERSIFIER_SIZE];
+        diversifier.copy_from_slice(&raw[..DIVERSIFIER_SIZE]);
+        let mut pk_d = [0u8; HASH_SIZE];
+        pk_d.copy_from_slice(&raw[DIVERSIFIER_SIZE..]);
+        if !is_valid_nonidentity_pallas_point(&pk_d)? {
+            return Err(Error::MalformedPallasPoint);
+        }
+        Ok(Self {
+            g_d: crate::diversify_hash_ledger(&diversifier)?,
+            pk_d,
+        })
+    }
+}
+
+/// Computes an Orchard spend nullifier, validating the raw recipient.
 #[inline(never)]
 pub fn spend_nullifier_bytes(
     nk: &[u8; HASH_SIZE],
@@ -106,50 +145,12 @@ pub fn spend_nullifier_bytes(
     rho: &[u8; HASH_SIZE],
     rseed: &[u8; HASH_SIZE],
 ) -> Result<[u8; HASH_SIZE], Error> {
-    let rho = pallas_base_from_repr(*rho)?;
-    let _esk = orchard_esk(rseed, &rho)?;
-
-    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
-    diversifier.copy_from_slice(&raw_address[..DIVERSIFIER_SIZE]);
-
-    let mut pk_d = [0u8; HASH_SIZE];
-    pk_d.copy_from_slice(&raw_address[DIVERSIFIER_SIZE..]);
-    if !is_valid_nonidentity_pallas_point(&pk_d)? {
-        return Err(Error::MalformedPallasPoint);
-    }
-
-    let g_d = crate::diversify_hash_ledger(&diversifier)?;
-    let cm = note_commitment_point(&g_d, &pk_d, value, &rho, rseed)?;
-    let psi = pallas_base_from_repr(*orchard_psi(rseed, &rho)?)?;
-    let nk = pallas_base_from_repr(*nk)?;
-    let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
-    let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
-
-    let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
-        cm
-    } else {
-        // The commitment `cm` is already a pure-Rust point, so converting the
-        // scalar-mul result and adding in software keeps exactly one SDK point
-        // alive here; adding with SDK points would hold three at once (cm, the
-        // scalar-mul result, the sum). The `cx_bn` pool is a small shared budget
-        // with no documented ceiling, and Speculos does not model it, so this
-        // path keeps its footprint minimal by construction rather than against a
-        // measured limit.
-        let nullifier_k_ec = pallas_basepoint_mul(
-            &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
-            &scalar_bytes_be(&nullifier_scalar),
-        )?;
-        point_from_sdk_point(&nullifier_k_ec)? + cm
-    };
-
-    Ok(extract_p_pallas(&nullifier_point).to_repr())
+    spend_nullifier_inner(nk, value, rho, rseed, false, || {
+        ValidatedRecipient::from_raw(raw_address)
+    })
 }
 
-/// V3 (ZIP 2005 / Ironwood) variant of [`spend_nullifier_bytes`].
-///
-/// Uses [`note_commitment_v3_point`] instead of [`note_commitment_point`] so
-/// that the commitment matches the on-chain V3 note and the derived nullifier
-/// agrees with the value in the PCZT.
+/// V3 nullifier using Ironwood's commitment trapdoor and a validated raw recipient.
 #[inline(never)]
 pub fn spend_nullifier_bytes_v3(
     nk: &[u8; HASH_SIZE],
@@ -158,35 +159,66 @@ pub fn spend_nullifier_bytes_v3(
     rho: &[u8; HASH_SIZE],
     rseed: &[u8; HASH_SIZE],
 ) -> Result<[u8; HASH_SIZE], Error> {
+    spend_nullifier_inner(nk, value, rho, rseed, true, || {
+        ValidatedRecipient::from_raw(raw_address)
+    })
+}
+
+/// Reuses recipient validation for an Orchard nullifier. All remaining note and
+/// key checks are identical to [`spend_nullifier_bytes`]. No raw recipient is
+/// accepted alongside the validated value, so its base and key cannot diverge.
+#[inline(never)]
+pub fn spend_nullifier_for_recipient(
+    nk: &[u8; HASH_SIZE],
+    recipient: &ValidatedRecipient,
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    spend_nullifier_inner(nk, value, rho, rseed, false, || Ok(*recipient))
+}
+
+/// Ironwood counterpart of [`spend_nullifier_for_recipient`], using the V3 commitment.
+#[inline(never)]
+pub fn spend_nullifier_v3_for_recipient(
+    nk: &[u8; HASH_SIZE],
+    recipient: &ValidatedRecipient,
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    spend_nullifier_inner(nk, value, rho, rseed, true, || Ok(*recipient))
+}
+
+#[inline(never)]
+fn spend_nullifier_inner(
+    nk: &[u8; HASH_SIZE],
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+    ironwood: bool,
+    recipient: impl FnOnce() -> Result<ValidatedRecipient, Error>,
+) -> Result<[u8; HASH_SIZE], Error> {
     let rho = pallas_base_from_repr(*rho)?;
     let _esk = orchard_esk(rseed, &rho)?;
-
-    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
-    diversifier.copy_from_slice(&raw_address[..DIVERSIFIER_SIZE]);
-
-    let mut pk_d = [0u8; HASH_SIZE];
-    pk_d.copy_from_slice(&raw_address[DIVERSIFIER_SIZE..]);
-    if !is_valid_nonidentity_pallas_point(&pk_d)? {
-        return Err(Error::MalformedPallasPoint);
-    }
-
-    let g_d = crate::diversify_hash_ledger(&diversifier)?;
-    let cm = note_commitment_v3_point(&g_d, &pk_d, value, &rho, rseed)?;
+    let recipient = recipient()?;
+    let cm = if ironwood {
+        note_commitment_v3_point(&recipient.g_d, &recipient.pk_d, value, &rho, rseed)?
+    } else {
+        note_commitment_point(&recipient.g_d, &recipient.pk_d, value, &rho, rseed)?
+    };
     let psi = pallas_base_from_repr(*orchard_psi(rseed, &rho)?)?;
     let nk = pallas_base_from_repr(*nk)?;
     let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
     let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
-
     let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
         cm
     } else {
-        let nullifier_k_ec = pallas_basepoint_mul(
-            &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
-            &scalar_bytes_be(&nullifier_scalar),
-        )?;
+        // Keep only one SDK point alive; the physical device has a small BN pool.
+        let nullifier_k_ec =
+            pallas_basepoint_mul(Basepoint::Nullifier, &scalar_bytes_be(&nullifier_scalar))?;
         point_from_sdk_point(&nullifier_k_ec)? + cm
     };
-
     Ok(extract_p_pallas(&nullifier_point).to_repr())
 }
 
@@ -244,11 +276,14 @@ fn try_output_recovery_with_ovk(
     pk_d.copy_from_slice(&out_plaintext[..HASH_SIZE]);
     esk.copy_from_slice(&out_plaintext[HASH_SIZE..ORCHARD_OUT_PLAINTEXT_SIZE]);
 
-    if !is_valid_nonidentity_pallas_point(&pk_d)? || !is_valid_nonzero_pallas_scalar(&esk) {
+    let Some(pk_d_point) = validated_nonidentity_pallas_point(&pk_d)? else {
+        return Ok(None);
+    };
+    if !is_valid_nonzero_pallas_scalar(&esk) {
         return Ok(None);
     }
 
-    let shared_secret = key_agreement(&esk, &pk_d)?;
+    let shared_secret = key_agreement_with_point(&esk, pk_d_point)?;
     let k_enc = kdf_orchard(&shared_secret, &action.compact.ephemeral_key)?;
 
     let mut note_plaintext = [0u8; ORCHARD_NOTE_PLAINTEXT_SIZE];
@@ -272,6 +307,7 @@ fn try_output_recovery_with_ovk(
         &rho,
         Some(memo),
         expected_note_version,
+        None,
     )
 }
 
@@ -294,11 +330,11 @@ fn try_compact_note_decryption_with_ivk(
         _ => return Ok(None),
     };
 
-    if !is_valid_nonidentity_pallas_point(&compact.ephemeral_key)? {
+    let Some(ephemeral_point) = validated_nonidentity_pallas_point(&compact.ephemeral_key)? else {
         return Ok(None);
-    }
+    };
 
-    let shared_secret = key_agreement(&ivk.to_repr(), &compact.ephemeral_key)?;
+    let shared_secret = key_agreement_with_point(&ivk.to_repr(), ephemeral_point)?;
     let k_enc = kdf_orchard(&shared_secret, &compact.ephemeral_key)?;
 
     let mut note_plaintext_prefix = compact.enc_ciphertext_prefix;
@@ -310,11 +346,11 @@ fn try_compact_note_decryption_with_ivk(
         return Ok(None);
     };
 
-    let g_d = match crate::diversify_hash_ledger(&diversifier) {
+    let g_d = match crate::DiversifiedBase::derive(&diversifier) {
         Ok(g_d) => g_d,
         Err(_) => return Ok(None),
     };
-    let pk_d = crate::orchard_pk_d(&ivk.to_repr(), &g_d)?;
+    let pk_d = crate::orchard_pk_d_from_base(&ivk.to_repr(), &g_d)?;
 
     parse_and_validate_note_plaintext(
         compact,
@@ -324,9 +360,16 @@ fn try_compact_note_decryption_with_ivk(
         &rho,
         None,
         expected_note_version,
+        Some(&g_d),
     )
 }
 
+/// `known_g_d` is only supplied by incoming decryption, which derived it from
+/// the same plaintext prefix. Outgoing recovery derives it here instead.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep note fields and optional reuse material in one validation pass"
+)]
 fn parse_and_validate_note_plaintext(
     compact: &OrchardCompactAction,
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
@@ -335,6 +378,7 @@ fn parse_and_validate_note_plaintext(
     rho: &pallas::Base,
     memo: Option<Box<[u8]>>,
     expected_note_version: u8,
+    known_g_d: Option<&crate::DiversifiedBase>,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let Some(note_plaintext) = parse_note_plaintext_prefix(plaintext, expected_note_version) else {
         return Ok(None);
@@ -347,12 +391,16 @@ fn parse_and_validate_note_plaintext(
         return Ok(None);
     }
 
-    let g_d = match crate::diversify_hash_ledger(&note_plaintext.diversifier) {
-        Ok(g_d) => g_d,
-        Err(_) => return Ok(None),
+    let g_d = match known_g_d {
+        Some(g_d) => *g_d,
+        None => match crate::DiversifiedBase::derive(&note_plaintext.diversifier) {
+            Ok(g_d) => g_d,
+            Err(_) => return Ok(None),
+        },
     };
 
-    let derived_epk = key_agreement(&derived_esk, &g_d)?;
+    let derived_epk = key_agreement_with_point(&derived_esk, g_d.to_sdk()?)?;
+    let g_d = g_d.to_bytes();
     if !bytes_eq(&derived_epk, &compact.ephemeral_key) {
         return Ok(None);
     }
@@ -445,12 +493,13 @@ fn chacha20_decrypt_compact(
     chacha.apply_keystream(plaintext);
 }
 
-fn key_agreement(
+/// Consumes a decoded point so its SDK resources are released after agreement.
+/// Host-supplied points must pass `validated_nonidentity_pallas_point` first.
+fn key_agreement_with_point(
     scalar_bytes_le: &[u8; HASH_SIZE],
-    point_bytes: &[u8; HASH_SIZE],
+    mut point: EcPoint,
 ) -> Result<[u8; HASH_SIZE], Error> {
     let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
-    let mut point = pallas_point_from_bytes(point_bytes)?;
     point.rnd_scalarmul(&scalar_bytes_be[..])?;
     pallas_point_to_bytes(&point)
 }
@@ -478,20 +527,28 @@ fn is_valid_nonzero_pallas_scalar(bytes: &[u8; HASH_SIZE]) -> bool {
 }
 
 fn is_valid_nonidentity_pallas_point(bytes: &[u8; HASH_SIZE]) -> Result<bool, Error> {
+    Ok(validated_nonidentity_pallas_point(bytes)?.is_some())
+}
+
+/// Decodes once, retaining the canonical encoding and nonidentity checks.
+fn validated_nonidentity_pallas_point(bytes: &[u8; HASH_SIZE]) -> Result<Option<EcPoint>, Error> {
     if *bytes == [0u8; HASH_SIZE] {
-        return Ok(false);
+        return Ok(None);
     }
 
     let point = match pallas_point_from_bytes(bytes) {
         Ok(point) => point,
-        Err(_) => return Ok(false),
+        Err(_) => return Ok(None),
     };
 
     if point.is_at_infinity()? {
-        return Ok(false);
+        return Ok(None);
     }
 
-    Ok(pallas_point_to_bytes(&point)? == *bytes)
+    if pallas_point_to_bytes(&point)? != *bytes {
+        return Ok(None);
+    }
+    Ok(Some(point))
 }
 
 fn orchard_esk(
@@ -803,6 +860,112 @@ mod tests {
     ];
     // `_DUMMY_CHANGE_VALUE` from test_pczt_ironwood.py
     const VALUE: u64 = 10000;
+
+    #[test_case]
+    const RECIPIENT_REUSE_MATCHES_RAW_NULLIFIERS: TestType = TestType {
+        modname: module_path!(),
+        name: "recipient_reuse_matches_raw_nullifiers",
+        f: || {
+            let base = crate::DiversifiedBase::derive(&INTERNAL_DIVERSIFIER).map_err(|_| ())?;
+            let ivk = pallas::Base::from(7).to_repr();
+            let pk_d = crate::orchard_pk_d_from_base(&ivk, &base).map_err(|_| ())?;
+            let recipient = ValidatedRecipient::from_ivk(&ivk, &base, &pk_d)
+                .map_err(|_| ())?
+                .ok_or(())?;
+            let mut raw = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
+            raw[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+            raw[DIVERSIFIER_SIZE..].copy_from_slice(&pk_d);
+            let nk = pallas::Base::from(11).to_repr();
+            let v2 = spend_nullifier_bytes(&nk, &raw, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .map_err(|_| ())?;
+            let v3 = spend_nullifier_bytes_v3(&nk, &raw, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .map_err(|_| ())?;
+            if v2
+                != spend_nullifier_for_recipient(
+                    &nk,
+                    &recipient,
+                    VALUE,
+                    &DUMMY_NULLIFIER,
+                    &DUMMY_RSEED,
+                )
+                .map_err(|_| ())?
+                || v3
+                    != spend_nullifier_v3_for_recipient(
+                        &nk,
+                        &recipient,
+                        VALUE,
+                        &DUMMY_NULLIFIER,
+                        &DUMMY_RSEED,
+                    )
+                    .map_err(|_| ())?
+                || v2 == v3
+            {
+                return Err(());
+            }
+            for reuse in [
+                spend_nullifier_for_recipient,
+                spend_nullifier_v3_for_recipient,
+            ] {
+                if reuse(&nk, &recipient, VALUE, &[0xff; HASH_SIZE], &DUMMY_RSEED)
+                    != Err(Error::MalformedPallasBase)
+                {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const RECIPIENT_REUSE_REJECTS_MISMATCHES: TestType = TestType {
+        modname: module_path!(),
+        name: "recipient_reuse_rejects_mismatches",
+        f: || {
+            let base = crate::DiversifiedBase::derive(&INTERNAL_DIVERSIFIER).map_err(|_| ())?;
+            let ivk = pallas::Base::from(7).to_repr();
+            let pk_d = crate::orchard_pk_d_from_base(&ivk, &base).map_err(|_| ())?;
+            let other_ivk = pallas::Base::from(8).to_repr();
+            if ValidatedRecipient::from_ivk(&other_ivk, &base, &pk_d)
+                .map_err(|_| ())?
+                .is_some()
+            {
+                return Err(());
+            }
+            for invalid in [[0; HASH_SIZE], [0xff; HASH_SIZE]] {
+                if ValidatedRecipient::from_ivk(&ivk, &base, &invalid)
+                    .map_err(|_| ())?
+                    .is_some()
+                    || ValidatedRecipient::from_ivk(&invalid, &base, &pk_d).is_ok()
+                {
+                    return Err(());
+                }
+                let mut raw = [0; ORCHARD_RAW_ADDRESS_SIZE];
+                raw[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+                raw[DIVERSIFIER_SIZE..].copy_from_slice(&invalid);
+                if ValidatedRecipient::from_raw(&raw).is_ok() {
+                    return Err(());
+                }
+            }
+            let mut wrong_key = pk_d;
+            wrong_key[0] ^= 1;
+            if ValidatedRecipient::from_ivk(&ivk, &base, &wrong_key)
+                .map_err(|_| ())?
+                .is_some()
+            {
+                return Err(());
+            }
+            let mut other_diversifier = INTERNAL_DIVERSIFIER;
+            other_diversifier[0] ^= 1;
+            let other_base = crate::DiversifiedBase::derive(&other_diversifier).map_err(|_| ())?;
+            if ValidatedRecipient::from_ivk(&ivk, &other_base, &pk_d)
+                .map_err(|_| ())?
+                .is_some()
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 
     /// `note_commitment_v3` must produce a result that differs from `note_commitment`
     /// for the same `(g_d, pk_d, value, rho, rseed)` inputs.

@@ -1,7 +1,6 @@
 name: Rust checks
 
-# Two checks `RUST.instructions.md` asks for that no reusable workflow provides: auditing the
-# dependency tree, and running the crypto crate's unit tests.
+# Audit dependencies and run crypto and I/O boundary regressions.
 
 permissions:
   contents: read
@@ -43,7 +42,7 @@ jobs:
         run: cargo audit
 
   unit_tests:
-    name: Run the ledger_zcash_crypto unit tests
+    name: Run crypto and I/O regression tests
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-dev-tools:latest
@@ -58,3 +57,6 @@ jobs:
         # These are SDK `TestType` cases executed by `sdk_test_runner` under Speculos, so they
         # need a device target rather than the host; the runner comes from .cargo/config.toml.
         run: cargo test --locked -p ledger_zcash_crypto --features unit_test --target apex_p
+
+      - name: I/O boundary regressions
+        run: python3 tests/io-regression/run.py

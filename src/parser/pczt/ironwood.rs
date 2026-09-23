@@ -478,7 +478,6 @@ impl PcztParser {
         self.current_action.enc_ciphertext.clear();
         self.current_action.alpha = None;
         self.current_action.path = None;
-        self.current_action.fvk = None;
         self.current_action.note_plaintext_version = NOTE_VERSION_IRONWOOD;
     }
 
@@ -586,11 +585,15 @@ impl PcztParser {
         let is_real_spend = self.current_action.spend_value != 0;
         if is_real_spend {
             let ironwood_fvk = self
-                .current_action
-                .fvk
+                .orchard_fvk
                 .as_ref()
                 .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
-            self.verify_current_ironwood_spend_nullifier(ironwood_fvk)?;
+            let keys = ctx
+                .tx_info
+                .orchard_decipher_keys
+                .as_mut()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+            self.verify_current_ironwood_spend_nullifier(ironwood_fvk, keys)?;
             self.ironwood_real_spend_count = self.ironwood_real_spend_count.saturating_add(1);
         }
         // Lend the enc_ciphertext buffer out of `self` for the validation call: it already
@@ -910,26 +913,22 @@ impl PcztParser {
     }
 
     #[inline(never)]
-    fn verify_current_ironwood_spend_nullifier(&self, fvk: &OrchardFvk) -> Result<(), ParserError> {
-        let mut diversifier = [0u8; 11];
-        diversifier.copy_from_slice(&self.current_action.spend_recipient[..11]);
-
-        let mut claimed_pk_d = [0u8; 32];
-        claimed_pk_d.copy_from_slice(&self.current_action.spend_recipient[11..]);
-
-        if !self.is_current_ironwood_spend_recipient_in_fvk(fvk, &diversifier, &claimed_pk_d)? {
-            return Err(ParserError::from_str(
-                "PCZT ironwood spend does not belong to signing key",
-            ));
-        }
+    fn verify_current_ironwood_spend_nullifier(
+        &self,
+        fvk: &OrchardFvk,
+        keys: &mut OrchardDecipherKeys,
+    ) -> Result<(), ParserError> {
+        let recipient = self.validated_spend_recipient(fvk, keys)?.ok_or_else(|| {
+            ParserError::from_str("PCZT ironwood spend does not belong to signing key")
+        })?;
 
         let fvk_bytes = fvk.to_bytes();
         let nk: [u8; 32] = fvk_bytes[32..64]
             .try_into()
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-        let expected_nullifier = ledger_zcash_crypto::orchard_spend_nullifier_bytes_v3(
+        let expected_nullifier = ledger_zcash_crypto::orchard::spend_nullifier_v3_for_recipient(
             &nk,
-            &self.current_action.spend_recipient,
+            &recipient,
             self.current_action.spend_value,
             &self.current_action.spend_rho,
             &self.current_action.spend_rseed,
@@ -958,34 +957,6 @@ impl PcztParser {
         }
 
         Ok(())
-    }
-
-    fn is_current_ironwood_spend_recipient_in_fvk(
-        &self,
-        fvk: &OrchardFvk,
-        diversifier: &[u8; 11],
-        claimed_pk_d: &[u8; 32],
-    ) -> Result<bool, ParserError> {
-        let g_d = ledger_zcash_crypto::diversify_hash_ledger(diversifier)
-            .map_err(|_| ParserError::from_str("Bad PCZT ironwood spend recipient"))?;
-
-        for scope in [OrchardScope::External, OrchardScope::Internal] {
-            let ivk = fvk
-                .to_ivk_ledger(scope)
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-            let ivk_bytes = ivk.to_bytes();
-            let ivk_bytes: [u8; 32] = ivk_bytes[32..64]
-                .try_into()
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-            let expected_pk_d = ledger_zcash_crypto::orchard_pk_d(&ivk_bytes, &g_d)
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-
-            if &expected_pk_d == claimed_pk_d {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
     }
 
     fn finish_ironwood_value_sum_sign(&mut self, sign_byte: u8) -> Result<(), ParserError> {
@@ -1019,7 +990,7 @@ impl PcztParser {
     }
 
     #[inline(never)]
-    fn verify_current_ironwood_rk(&self, ask: &OrchardAsk) -> Result<(), ParserError> {
+    fn verify_current_ironwood_rk(&self, ask: &OrchardValidationKey) -> Result<(), ParserError> {
         let alpha = self
             .current_action
             .alpha
@@ -1034,7 +1005,7 @@ impl PcztParser {
             .randomized_verification_key_bytes(&alpha)
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
 
-        if expected_rk != self.current_action.rk {
+        if <[u8; 32]>::from(expected_rk) != self.current_action.rk {
             return Err(ParserError::from_str(
                 "PCZT ironwood rk does not match alpha and signing key",
             ));
@@ -1146,32 +1117,20 @@ impl PcztParser {
             self.ironwood_action_parsed_count, path
         );
 
-        // Derive the FVK (and the ASK, for real spends only) from the session-cached
-        // account spending key: `zip32_orchard_derive` does not reclaim its SE
-        // resources between calls, so deriving per action exhausts them and the
-        // next one fails with 6f00.
-        let spend_value = self.current_action.spend_value;
-        let sk = ok!(self.orchard_spending_key(&path));
-        let (orchard_fvk, ask_for_rk) = if spend_value != 0 {
-            let (fvk, ask) =
-                derive_orchard_fvk_and_ask_from_sk(sk).map_err(ParserError::from_sw)?;
-            (fvk, Some(ask))
-        } else {
-            (ok!(derive_orchard_fvk_from_sk(sk)), None)
-        };
-        if let Some(ref ask) = ask_for_rk {
+        self.prepare_shielded_account_keys(ctx, &path)?;
+        if self.current_action.spend_value != 0 {
+            let ask = self
+                .orchard_validation_key
+                .as_ref()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
             self.verify_current_ironwood_rk(ask)?;
         }
-        let network = orchard_network(&path);
-        ctx.tx_info.orchard_decipher_keys =
-            Some(ok!(OrchardDecipherKeys::from_fvk(&orchard_fvk, network)));
         debug!(
             "PCZT ironwood action #{} decipher keys prepared",
             self.ironwood_action_parsed_count
         );
 
         self.current_action.path = Some(path);
-        self.current_action.fvk = Some(orchard_fvk);
         self.state = PcztParserState::WaitIronwoodOutput;
 
         Ok(())

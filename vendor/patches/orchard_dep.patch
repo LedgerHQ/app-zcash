@@ -160,7 +160,53 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Derives the Orchard spending key for the given seed, coin type, and account.
      pub fn from_zip32_seed(
          seed: &[u8],
-@@ -129,12 +164,83 @@
+@@ -122,19 +157,123 @@
+ #[derive(Clone, Debug)]
+ pub struct SpendAuthorizingKey(redpallas::SigningKey<SpendAuth>);
+ 
++/// A normalized authorizing key retained for Ledger transaction validation.
++/// The scalar is wiped on drop. This type does not clone or expose its secret.
++#[cfg(feature = "ledger")]
++pub struct LedgerValidationKey(Zeroizing<[u8; 32]>);
++
++#[cfg(feature = "ledger")]
++impl core::fmt::Debug for LedgerValidationKey {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        f.debug_struct("LedgerValidationKey")
++            .finish_non_exhaustive()
++    }
++}
++
++#[cfg(feature = "ledger")]
++impl LedgerValidationKey {
++    /// Computes a typed compressed verification key with the Ledger backend,
++    /// without constructing an intermediate curve point.
++    pub fn randomized_verification_key_bytes(
++        &self,
++        randomizer: &pallas::Scalar,
++    ) -> Result<redpallas::VerificationKeyBytes<SpendAuth>, ledger_zcash_crypto::Error> {
++        let randomizer_bytes = Zeroizing::new(randomizer.to_repr());
++        Ok(
++            ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
++                &self.0,
++                &randomizer_bytes,
++            )?
++            .into(),
++        )
++    }
++}
++
+ impl SpendAuthorizingKey {
++    /// Retains the normalized scalar for repeated Ledger validation, wiping it on drop.
++    /// The caller must bind reuse to its account and discard it before user review.
++    #[cfg(feature = "ledger")]
++    pub fn ledger_validation_key(&self) -> LedgerValidationKey {
++        LedgerValidationKey(Zeroizing::new((&self.0).into()))
++    }
++
+     /// Derives ask from sk. Internal use only, does not enforce all constraints.
+     #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
+     pub(crate) fn derive_inner(sk: &SpendingKey) -> pallas::Scalar {
          to_scalar(PrfExpand::ORCHARD_ASK.with(&sk.0))
      }
  
@@ -190,7 +236,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
 +        self.0.randomize_ledger(randomizer)
 +    }
 +
-+    /// Computes only the bytes of the randomized spend-auth verification key
++    /// Computes a typed compressed randomized spend-auth verification key
 +    /// (`rk = [(ask + randomizer) mod q]·G`) for this key, without constructing
 +    /// the intermediate curve point. Used to verify a PCZT action's `rk` with a
 +    /// smaller BN/point footprint than `randomize_ledger` + key conversion.
@@ -198,15 +244,9 @@ diff -ruN a/src/keys.rs b/src/keys.rs
 +    pub fn randomized_verification_key_bytes(
 +        &self,
 +        randomizer: &pallas::Scalar,
-+    ) -> Result<[u8; 32], ledger_zcash_crypto::Error> {
-+        let scalar_bytes: Zeroizing<[u8; 32]> = Zeroizing::new((&self.0).into());
-+        let randomizer_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(randomizer.to_repr());
-+        Ok(
-+            ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
-+                &scalar_bytes,
-+                &randomizer_bytes,
-+            )?,
-+        )
++    ) -> Result<redpallas::VerificationKeyBytes<SpendAuth>, ledger_zcash_crypto::Error> {
++        self.ledger_validation_key()
++            .randomized_verification_key_bytes(randomizer)
 +    }
 +
 +    /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
@@ -244,7 +284,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl From<&SpendingKey> for SpendAuthorizingKey {
-@@ -248,6 +354,15 @@
+@@ -248,6 +387,15 @@
  }
  
  impl NullifierDerivingKey {
@@ -260,7 +300,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      pub(crate) fn prf_nf(&self, rho: pallas::Base) -> pallas::Base {
          prf_nf(self.0, rho)
      }
-@@ -284,6 +399,15 @@
+@@ -284,6 +432,15 @@
  }
  
  impl CommitIvkRandomness {
@@ -276,25 +316,36 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the inner scalar value.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn inner(&self) -> pallas::Scalar {
-@@ -344,6 +468,17 @@
+@@ -344,6 +501,28 @@
  }
  
  impl FullViewingKey {
-+    /// Derives the internal full viewing key corresponding to this full viewing key.
++    /// Derives the full viewing key using Ledger primitives.
 +    #[cfg(feature = "ledger")]
 +    pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
++        Self::ledger_try_from_with_ask(sk).map(|(fvk, _)| fvk)
++    }
++
++    /// Derives a full viewing key and its normalized spend authorizing key together.
++    /// The returned authorizing key is the same one used to construct `ak`;
++    /// callers can use it immediately without repeating its scalar multiplication.
++    #[cfg(feature = "ledger")]
++    pub fn ledger_try_from_with_ask(
++        sk: &SpendingKey,
++    ) -> Result<(Self, SpendAuthorizingKey), ledger_zcash_crypto::Error> {
 +        let ask = SpendAuthorizingKey::ledger_try_from(sk)?;
-+        Ok(FullViewingKey {
++        let fvk = FullViewingKey {
 +            ak: (&ask).into(),
 +            nk: NullifierDerivingKey::ledger_try_from(sk)?,
 +            rivk: CommitIvkRandomness::ledger_try_from(sk)?,
-+        })
++        };
++        Ok((fvk, ask))
 +    }
 +
      /// Returns the nullifier deriving key for this full viewing key.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn nk(&self) -> &NullifierDerivingKey {
-@@ -379,6 +514,22 @@
+@@ -379,6 +558,22 @@
          )
      }
  
@@ -317,7 +368,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the payment address for this key at the given index.
      pub fn address_at(&self, j: impl Into<DiversifierIndex>, scope: Scope) -> Address {
          self.to_ivk(scope).address_at(j)
-@@ -480,6 +631,65 @@
+@@ -480,6 +675,65 @@
              Scope::Internal => OutgoingViewingKey::from_fvk(&self.derive_internal()),
          }
      }
@@ -383,7 +434,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  /// A key that provides the capability to derive a sequence of diversifiers.
-@@ -576,6 +786,23 @@
+@@ -576,6 +830,23 @@
          let ivk = KeyAgreementPrivateKey::derive_inner(fvk).unwrap();
          KeyAgreementPrivateKey(ivk.into())
      }
@@ -407,7 +458,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl KeyAgreementPrivateKey {
-@@ -612,6 +839,19 @@
+@@ -612,6 +883,19 @@
          let pk_d = DiversifiedTransmissionKey::derive(&prepared_ivk, &d);
          Address::from_parts(d, pk_d)
      }
@@ -427,7 +478,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  /// A key that provides the capability to detect and decrypt incoming notes from the block
-@@ -640,6 +880,15 @@
+@@ -640,6 +924,15 @@
              ivk: KeyAgreementPrivateKey::from_fvk(fvk),
          }
      }
@@ -443,7 +494,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl IncomingViewingKey {
-@@ -680,6 +929,16 @@
+@@ -680,6 +973,16 @@
          self.address(self.dk.get(j))
      }
  
@@ -460,7 +511,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the payment address for this key corresponding to the given diversifier.
      pub fn address(&self, d: Diversifier) -> Address {
          self.ivk.address(d)
-@@ -741,6 +1000,12 @@
+@@ -741,6 +1044,12 @@
      fn from_fvk(fvk: &FullViewingKey) -> Self {
          fvk.derive_dk_ovk().1
      }
@@ -473,7 +524,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl From<[u8; 32]> for OutgoingViewingKey {
-@@ -785,6 +1050,13 @@
+@@ -785,6 +1094,13 @@
          NonIdentityPallasPoint::from_bytes(bytes).map(DiversifiedTransmissionKey)
      }
  
@@ -1073,7 +1124,17 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 diff -ruN a/src/primitives/redpallas.rs b/src/primitives/redpallas.rs
 --- a/src/primitives/redpallas.rs
 +++ b/src/primitives/redpallas.rs
-@@ -55,6 +55,42 @@
+@@ -5,6 +5,9 @@
+ use pasta_curves::pallas;
+ use rand::{CryptoRng, RngCore};
+ 
++/// A compressed RedDSA verification key encoding, without decoded point state.
++pub use reddsa::VerificationKeyBytes;
++
+ #[cfg(feature = "std")]
+ pub use reddsa::batch;
+ 
+@@ -55,6 +58,42 @@
      }
  }
  

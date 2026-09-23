@@ -39,10 +39,23 @@ Under swap, refusals reach the host as `IncorrectData`: the Exchange app maps
 every application error code onto it, so the finer codes this app defines serve
 its own logs rather than host discrimination.
 
-`0x6901` `CmdNotAccepted` comes from the device SDK, not from this app. From SDK
-1.37 the legacy I/O layer refuses a frame it takes for an APDU while a review is
-on screen, and it can answer the first display command of a session. A host does
-better to tolerate and retry it than to surface it as a failure.
+`0x6901` `CmdNotAccepted` comes from the SDK when another application command
+arrives while a command is still being processed, including during review. Wait
+for the original command to finish before retrying.
+
+## Locked devices
+
+When a PIN is configured and the device is locked, the app returns `0x5515`
+`DeviceLocked` before decoding or dispatching a Zcash instruction. Commands queued
+while a screen is displayed are checked when the app receives them too.
+
+The published SDK handles its built-in commands (`CLA = 0xB0`) before returning
+control to the app, including while a review screen is displayed. Those commands
+can still read the app name/version, quit the app, or call Ledger's certificate
+loader while locked. Framing errors and unsupported command classes can also
+receive SDK errors before the app's PIN check. This follows SDK 1.37's new I/O
+behavior. The legacy I/O path rejected these requests with `DeviceLocked`.
+Overlapping application commands remain subject to the SDK's review-time rejection.
 
 ## Accepted derivation paths
 

@@ -43,7 +43,6 @@ mod tx;
 mod utils;
 mod zip32;
 
-use alloc::boxed::Box;
 use core::mem::{self, MaybeUninit};
 
 use app_ui::menu::ui_menu_main;
@@ -55,7 +54,7 @@ use ledger_device_sdk::log::{debug, error};
 use ledger_device_sdk::nbgl::StatusType;
 use ledger_device_sdk::{io::StatusWords, libcall::swap::CreateTxParams};
 use ledger_device_sdk::{
-    io::{ApduHeader, Comm, Reply},
+    io::{ApduHeader, Comm, CommError, Command, CommandResponse, Reply},
     nbgl::init_comm,
 };
 use tx::TxContext;
@@ -101,6 +100,7 @@ use crate::{
 extern crate alloc;
 
 ledger_device_sdk::set_panic!(panic_handler);
+ledger_device_sdk::define_comm!(COMM);
 
 #[repr(u16)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -152,6 +152,12 @@ pub enum AppSW {
 impl From<AppSW> for Reply {
     fn from(sw: AppSW) -> Reply {
         Reply(sw as u16)
+    }
+}
+
+impl From<CommError> for AppSW {
+    fn from(_: CommError) -> Self {
+        Self::TechnicalProblem
     }
 }
 
@@ -364,7 +370,12 @@ impl TryFrom<ApduHeader> for Instruction {
     }
 }
 
-fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, status: &AppSW) {
+fn show_status_and_home_if_needed(
+    comm: &mut Comm,
+    ins: &Instruction,
+    tx_ctx: &mut TxContext,
+    status: &AppSW,
+) {
     if tx_ctx.swap_params.is_some() {
         return;
     }
@@ -414,7 +425,7 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             let success = *status == AppSW::Ok;
             NbglReviewStatus::new()
                 .status_type(status_type)
-                .show(success);
+                .show(comm, success);
         }
 
         // call home.show_and_return() to show home and setting screen
@@ -467,8 +478,13 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
     // Create the communication manager, and configure it to accept only APDU from the 0xe0 class.
     // If any APDU with a wrong class value is received, comm will respond automatically with
     // BadCla status word.
-    let mut comm = Box::new(Comm::new().set_expected_cla(ZCASH_CLA));
-    init_comm(&mut comm);
+    let comm = init_comm(&COMM);
+    comm.set_expected_cla(ZCASH_CLA);
+    if swap_params.is_some() {
+        // SAFETY: Comm is in static storage; the panic handler never resumes the
+        // interrupted borrow and returns directly to Exchange.
+        unsafe { swap::panic_handler::set_swap_comm(comm) };
+    }
 
     init_trusted_input_key_storage();
 
@@ -489,26 +505,48 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
     debug!("TxContext size {} bytes", mem::size_of::<TxContext>());
 
     if swap_params.is_none() {
-        tx_ctx.home = ui_menu_main(&mut comm);
+        tx_ctx.home = ui_menu_main(comm);
         tx_ctx.home.show_and_return();
     }
 
     loop {
-        let ins: Instruction = comm.next_command();
+        let command = comm.next_command();
+        // Gate app commands here. The SDK handles built-in commands before returning.
+        let locked = unsafe {
+            use ledger_device_sdk::sys::{
+                BOLOS_TRUE, os_global_pin_is_validated, os_perso_is_pin_set,
+            };
+            os_perso_is_pin_set() == BOLOS_TRUE.try_into().unwrap()
+                && os_global_pin_is_validated() != BOLOS_TRUE.try_into().unwrap()
+        };
+        if locked {
+            command
+                .reply(&[], StatusWords::DeviceLocked)
+                .expect("APDU reply failed");
+            continue;
+        }
+        let ins = match command.decode::<Instruction>() {
+            Ok(ins) => ins,
+            Err(sw) => {
+                // Decode failures must not reach a transaction handler.
+                command.reply(&[], sw).expect("APDU reply failed");
+                continue;
+            }
+        };
 
         debug!("Received APDU {:?}", ins);
 
-        let status = match handle_apdu(&mut comm, &ins, tx_ctx) {
-            Ok(()) => {
-                comm.reply_ok();
+        let status = match handle_apdu(command, &ins, tx_ctx) {
+            Ok(response) => {
+                response.send(AppSW::Ok).expect("APDU reply failed");
                 AppSW::Ok
             }
             Err(sw) => {
-                comm.reply(sw);
+                comm.send(&[], sw).expect("APDU reply failed");
                 sw
             }
         };
-        show_status_and_home_if_needed(&ins, tx_ctx, &status);
+        show_status_and_home_if_needed(comm, &ins, tx_ctx, &status);
 
         let is_error = status != AppSW::Ok;
         let is_finished = tx_ctx.is_finished();
@@ -547,60 +585,64 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
     }
 }
 
-fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Result<(), AppSW> {
+fn handle_apdu<'a>(
+    command: Command<'a>,
+    ins: &Instruction,
+    ctx: &mut TxContext,
+) -> Result<CommandResponse<'a>, AppSW> {
     match ins {
-        Instruction::GetVersion => handler_get_version(comm),
-        Instruction::GetPubkey { display } => handler_get_public_key(comm, *display),
+        Instruction::GetVersion => handler_get_version(command),
+        Instruction::GetPubkey { display } => handler_get_public_key(command, *display),
         Instruction::GetVk {
             mode,
             continue_response,
-        } => handler_get_vk(comm, ctx, *mode, *continue_response),
+        } => handler_get_vk(command, ctx, *mode, *continue_response),
         Instruction::GetShieldedAddr { mode, display } => {
-            handler_get_shielded_addr(comm, *mode, *display)
+            handler_get_shielded_addr(command, *mode, *display)
         }
         Instruction::GetTrustedInput { first, next } => {
-            handler_get_trusted_input(comm, ctx, *first, *next)
+            handler_get_trusted_input(command, ctx, *first, *next)
         }
         Instruction::HashInputStart {
             first,
             continue_hashing,
-        } => handler_hash_input_start(comm, ctx, *first, *continue_hashing),
+        } => handler_hash_input_start(command, ctx, *first, *continue_hashing),
         Instruction::HashFinalizeFull { is_change } => {
-            handler_hash_input_finalize_full(comm, ctx, *is_change)
+            handler_hash_input_finalize_full(command, ctx, *is_change)
         }
-        Instruction::HashSign => handler_hash_sign(comm, ctx),
-        Instruction::PcztHeader => handler_pczt_header(comm, ctx),
+        Instruction::HashSign => handler_hash_sign(command, ctx),
+        Instruction::PcztHeader => handler_pczt_header(command, ctx),
         Instruction::PcztTransparentInput { first, last } => {
-            handler_pczt_transparent_input(comm, ctx, *first, *last)
+            handler_pczt_transparent_input(command, ctx, *first, *last)
         }
         Instruction::PcztTransparentOutput { first, last } => {
-            handler_pczt_transparent_output(comm, ctx, *first, *last)
+            handler_pczt_transparent_output(command, ctx, *first, *last)
         }
         Instruction::PcztOrchardAction {
             first,
             last,
             finished,
-        } => handler_pczt_orchard_action(comm, ctx, *first, *last, *finished),
+        } => handler_pczt_orchard_action(command, ctx, *first, *last, *finished),
         Instruction::PcztSignTransparent { input_index } => {
-            handler_pczt_sign_transparent(comm, ctx, *input_index)
+            handler_pczt_sign_transparent(command, ctx, *input_index)
         }
         Instruction::PcztSignOrchard { action_index } => {
-            handler_pczt_sign_orchard(comm, ctx, *action_index)
+            handler_pczt_sign_orchard(command, ctx, *action_index)
         }
         Instruction::PcztIronwoodAction {
             first,
             last,
             finished,
-        } => handler_pczt_ironwood_action(comm, ctx, *first, *last, *finished),
+        } => handler_pczt_ironwood_action(command, ctx, *first, *last, *finished),
         Instruction::PcztSignIronwood { action_index } => {
-            handler_pczt_sign_ironwood(comm, ctx, *action_index)
+            handler_pczt_sign_ironwood(command, ctx, *action_index)
         }
         Instruction::PcztInvalid { sw } => {
             ctx.pczt_parser.reset();
             Err(*sw)
         }
         #[cfg(feature = "heap_probe")]
-        Instruction::HeapProbe => handler_heap_probe(comm),
+        Instruction::HeapProbe => handler_heap_probe(command),
     }
 }
 

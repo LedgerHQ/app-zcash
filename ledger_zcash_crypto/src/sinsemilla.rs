@@ -1,12 +1,12 @@
 use ff::PrimeField;
 use ledger_device_sdk::ecc::{CurvesId, math::EcPoint};
 use pasta_curves::{
-    arithmetic::CurveAffine,
+    arithmetic::{CurveAffine, CurveExt},
     group::{Curve, Group},
     pallas,
 };
 
-use crate::redpallas::{point_from_sdk_point, projective_point};
+use crate::redpallas::point_from_sdk_point;
 use crate::{Error, bytes::reverse_copy};
 
 /// Number of bits of each message piece in `SinsemillaHashToPoint`.
@@ -14495,33 +14495,36 @@ fn hash_to_point(q: pallas::Point, message: &[bool]) -> Option<pallas::Point> {
         let end = core::cmp::min(start + K, message.len());
 
         let acc_val = acc?;
-        let s = pasta_point_from_s_index(chunk_to_index(&message[start..end]));
-        let step = pallas_incomplete_add(acc_val, s)?;
-        acc = pallas_incomplete_add(step, acc_val);
+        let s = pasta_point_from_s_index(chunk_to_index(&message[start..end]))?;
+        acc = sinsemilla_double_and_add(acc_val, s);
     }
 
     acc
 }
 
-// Converts a SINSEMILLA_S table entry (already a pallas::Base affine coordinate pair)
-// into a projective pallas::Point. Uses zero Bn slots — pure Rust only.
 #[inline(never)]
-fn pasta_point_from_s_index(index: usize) -> pallas::Point {
+fn pasta_point_from_s_index(index: usize) -> Option<pallas::Affine> {
     let (x, y) = SINSEMILLA_S[index];
-    projective_point(x, y, pallas::Base::one())
+    Option::from(pallas::Affine::from_xy(x, y))
 }
 
-// Sinsemilla incomplete addition: returns None for the identity or exceptional cases
-// (equal or negated inputs), which signal a hash collision as required by the spec.
+// Computes (P incomplete-add S) incomplete-add P as 2P + S. For nonidentity
+// inputs the first addition fails exactly when P = ±S. Once those cases are
+// excluded, the second can fail only when 2P + S is the identity.
 #[inline(never)]
-fn pallas_incomplete_add(lhs: pallas::Point, rhs: pallas::Point) -> Option<pallas::Point> {
-    if bool::from(lhs.is_identity()) || bool::from(rhs.is_identity()) {
+fn sinsemilla_double_and_add(p: pallas::Point, s: pallas::Affine) -> Option<pallas::Point> {
+    let s_x = Option::<pallas::Base>::from(s.coordinates().map(|c| *c.x()))?;
+    let (p_x, _, p_z) = p.jacobian_coordinates();
+    // Compare affine x-coordinates without normalizing P or inverting a field element.
+    if bool::from(p.is_identity()) || p_x == s_x * p_z.square() {
         return None;
     }
-    if lhs == rhs || lhs == -rhs {
+
+    let result = p.double() + s;
+    if bool::from(result.is_identity()) {
         return None;
     }
-    Some(lhs + rhs)
+    Some(result)
 }
 
 fn chunk_to_index(chunk: &[bool]) -> usize {
@@ -14606,6 +14609,91 @@ mod tests {
             &pallas::Scalar::from(0x5a5a_5a5au64),
         )
     }
+
+    fn incomplete_add(p: pallas::Point, q: pallas::Point) -> Option<pallas::Point> {
+        if bool::from(p.is_identity() | q.is_identity()) || p == q || p == -q {
+            None
+        } else {
+            Some(p + q)
+        }
+    }
+
+    fn reference_step(p: pallas::Point, s: pallas::Point) -> Option<pallas::Point> {
+        incomplete_add(incomplete_add(p, s)?, p)
+    }
+
+    fn reference_hash(mut q: pallas::Point, message: &[bool]) -> Option<pallas::Point> {
+        for chunk in message.chunks(K) {
+            let s = pallas::Point::from(pasta_point_from_s_index(chunk_to_index(chunk))?);
+            q = reference_step(q, s)?;
+        }
+        Some(q)
+    }
+
+    #[test_case]
+    const FUSED_STEP_PRESERVES_EXCEPTIONS: TestType = TestType {
+        modname: module_path!(),
+        name: "fused_step_preserves_exceptions",
+        f: || {
+            let p = pallas::Point::generator();
+            let identity = pallas::Point::identity();
+            for (lhs, rhs, valid) in [
+                (identity, p, false),
+                (p, identity, false),
+                (p, p, false),
+                (p, -p, false),
+                (p, -p.double(), false),
+                (p, p.double(), true),
+            ] {
+                let actual = sinsemilla_double_and_add(lhs, rhs.to_affine());
+                if actual.is_some() != valid || actual != reference_step(lhs, rhs) {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const FUSED_STEP_MATCHES_TWO_ADDITIONS: TestType = TestType {
+        modname: module_path!(),
+        name: "fused_step_matches_two_additions",
+        f: || {
+            let generator = pallas::Point::generator();
+            let mut p = pallas::Point::identity();
+            for _ in 0..8 {
+                let mut s = pallas::Point::identity();
+                for _ in 0..8 {
+                    if sinsemilla_double_and_add(p, s.to_affine()) != reference_step(p, s) {
+                        return Err(());
+                    }
+                    s += generator;
+                }
+                p += generator;
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const HASH_MATCHES_TWO_ADDITIONS: TestType = TestType {
+        modname: module_path!(),
+        name: "hash_matches_two_additions",
+        f: || {
+            for coordinates in [Q_NOTE_COMMITMENT_M_GENERATOR, Q_COMMIT_IVK_M_GENERATOR] {
+                let q_ec = point_from_affine_coordinates(&coordinates).map_err(|_| ())?;
+                let q = point_from_sdk_point(&q_ec).map_err(|_| ())?;
+                drop(q_ec);
+                for len in [0, 1, K - 1, K, K + 1, 510, K * C] {
+                    let message = &LONGEST_MESSAGE[..len];
+                    if hash_to_point(q, message) != reference_hash(q, message) {
+                        return Err(());
+                    }
+                }
+            }
+            Ok(())
+        },
+    };
 
     /// Sinsemilla must commit identically whether or not the caller already holds
     /// SDK points — true only while the hash loop stays pure Rust and allocates

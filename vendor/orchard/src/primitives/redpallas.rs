@@ -5,6 +5,9 @@ use core::cmp::{Ord, Ordering, PartialOrd};
 use pasta_curves::pallas;
 use rand::{CryptoRng, RngCore};
 
+/// A compressed RedDSA verification key encoding, without decoded point state.
+pub use reddsa::VerificationKeyBytes;
+
 #[cfg(feature = "std")]
 pub use reddsa::batch;
 

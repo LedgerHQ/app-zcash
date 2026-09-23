@@ -33,6 +33,9 @@ ORCHARD_DIGEST_DATA_SIZE = 1 + 8 + 32
 PALLAS_BASE_MODULUS = int("40000000000000000000000000000000224698fc094cf91b992d30ed00000001", 16)
 PALLAS_SCALAR_MODULUS = int("40000000000000000000000000000000224698fc0994a8dd8c46eb2100000001", 16)
 PALLAS_B = 5
+ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES = bytes.fromhex(
+    "63c975b884721a8d0ca1707be30c7f0c5f445f3e7c188d3b06d6f128b32355b7"
+)
 ORCHARD_BINDINGSIG_BASEPOINT_BYTES = bytes(
     [
         145,
@@ -111,6 +114,32 @@ def check_orchard_binding_signature_validity(
         basepoint = _pallas_point_from_bytes(ORCHARD_BINDINGSIG_BASEPOINT_BYTES)
         verification_key = _pallas_scalar_mul(signing_key, basepoint)
         verification_key_bytes = _pallas_point_to_bytes(verification_key)
+    except ValueError:
+        return False
+
+    return _check_redpallas_signature(verification_key_bytes, signature, msg, basepoint)
+
+
+def check_orchard_spendauth_signature_validity(
+    randomized_verification_key: bytes,
+    signature: bytes,
+    msg: bytes,
+) -> bool:
+    """Verify randomized signatures without depending on emulator RNG consumption."""
+    basepoint = _pallas_point_from_bytes(ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES)
+    return _check_redpallas_signature(randomized_verification_key, signature, msg, basepoint)
+
+
+def _check_redpallas_signature(
+    verification_key_bytes: bytes,
+    signature: bytes,
+    msg: bytes,
+    basepoint: tuple[int, int] | None,
+) -> bool:
+    if len(verification_key_bytes) != 32 or len(signature) != 64:
+        return False
+    try:
+        verification_key = _pallas_point_from_bytes(verification_key_bytes)
         r = _pallas_point_from_bytes(signature[:32])
     except ValueError:
         return False

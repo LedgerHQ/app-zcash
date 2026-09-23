@@ -1,7 +1,7 @@
 use orchard::keys::Scope;
 use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
 
-use ledger_device_sdk::io::Comm;
+use ledger_device_sdk::io::{Command, CommandResponse};
 use ledger_device_sdk::log::{error, info};
 
 use crate::consts::UNHARDENED_MASK;
@@ -41,11 +41,11 @@ fn parse_shielded_paths(
     }
 }
 
-pub fn handler_get_shielded_addr(
-    comm: &mut Comm,
+pub fn handler_get_shielded_addr<'a>(
+    command: Command<'a>,
     mode: P2ShieldedAddrMode,
     display: bool,
-) -> Result<(), AppSW> {
+) -> Result<CommandResponse<'a>, AppSW> {
     // A raw Orchard receiver is thirty-odd bytes with no encoding the user could read back against
     // their wallet, so this mode has no screen to show. The dispatcher accepts the display P1 for
     // it all the same, and the handler used to answer by returning the receiver with no review at
@@ -56,7 +56,7 @@ pub fn handler_get_shielded_addr(
         return Err(AppSW::WrongP1P2);
     }
 
-    let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
+    let data = command.get_data();
 
     let (path, transparent_path) = parse_shielded_paths(data, mode)?;
 
@@ -86,6 +86,7 @@ pub fn handler_get_shielded_addr(
 
     let orchard_fvk = derive_orchard_fvk(&path)?;
 
+    let comm = command.into_comm();
     let resp = match mode {
         P2ShieldedAddrMode::OrchardAddress => {
             let ivk = orchard_fvk
@@ -128,7 +129,7 @@ pub fn handler_get_shielded_addr(
                 let transparent_address = transparent_account_address(transparent_path)?;
                 info!("Transparent address: {}", transparent_address);
 
-                if !ui_display_shielded_address(&orchard_address_str, &transparent_address)? {
+                if !ui_display_shielded_address(comm, &orchard_address_str, &transparent_address)? {
                     return Err(AppSW::Deny);
                 }
             }
@@ -137,7 +138,5 @@ pub fn handler_get_shielded_addr(
         }
     };
 
-    comm.append(&resp);
-
-    Ok(())
+    Ok(comm.begin_response().extend(&resp)?)
 }
