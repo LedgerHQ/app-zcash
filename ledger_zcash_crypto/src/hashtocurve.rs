@@ -370,6 +370,12 @@ impl DiversifiedBase {
     pub(crate) fn to_sdk(self) -> Result<ledger_device_sdk::ecc::math::EcPoint, Error> {
         Ok(self.0.to_sdk()?)
     }
+
+    /// The base is derived on device by hash-to-curve, so it satisfies the
+    /// checks [`crate::points::ValidatedPoint`] stands for without decoding.
+    pub(crate) fn to_validated_point(self) -> Result<crate::points::ValidatedPoint, Error> {
+        Ok(self.0.to_validated()?)
+    }
 }
 
 /// Returns the canonical Orchard diversifier-hash encoding.

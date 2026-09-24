@@ -21,6 +21,47 @@ impl AffinePoint {
         encoded[31] |= (self.y_be[31] & 1) << 7;
         encoded
     }
+
+    pub(crate) fn to_validated(self) -> Result<ValidatedPoint, CxError> {
+        Ok(ValidatedPoint(self.to_sdk()?))
+    }
+}
+
+/// A Pallas point that carries the proof it was checked: either its encoding
+/// passed [`ValidatedPoint::from_external`], or it was built on device from
+/// coordinates that cannot fail those checks. The inner point is reachable only
+/// by consuming the wrapper, so an operation that requires a checked point
+/// cannot be handed a raw host encoding.
+pub(crate) struct ValidatedPoint(EcPoint);
+
+impl ValidatedPoint {
+    /// Decodes an externally supplied encoding, rejecting the all-zero form,
+    /// the identity, and any encoding that is not the canonical one for its
+    /// point. `None` on any of those, so callers fail closed.
+    pub(crate) fn from_external(bytes: &[u8; 32]) -> Result<Option<Self>, crate::Error> {
+        if *bytes == [0u8; 32] {
+            return Ok(None);
+        }
+
+        let point = match crate::pallas_point_from_bytes(bytes) {
+            Ok(point) => point,
+            Err(_) => return Ok(None),
+        };
+
+        if point.is_at_infinity()? {
+            return Ok(None);
+        }
+
+        if crate::pallas_point_to_bytes(&point)? != *bytes {
+            return Ok(None);
+        }
+
+        Ok(Some(Self(point)))
+    }
+
+    pub(crate) fn into_point(self) -> EcPoint {
+        self.0
+    }
 }
 
 /// Fixed Orchard bases, shared with Ironwood and RedPallas.
@@ -97,6 +138,35 @@ impl Basepoint {
 mod tests {
     use super::*;
     use ledger_device_sdk::testing::TestType;
+
+    /// The wrapper is the only route from a host encoding to a scalar multiplication,
+    /// so its refusals are the guarantee. Exercise them rather than the callers.
+    #[test_case]
+    const EXTERNAL_ENCODINGS_ARE_CHECKED: TestType = TestType {
+        modname: module_path!(),
+        name: "external_encodings_are_checked",
+        f: || {
+            let canonical = Basepoint::SpendAuth.coordinates().to_bytes();
+            if ValidatedPoint::from_external(&canonical)
+                .map_err(|_| ())?
+                .is_none()
+            {
+                return Err(());
+            }
+
+            // All-zero is the identity's encoding and the explicit early refusal;
+            // all-ones decodes to no point on the curve.
+            for refused in [[0u8; 32], [0xff; 32]] {
+                if ValidatedPoint::from_external(&refused)
+                    .map_err(|_| ())?
+                    .is_some()
+                {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
 
     #[test_case]
     const FIXED_BASES_MATCH_ORIGINAL_ENCODINGS: TestType = TestType {

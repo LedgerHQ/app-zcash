@@ -13,7 +13,6 @@ use chacha20::{
 };
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::AeadInPlace};
 use ff::{Field, PrimeField};
-use ledger_device_sdk::ecc::math::EcPoint;
 use ledger_device_sdk::hash::{
     HashInit as _,
     blake2::{Blake2b_256, Blake2bWithPerso},
@@ -21,14 +20,14 @@ use ledger_device_sdk::hash::{
 use pasta_curves::pallas;
 use zeroize::Zeroizing;
 
-use crate::points::Basepoint;
+use crate::points::{Basepoint, ValidatedPoint};
 
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
     ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
     bytes::reverse_copy,
-    pallas_base_from_repr, pallas_basepoint_mul, pallas_point_from_bytes, pallas_point_to_bytes,
-    pallas_scalar_from_repr, prf_expand_with_domain_separator_and_inputs,
+    pallas_base_from_repr, pallas_basepoint_mul, pallas_point_to_bytes, pallas_scalar_from_repr,
+    prf_expand_with_domain_separator_and_inputs,
     redpallas::point_from_sdk_point,
     sinsemilla::{extract_p_pallas, sinsemilla_short_commit, sinsemilla_short_commit_point},
     to_pallas_base_bytes, to_pallas_scalar_bytes,
@@ -362,7 +361,7 @@ fn parse_and_validate_note_plaintext(
         },
     };
 
-    let derived_epk = key_agreement_with_point(&derived_esk, g_d.to_sdk()?)?;
+    let derived_epk = key_agreement_with_point(&derived_esk, g_d.to_validated_point()?)?;
     let g_d = g_d.to_bytes();
     if !bytes_eq(&derived_epk, &compact.ephemeral_key) {
         return Ok(None);
@@ -456,13 +455,14 @@ fn chacha20_decrypt_compact(
     chacha.apply_keystream(plaintext);
 }
 
-/// Consumes a decoded point so its SDK resources are released after agreement.
-/// Host-supplied points must pass `validated_nonidentity_pallas_point` first.
+/// Consumes a validated point so its SDK resources are released after agreement.
+/// The parameter type is what keeps an unchecked host encoding out of here.
 fn key_agreement_with_point(
     scalar_bytes_le: &[u8; HASH_SIZE],
-    mut point: EcPoint,
+    point: ValidatedPoint,
 ) -> Result<[u8; HASH_SIZE], Error> {
     let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
+    let mut point = point.into_point();
     point.rnd_scalarmul(&scalar_bytes_be[..])?;
     pallas_point_to_bytes(&point)
 }
@@ -494,24 +494,10 @@ fn is_valid_nonidentity_pallas_point(bytes: &[u8; HASH_SIZE]) -> Result<bool, Er
 }
 
 /// Decodes once, retaining the canonical encoding and nonidentity checks.
-fn validated_nonidentity_pallas_point(bytes: &[u8; HASH_SIZE]) -> Result<Option<EcPoint>, Error> {
-    if *bytes == [0u8; HASH_SIZE] {
-        return Ok(None);
-    }
-
-    let point = match pallas_point_from_bytes(bytes) {
-        Ok(point) => point,
-        Err(_) => return Ok(None),
-    };
-
-    if point.is_at_infinity()? {
-        return Ok(None);
-    }
-
-    if pallas_point_to_bytes(&point)? != *bytes {
-        return Ok(None);
-    }
-    Ok(Some(point))
+fn validated_nonidentity_pallas_point(
+    bytes: &[u8; HASH_SIZE],
+) -> Result<Option<ValidatedPoint>, Error> {
+    ValidatedPoint::from_external(bytes)
 }
 
 fn orchard_esk(
