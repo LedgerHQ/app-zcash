@@ -288,3 +288,8 @@ leaves the field at that value, so the two encodings agree.
 A V2-format ciphertext therefore does not decrypt in this pool. The output is then only accepted on
 the dummy path, which requires a zero value **and** a `cmx` that matches the V3 recomputation — so a
 genuine V2 note is refused rather than accepted under the V2 formula.
+
+Validation reuses the canonical recipient produced by the same action's account
+membership check when computing its nullifier. The typed value contains both the
+diversifier base and transmission key; raw bytes cannot replace either one after
+validation. Rho, randomness, nullifier and commitment checks still run per action.

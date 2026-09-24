@@ -2000,3 +2000,31 @@ def test_pczt_v6_cached_account_path_is_checked_between_pools(backend):
             pytest.fail("Device reused account keys for a different pool's account")
     assert error.value.status == Errors.SW_BAD_STATE
     assert not error.value.data
+
+
+@pytest.mark.parametrize("pool", ["orchard", "ironwood"])
+@pytest.mark.parametrize("change", ["identity_key", "noncanonical_key", "diversifier", "spend_rho", "spend_rseed"])
+def test_pczt_recipient_reuse_preserves_note_checks(backend, pool, change):
+    """Tamper one field of a valid real spend before its ownership/nullifier checks."""
+    client = ZcashCommandSender(backend)
+    bundle = _valid_orchard_bundle() if pool == "orchard" else _valid_ironwood_bundle()
+    action = bundle.actions[0]
+    diversifier_len = 11
+    point_len = 32
+    if change in ("identity_key", "noncanonical_key"):
+        encoded = bytes(point_len) if change == "identity_key" else bytes([0xff]) * point_len
+        action.spend_recipient = action.spend_recipient[:diversifier_len] + encoded
+    else:
+        field = "spend_recipient" if change == "diversifier" else change
+        original = getattr(action, field)
+        setattr(action, field, bytes([original[0] ^ 1]) + original[1:])
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+            **{f"{pool}_bundle": bundle},
+        ):
+            pytest.fail("Device accepted a tampered spend")
+    assert error.value.status == Errors.SW_INVALID_TRANSACTION
+    assert not error.value.data

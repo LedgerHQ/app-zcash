@@ -96,6 +96,46 @@ pub fn decipher_compact_value(
     try_compact_note_decryption_with_ivk(ivk, compact, expected_note_version)
 }
 
+/// Canonical recipient material with a nonidentity base and transmission key.
+/// Private fields prevent unchecked encodings from reaching the reuse path.
+#[derive(Clone, Copy)]
+pub struct ValidatedRecipient {
+    g_d: [u8; HASH_SIZE],
+    pk_d: [u8; HASH_SIZE],
+}
+
+impl ValidatedRecipient {
+    /// Checks that the claimed key is derived from this base and canonical nonzero IVK.
+    /// The caller binds the base to the note's diversifier and the IVK to its account.
+    /// A mismatch returns `None`; only an exact match permits recipient reuse.
+    pub fn from_ivk(
+        ivk: &[u8; HASH_SIZE],
+        base: &crate::DiversifiedBase,
+        claimed_pk_d: &[u8; HASH_SIZE],
+    ) -> Result<Option<Self>, Error> {
+        let pk_d = crate::orchard_pk_d_from_base(ivk, base)?;
+        Ok(bytes_eq(&pk_d, claimed_pk_d).then(|| Self {
+            g_d: base.to_bytes(),
+            pk_d,
+        }))
+    }
+
+    fn from_raw(raw: &[u8; ORCHARD_RAW_ADDRESS_SIZE]) -> Result<Self, Error> {
+        let mut diversifier = [0u8; DIVERSIFIER_SIZE];
+        diversifier.copy_from_slice(&raw[..DIVERSIFIER_SIZE]);
+        let mut pk_d = [0u8; HASH_SIZE];
+        pk_d.copy_from_slice(&raw[DIVERSIFIER_SIZE..]);
+        if !is_valid_nonidentity_pallas_point(&pk_d)? {
+            return Err(Error::MalformedPallasPoint);
+        }
+        Ok(Self {
+            g_d: crate::diversify_hash_ledger(&diversifier)?,
+            pk_d,
+        })
+    }
+}
+
+/// Computes an Orchard spend nullifier, validating the raw recipient.
 #[inline(never)]
 pub fn spend_nullifier_bytes(
     nk: &[u8; HASH_SIZE],
@@ -104,25 +144,76 @@ pub fn spend_nullifier_bytes(
     rho: &[u8; HASH_SIZE],
     rseed: &[u8; HASH_SIZE],
 ) -> Result<[u8; HASH_SIZE], Error> {
+    spend_nullifier_inner(nk, value, rho, rseed, false, || {
+        ValidatedRecipient::from_raw(raw_address)
+    })
+}
+
+/// V3 (ZIP 2005 / Ironwood) variant of [`spend_nullifier_bytes`], over a validated
+/// raw recipient.
+///
+/// Commits with [`note_commitment_v3_point`] so that the commitment matches the
+/// on-chain V3 note and the derived nullifier agrees with the value in the PCZT.
+#[inline(never)]
+pub fn spend_nullifier_bytes_v3(
+    nk: &[u8; HASH_SIZE],
+    raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    spend_nullifier_inner(nk, value, rho, rseed, true, || {
+        ValidatedRecipient::from_raw(raw_address)
+    })
+}
+
+/// Reuses recipient validation for an Orchard nullifier. All remaining note and
+/// key checks are identical to [`spend_nullifier_bytes`]. No raw recipient is
+/// accepted alongside the validated value, so its base and key cannot diverge.
+#[inline(never)]
+pub fn spend_nullifier_for_recipient(
+    nk: &[u8; HASH_SIZE],
+    recipient: &ValidatedRecipient,
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    spend_nullifier_inner(nk, value, rho, rseed, false, || Ok(*recipient))
+}
+
+/// Ironwood counterpart of [`spend_nullifier_for_recipient`], using the V3 commitment.
+#[inline(never)]
+pub fn spend_nullifier_v3_for_recipient(
+    nk: &[u8; HASH_SIZE],
+    recipient: &ValidatedRecipient,
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    spend_nullifier_inner(nk, value, rho, rseed, true, || Ok(*recipient))
+}
+
+#[inline(never)]
+fn spend_nullifier_inner(
+    nk: &[u8; HASH_SIZE],
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+    ironwood: bool,
+    recipient: impl FnOnce() -> Result<ValidatedRecipient, Error>,
+) -> Result<[u8; HASH_SIZE], Error> {
     let rho = pallas_base_from_repr(*rho)?;
     let _esk = orchard_esk(rseed, &rho)?;
-
-    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
-    diversifier.copy_from_slice(&raw_address[..DIVERSIFIER_SIZE]);
-
-    let mut pk_d = [0u8; HASH_SIZE];
-    pk_d.copy_from_slice(&raw_address[DIVERSIFIER_SIZE..]);
-    if !is_valid_nonidentity_pallas_point(&pk_d)? {
-        return Err(Error::MalformedPallasPoint);
-    }
-
-    let g_d = crate::diversify_hash_ledger(&diversifier)?;
-    let cm = note_commitment_point(&g_d, &pk_d, value, &rho, rseed)?;
+    let recipient = recipient()?;
+    let cm = if ironwood {
+        note_commitment_v3_point(&recipient.g_d, &recipient.pk_d, value, &rho, rseed)?
+    } else {
+        note_commitment_point(&recipient.g_d, &recipient.pk_d, value, &rho, rseed)?
+    };
     let psi = pallas_base_from_repr(*orchard_psi(rseed, &rho)?)?;
     let nk = pallas_base_from_repr(*nk)?;
     let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
     let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
-
     let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
         cm
     } else {
@@ -137,50 +228,6 @@ pub fn spend_nullifier_bytes(
             pallas_basepoint_mul(Basepoint::Nullifier, &scalar_bytes_be(&nullifier_scalar))?;
         point_from_sdk_point(&nullifier_k_ec)? + cm
     };
-
-    Ok(extract_p_pallas(&nullifier_point).to_repr())
-}
-
-/// V3 (ZIP 2005 / Ironwood) variant of [`spend_nullifier_bytes`].
-///
-/// Uses [`note_commitment_v3_point`] instead of [`note_commitment_point`] so
-/// that the commitment matches the on-chain V3 note and the derived nullifier
-/// agrees with the value in the PCZT.
-#[inline(never)]
-pub fn spend_nullifier_bytes_v3(
-    nk: &[u8; HASH_SIZE],
-    raw_address: &[u8; ORCHARD_RAW_ADDRESS_SIZE],
-    value: u64,
-    rho: &[u8; HASH_SIZE],
-    rseed: &[u8; HASH_SIZE],
-) -> Result<[u8; HASH_SIZE], Error> {
-    let rho = pallas_base_from_repr(*rho)?;
-    let _esk = orchard_esk(rseed, &rho)?;
-
-    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
-    diversifier.copy_from_slice(&raw_address[..DIVERSIFIER_SIZE]);
-
-    let mut pk_d = [0u8; HASH_SIZE];
-    pk_d.copy_from_slice(&raw_address[DIVERSIFIER_SIZE..]);
-    if !is_valid_nonidentity_pallas_point(&pk_d)? {
-        return Err(Error::MalformedPallasPoint);
-    }
-
-    let g_d = crate::diversify_hash_ledger(&diversifier)?;
-    let cm = note_commitment_v3_point(&g_d, &pk_d, value, &rho, rseed)?;
-    let psi = pallas_base_from_repr(*orchard_psi(rseed, &rho)?)?;
-    let nk = pallas_base_from_repr(*nk)?;
-    let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
-    let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
-
-    let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
-        cm
-    } else {
-        let nullifier_k_ec =
-            pallas_basepoint_mul(Basepoint::Nullifier, &scalar_bytes_be(&nullifier_scalar))?;
-        point_from_sdk_point(&nullifier_k_ec)? + cm
-    };
-
     Ok(extract_p_pallas(&nullifier_point).to_repr())
 }
 
@@ -809,6 +856,112 @@ mod tests {
     ];
     // `_DUMMY_CHANGE_VALUE` from test_pczt_ironwood.py
     const VALUE: u64 = 10000;
+
+    #[test_case]
+    const RECIPIENT_REUSE_MATCHES_RAW_NULLIFIERS: TestType = TestType {
+        modname: module_path!(),
+        name: "recipient_reuse_matches_raw_nullifiers",
+        f: || {
+            let base = crate::DiversifiedBase::derive(&INTERNAL_DIVERSIFIER).map_err(|_| ())?;
+            let ivk = pallas::Base::from(7).to_repr();
+            let pk_d = crate::orchard_pk_d_from_base(&ivk, &base).map_err(|_| ())?;
+            let recipient = ValidatedRecipient::from_ivk(&ivk, &base, &pk_d)
+                .map_err(|_| ())?
+                .ok_or(())?;
+            let mut raw = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
+            raw[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+            raw[DIVERSIFIER_SIZE..].copy_from_slice(&pk_d);
+            let nk = pallas::Base::from(11).to_repr();
+            let v2 = spend_nullifier_bytes(&nk, &raw, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .map_err(|_| ())?;
+            let v3 = spend_nullifier_bytes_v3(&nk, &raw, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .map_err(|_| ())?;
+            if v2
+                != spend_nullifier_for_recipient(
+                    &nk,
+                    &recipient,
+                    VALUE,
+                    &DUMMY_NULLIFIER,
+                    &DUMMY_RSEED,
+                )
+                .map_err(|_| ())?
+                || v3
+                    != spend_nullifier_v3_for_recipient(
+                        &nk,
+                        &recipient,
+                        VALUE,
+                        &DUMMY_NULLIFIER,
+                        &DUMMY_RSEED,
+                    )
+                    .map_err(|_| ())?
+                || v2 == v3
+            {
+                return Err(());
+            }
+            for reuse in [
+                spend_nullifier_for_recipient,
+                spend_nullifier_v3_for_recipient,
+            ] {
+                if reuse(&nk, &recipient, VALUE, &[0xff; HASH_SIZE], &DUMMY_RSEED)
+                    != Err(Error::MalformedPallasBase)
+                {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const RECIPIENT_REUSE_REJECTS_MISMATCHES: TestType = TestType {
+        modname: module_path!(),
+        name: "recipient_reuse_rejects_mismatches",
+        f: || {
+            let base = crate::DiversifiedBase::derive(&INTERNAL_DIVERSIFIER).map_err(|_| ())?;
+            let ivk = pallas::Base::from(7).to_repr();
+            let pk_d = crate::orchard_pk_d_from_base(&ivk, &base).map_err(|_| ())?;
+            let other_ivk = pallas::Base::from(8).to_repr();
+            if ValidatedRecipient::from_ivk(&other_ivk, &base, &pk_d)
+                .map_err(|_| ())?
+                .is_some()
+            {
+                return Err(());
+            }
+            for invalid in [[0; HASH_SIZE], [0xff; HASH_SIZE]] {
+                if ValidatedRecipient::from_ivk(&ivk, &base, &invalid)
+                    .map_err(|_| ())?
+                    .is_some()
+                    || ValidatedRecipient::from_ivk(&invalid, &base, &pk_d).is_ok()
+                {
+                    return Err(());
+                }
+                let mut raw = [0; ORCHARD_RAW_ADDRESS_SIZE];
+                raw[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+                raw[DIVERSIFIER_SIZE..].copy_from_slice(&invalid);
+                if ValidatedRecipient::from_raw(&raw).is_ok() {
+                    return Err(());
+                }
+            }
+            let mut wrong_key = pk_d;
+            wrong_key[0] ^= 1;
+            if ValidatedRecipient::from_ivk(&ivk, &base, &wrong_key)
+                .map_err(|_| ())?
+                .is_some()
+            {
+                return Err(());
+            }
+            let mut other_diversifier = INTERNAL_DIVERSIFIER;
+            other_diversifier[0] ^= 1;
+            let other_base = crate::DiversifiedBase::derive(&other_diversifier).map_err(|_| ())?;
+            if ValidatedRecipient::from_ivk(&ivk, &other_base, &pk_d)
+                .map_err(|_| ())?
+                .is_some()
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 
     /// `note_commitment_v3` must produce a result that differs from `note_commitment`
     /// for the same `(g_d, pk_d, value, rho, rseed)` inputs.

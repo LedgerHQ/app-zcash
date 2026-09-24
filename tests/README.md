@@ -11,3 +11,7 @@ randomized verification key and an independently computed transaction digest.
 Retained signature vectors must verify too. Byte-for-byte comparison is not
 appropriate when an optimization changes how many blinded SDK operations consume
 the emulator's deterministic random stream before the randomized signature.
+
+Recipient-reuse regressions cover malformed recipient keys, wrong ownership, rho,
+rseed and nullifiers for Orchard and Ironwood. The crypto unit tests compare raw
+and validated-recipient nullifiers and reject mismatched account/base material.

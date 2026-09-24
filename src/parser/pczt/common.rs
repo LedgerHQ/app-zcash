@@ -44,6 +44,36 @@ impl PcztParser {
         Ok(ask)
     }
 
+    /// Returns recipient material only after matching a key from the checked account.
+    /// The value is used immediately by the same action's nullifier check.
+    pub(super) fn validated_spend_recipient(
+        &self,
+        fvk: &OrchardFvk,
+        keys: &mut OrchardDecipherKeys,
+    ) -> Result<Option<ledger_zcash_crypto::orchard::ValidatedRecipient>, ParserError> {
+        let mut diversifier = [0u8; 11];
+        diversifier.copy_from_slice(&self.current_action.spend_recipient[..11]);
+        let mut claimed_pk_d = [0u8; 32];
+        claimed_pk_d.copy_from_slice(&self.current_action.spend_recipient[11..]);
+        let base = ledger_zcash_crypto::DiversifiedBase::derive(&diversifier)
+            .map_err(|_| ParserError::from_str("Bad PCZT spend recipient"))?;
+        for scope in [OrchardScope::External, OrchardScope::Internal] {
+            let ivk = keys
+                .incoming_viewing_key(fvk, scope)
+                .map_err(ParserError::from_sw)?;
+            if let Some(recipient) = ledger_zcash_crypto::orchard::ValidatedRecipient::from_ivk(
+                ivk,
+                &base,
+                &claimed_pk_d,
+            )
+            .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?
+            {
+                return Ok(Some(recipient));
+            }
+        }
+        Ok(None)
+    }
+
     pub(super) fn parse_pczt_header(
         &mut self,
         reader: &mut ByteReader<'_>,

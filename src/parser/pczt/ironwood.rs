@@ -918,30 +918,17 @@ impl PcztParser {
         fvk: &OrchardFvk,
         keys: &mut OrchardDecipherKeys,
     ) -> Result<(), ParserError> {
-        let mut diversifier = [0u8; 11];
-        diversifier.copy_from_slice(&self.current_action.spend_recipient[..11]);
-
-        let mut claimed_pk_d = [0u8; 32];
-        claimed_pk_d.copy_from_slice(&self.current_action.spend_recipient[11..]);
-
-        if !self.is_current_ironwood_spend_recipient_in_fvk(
-            fvk,
-            keys,
-            &diversifier,
-            &claimed_pk_d,
-        )? {
-            return Err(ParserError::from_str(
-                "PCZT ironwood spend does not belong to signing key",
-            ));
-        }
+        let recipient = self.validated_spend_recipient(fvk, keys)?.ok_or_else(|| {
+            ParserError::from_str("PCZT ironwood spend does not belong to signing key")
+        })?;
 
         let fvk_bytes = fvk.to_bytes();
         let nk: [u8; 32] = fvk_bytes[32..64]
             .try_into()
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-        let expected_nullifier = ledger_zcash_crypto::orchard_spend_nullifier_bytes_v3(
+        let expected_nullifier = ledger_zcash_crypto::orchard::spend_nullifier_v3_for_recipient(
             &nk,
-            &self.current_action.spend_recipient,
+            &recipient,
             self.current_action.spend_value,
             &self.current_action.spend_rho,
             &self.current_action.spend_rseed,
@@ -970,31 +957,6 @@ impl PcztParser {
         }
 
         Ok(())
-    }
-
-    fn is_current_ironwood_spend_recipient_in_fvk(
-        &self,
-        fvk: &OrchardFvk,
-        keys: &mut OrchardDecipherKeys,
-        diversifier: &[u8; 11],
-        claimed_pk_d: &[u8; 32],
-    ) -> Result<bool, ParserError> {
-        let g_d = ledger_zcash_crypto::DiversifiedBase::derive(diversifier)
-            .map_err(|_| ParserError::from_str("Bad PCZT ironwood spend recipient"))?;
-
-        for scope in [OrchardScope::External, OrchardScope::Internal] {
-            let ivk_bytes = keys
-                .incoming_viewing_key(fvk, scope)
-                .map_err(ParserError::from_sw)?;
-            let expected_pk_d = ledger_zcash_crypto::orchard_pk_d_from_base(ivk_bytes, &g_d)
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-
-            if &expected_pk_d == claimed_pk_d {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
     }
 
     fn finish_ironwood_value_sum_sign(&mut self, sign_byte: u8) -> Result<(), ParserError> {
