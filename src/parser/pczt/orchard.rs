@@ -452,7 +452,6 @@ impl PcztParser {
         self.current_action.enc_ciphertext.clear();
         self.current_action.alpha = None;
         self.current_action.path = None;
-        self.current_action.fvk = None;
         {
             self.current_action.note_plaintext_version = NOTE_VERSION_ORCHARD;
         }
@@ -564,11 +563,15 @@ impl PcztParser {
         let is_real_spend = self.current_action.spend_value != 0;
         if is_real_spend {
             let orchard_fvk = self
-                .current_action
-                .fvk
+                .orchard_fvk
                 .as_ref()
                 .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
-            self.verify_current_orchard_spend_nullifier(orchard_fvk)?;
+            let keys = ctx
+                .tx_info
+                .orchard_decipher_keys
+                .as_mut()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+            self.verify_current_orchard_spend_nullifier(orchard_fvk, keys)?;
             // Real spend: the device will be asked to sign this action.
             self.orchard_real_spend_count = self.orchard_real_spend_count.saturating_add(1);
         }
@@ -880,14 +883,23 @@ impl PcztParser {
     }
 
     #[inline(never)]
-    fn verify_current_orchard_spend_nullifier(&self, fvk: &OrchardFvk) -> Result<(), ParserError> {
+    fn verify_current_orchard_spend_nullifier(
+        &self,
+        fvk: &OrchardFvk,
+        keys: &mut OrchardDecipherKeys,
+    ) -> Result<(), ParserError> {
         let mut diversifier = [0u8; 11];
         diversifier.copy_from_slice(&self.current_action.spend_recipient[..11]);
 
         let mut claimed_pk_d = [0u8; 32];
         claimed_pk_d.copy_from_slice(&self.current_action.spend_recipient[11..]);
 
-        if !self.is_current_orchard_spend_recipient_in_fvk(fvk, &diversifier, &claimed_pk_d)? {
+        if !self.is_current_orchard_spend_recipient_in_fvk(
+            fvk,
+            keys,
+            &diversifier,
+            &claimed_pk_d,
+        )? {
             return Err(ParserError::from_str(
                 "PCZT orchard spend does not belong to signing key",
             ));
@@ -933,6 +945,7 @@ impl PcztParser {
     fn is_current_orchard_spend_recipient_in_fvk(
         &self,
         fvk: &OrchardFvk,
+        keys: &mut OrchardDecipherKeys,
         diversifier: &[u8; 11],
         claimed_pk_d: &[u8; 32],
     ) -> Result<bool, ParserError> {
@@ -940,14 +953,10 @@ impl PcztParser {
             .map_err(|_| ParserError::from_str("Bad PCZT orchard spend recipient"))?;
 
         for scope in [OrchardScope::External, OrchardScope::Internal] {
-            let ivk = fvk
-                .to_ivk_ledger(scope)
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-            let ivk_bytes = ivk.to_bytes();
-            let ivk_bytes: [u8; 32] = ivk_bytes[32..64]
-                .try_into()
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-            let expected_pk_d = ledger_zcash_crypto::orchard_pk_d(&ivk_bytes, &g_d)
+            let ivk_bytes = keys
+                .incoming_viewing_key(fvk, scope)
+                .map_err(ParserError::from_sw)?;
+            let expected_pk_d = ledger_zcash_crypto::orchard_pk_d(ivk_bytes, &g_d)
                 .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
 
             if &expected_pk_d == claimed_pk_d {
@@ -1115,34 +1124,16 @@ impl PcztParser {
             self.orchard_action_parsed_count, path
         );
 
-        // Derive FVK (and ASK for real spends) from the session-cached account
-        // spending key, so the exhausting zip32_orchard_derive syscall runs at
-        // most once for the whole transaction rather than once per action.
-        let spend_value = self.current_action.spend_value;
-        let sk = ok!(self.orchard_spending_key(&path));
-        let (orchard_fvk, ask_for_rk) = if spend_value != 0 {
-            let (fvk, ask) =
-                derive_orchard_fvk_and_ask_from_sk(sk).map_err(ParserError::from_sw)?;
-            (fvk, Some(ask))
-        } else {
-            // Dummy spend: throwaway key, rk check skipped.
-            (ok!(derive_orchard_fvk_from_sk(sk)), None)
-        };
+        let ask_for_rk = self.prepare_shielded_account_keys(ctx, &path)?;
         if let Some(ref ask) = ask_for_rk {
             self.verify_current_orchard_rk(ask)?;
         }
-        let network = orchard_network(&path);
-        ctx.tx_info.orchard_decipher_keys = Some(
-            OrchardDecipherKeys::from_fvk(&orchard_fvk, network)
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?,
-        );
         debug!(
             "PCZT orchard action #{} decipher keys prepared",
             self.orchard_action_parsed_count
         );
 
         self.current_action.path = Some(path);
-        self.current_action.fvk = Some(orchard_fvk);
         self.state = PcztParserState::WaitOrchardOutput;
 
         Ok(())

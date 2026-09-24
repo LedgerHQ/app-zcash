@@ -13,6 +13,7 @@ use chacha20::{
 };
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::AeadInPlace};
 use ff::{Field, PrimeField};
+use ledger_device_sdk::ecc::math::EcPoint;
 use ledger_device_sdk::hash::{
     HashInit as _,
     blake2::{Blake2b_256, Blake2bWithPerso},
@@ -244,11 +245,14 @@ fn try_output_recovery_with_ovk(
     pk_d.copy_from_slice(&out_plaintext[..HASH_SIZE]);
     esk.copy_from_slice(&out_plaintext[HASH_SIZE..ORCHARD_OUT_PLAINTEXT_SIZE]);
 
-    if !is_valid_nonidentity_pallas_point(&pk_d)? || !is_valid_nonzero_pallas_scalar(&esk) {
+    let Some(pk_d_point) = validated_nonidentity_pallas_point(&pk_d)? else {
+        return Ok(None);
+    };
+    if !is_valid_nonzero_pallas_scalar(&esk) {
         return Ok(None);
     }
 
-    let shared_secret = key_agreement(&esk, &pk_d)?;
+    let shared_secret = key_agreement_with_point(&esk, pk_d_point)?;
     let k_enc = kdf_orchard(&shared_secret, &action.compact.ephemeral_key)?;
 
     let mut note_plaintext = [0u8; ORCHARD_NOTE_PLAINTEXT_SIZE];
@@ -272,6 +276,7 @@ fn try_output_recovery_with_ovk(
         &rho,
         Some(memo),
         expected_note_version,
+        None,
     )
 }
 
@@ -294,11 +299,11 @@ fn try_compact_note_decryption_with_ivk(
         _ => return Ok(None),
     };
 
-    if !is_valid_nonidentity_pallas_point(&compact.ephemeral_key)? {
+    let Some(ephemeral_point) = validated_nonidentity_pallas_point(&compact.ephemeral_key)? else {
         return Ok(None);
-    }
+    };
 
-    let shared_secret = key_agreement(&ivk.to_repr(), &compact.ephemeral_key)?;
+    let shared_secret = key_agreement_with_point(&ivk.to_repr(), ephemeral_point)?;
     let k_enc = kdf_orchard(&shared_secret, &compact.ephemeral_key)?;
 
     let mut note_plaintext_prefix = compact.enc_ciphertext_prefix;
@@ -324,9 +329,16 @@ fn try_compact_note_decryption_with_ivk(
         &rho,
         None,
         expected_note_version,
+        Some(&g_d),
     )
 }
 
+/// `known_g_d` is only supplied by incoming decryption, which derived it from
+/// the same plaintext prefix. Outgoing recovery derives it here instead.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep note fields and optional reuse material in one validation pass"
+)]
 fn parse_and_validate_note_plaintext(
     compact: &OrchardCompactAction,
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
@@ -335,6 +347,7 @@ fn parse_and_validate_note_plaintext(
     rho: &pallas::Base,
     memo: Option<Box<[u8]>>,
     expected_note_version: u8,
+    known_g_d: Option<&[u8; HASH_SIZE]>,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let Some(note_plaintext) = parse_note_plaintext_prefix(plaintext, expected_note_version) else {
         return Ok(None);
@@ -347,9 +360,12 @@ fn parse_and_validate_note_plaintext(
         return Ok(None);
     }
 
-    let g_d = match crate::diversify_hash_ledger(&note_plaintext.diversifier) {
-        Ok(g_d) => g_d,
-        Err(_) => return Ok(None),
+    let g_d = match known_g_d {
+        Some(g_d) => *g_d,
+        None => match crate::diversify_hash_ledger(&note_plaintext.diversifier) {
+            Ok(g_d) => g_d,
+            Err(_) => return Ok(None),
+        },
     };
 
     let derived_epk = key_agreement(&derived_esk, &g_d)?;
@@ -449,8 +465,16 @@ fn key_agreement(
     scalar_bytes_le: &[u8; HASH_SIZE],
     point_bytes: &[u8; HASH_SIZE],
 ) -> Result<[u8; HASH_SIZE], Error> {
+    key_agreement_with_point(scalar_bytes_le, pallas_point_from_bytes(point_bytes)?)
+}
+
+/// Consumes a decoded point so its SDK resources are released after agreement.
+/// Host-supplied points must pass `validated_nonidentity_pallas_point` first.
+fn key_agreement_with_point(
+    scalar_bytes_le: &[u8; HASH_SIZE],
+    mut point: EcPoint,
+) -> Result<[u8; HASH_SIZE], Error> {
     let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
-    let mut point = pallas_point_from_bytes(point_bytes)?;
     point.rnd_scalarmul(&scalar_bytes_be[..])?;
     pallas_point_to_bytes(&point)
 }
@@ -478,20 +502,28 @@ fn is_valid_nonzero_pallas_scalar(bytes: &[u8; HASH_SIZE]) -> bool {
 }
 
 fn is_valid_nonidentity_pallas_point(bytes: &[u8; HASH_SIZE]) -> Result<bool, Error> {
+    Ok(validated_nonidentity_pallas_point(bytes)?.is_some())
+}
+
+/// Decodes once, retaining the canonical encoding and nonidentity checks.
+fn validated_nonidentity_pallas_point(bytes: &[u8; HASH_SIZE]) -> Result<Option<EcPoint>, Error> {
     if *bytes == [0u8; HASH_SIZE] {
-        return Ok(false);
+        return Ok(None);
     }
 
     let point = match pallas_point_from_bytes(bytes) {
         Ok(point) => point,
-        Err(_) => return Ok(false),
+        Err(_) => return Ok(None),
     };
 
     if point.is_at_infinity()? {
-        return Ok(false);
+        return Ok(None);
     }
 
-    Ok(pallas_point_to_bytes(&point)? == *bytes)
+    if pallas_point_to_bytes(&point)? != *bytes {
+        return Ok(None);
+    }
+    Ok(Some(point))
 }
 
 fn orchard_esk(

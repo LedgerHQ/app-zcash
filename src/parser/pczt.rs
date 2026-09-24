@@ -55,8 +55,8 @@ use crate::utils::{
     output_script_is_regular,
 };
 use crate::zip32::{
-    OrchardAsk, OrchardFvk, derive_orchard_fvk_and_ask_from_sk, derive_orchard_fvk_from_sk,
-    derive_orchard_sk_bytes, orchard_network,
+    OrchardAsk, OrchardFvk, derive_orchard_ask_from_sk, derive_orchard_fvk_and_ask_from_sk,
+    derive_orchard_fvk_from_sk, derive_orchard_sk_bytes, orchard_network,
 };
 
 use super::reader::{ByteReader, ReadBytesExt};
@@ -375,7 +375,6 @@ struct PcztCurrentActionState {
     enc_ciphertext: Vec<u8>,
     alpha: Option<[u8; 32]>,
     path: Option<Bip32Path>,
-    fvk: Option<OrchardFvk>,
     note_plaintext_version: u8,
 }
 
@@ -401,7 +400,6 @@ impl PcztCurrentActionState {
             enc_ciphertext: Vec::new(),
             alpha: None,
             path: None,
-            fvk: None,
             note_plaintext_version: NOTE_VERSION_ORCHARD,
         }
     }
@@ -453,6 +451,8 @@ pub struct PcztParser {
     // Derivation path the cached spending key belongs to, used to reject a
     // second Orchard action declaring a different path.
     orchard_spending_key_path: Option<Bip32Path>,
+    // Shared by both pools under orchard_spending_key_path; discarded before review.
+    orchard_fvk: Option<OrchardFvk>,
     is_v6_tx: bool,
     has_orchard_bundle: bool,
     has_ironwood_bundle: bool,
@@ -502,6 +502,7 @@ impl PcztParser {
             current_action: PcztCurrentActionState::new(),
             orchard_spending_key: None,
             orchard_spending_key_path: None,
+            orchard_fvk: None,
             is_v6_tx: false,
             has_orchard_bundle: false,
             has_ironwood_bundle: false,
@@ -566,6 +567,7 @@ impl PcztParser {
     fn clear_orchard_spending_key(&mut self) {
         self.orchard_spending_key = None;
         self.orchard_spending_key_path = None;
+        self.orchard_fvk = None;
     }
 
     fn reset_on_error<T>(&mut self, result: Result<T, ParserError>) -> Result<T, ParserError> {

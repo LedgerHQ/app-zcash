@@ -1,6 +1,49 @@
 use super::*;
 
 impl PcztParser {
+    /// Reuses account material only after checking the complete cached path.
+    /// ASK is still derived on demand and each caller checks its action's rk.
+    pub(super) fn prepare_shielded_account_keys(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        path: &Bip32Path,
+    ) -> Result<Option<OrchardAsk>, ParserError> {
+        let need_fvk = self.orchard_fvk.is_none();
+        let real_spend = self.current_action.spend_value != 0;
+        // This must run on cache hits too: a different account must fail closed.
+        let sk = self
+            .orchard_spending_key(path)
+            .map_err(ParserError::from_sw)?;
+        let (fvk, ask) = if need_fvk && real_spend {
+            let (fvk, ask) =
+                derive_orchard_fvk_and_ask_from_sk(sk).map_err(ParserError::from_sw)?;
+            (Some(fvk), Some(ask))
+        } else {
+            let fvk = if need_fvk {
+                Some(derive_orchard_fvk_from_sk(sk).map_err(ParserError::from_sw)?)
+            } else {
+                None
+            };
+            let ask = if real_spend {
+                Some(derive_orchard_ask_from_sk(sk).map_err(ParserError::from_sw)?)
+            } else {
+                None
+            };
+            (fvk, ask)
+        };
+        if let Some(fvk) = fvk {
+            ctx.tx_info.orchard_decipher_keys = Some(
+                OrchardDecipherKeys::from_fvk(&fvk, orchard_network(path))
+                    .map_err(ParserError::from_sw)?,
+            );
+            self.orchard_fvk = Some(fvk);
+        }
+        if ctx.tx_info.orchard_decipher_keys.is_none() {
+            return Err(ParserError::from_sw(AppSW::BadState));
+        }
+        Ok(ask)
+    }
+
     pub(super) fn parse_pczt_header(
         &mut self,
         reader: &mut ByteReader<'_>,
@@ -150,6 +193,10 @@ impl PcztParser {
         let spent_from_private = spent_from_private || self.ironwood_spend_value_sum > 0;
         let transfer_type =
             TransferType::classify(spent_from_public, spent_from_private, &ctx.tx_info.outputs);
+        // No validation remains after this point. Dropping the decipher cache
+        // wipes both IVKs and the OVK before the human review wait.
+        self.orchard_fvk = None;
+        ctx.tx_info.orchard_decipher_keys = None;
         // Swap mode substitutes validation for review, exactly as the legacy path does: the user
         // already approved the operation in the Exchange app, which drives this flow without
         // interaction, so prompting here would both stall it and ask about something the user has

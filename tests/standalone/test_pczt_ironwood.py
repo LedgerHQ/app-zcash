@@ -22,6 +22,7 @@ from application_client.zcash_command_sender import (
 )
 from application_client.zcash_transaction import split_tx_v5_for_hash_input
 from application_client.zcash_utils import ripemd160, write_varint
+from application_client.zcash_verify_sign import check_orchard_spendauth_signature_validity
 from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
@@ -937,16 +938,23 @@ def test_pczt_v5_finished_marker_regression(
     assert len(auth_sig) == 64
 
 
-# Expected Orchard spendAuthSig for a V6 migration PCZT on a freshly started Speculos
-# session (deterministic RNG starting point, Speculos default seed).  The value is
-# constant regardless of the Orchard anchor because NU6.3 excludes the anchor from the
-# sighash — only the authorising-data digest includes it, not the sighash.
-# The bundle carries both pools, so the Ironwood action fields enter the V6 sighash too:
-# regenerating the Ironwood vectors changes this signature as well.
+# Retained signature vector and independently computed ZIP 244/229 digest for the
+# V6 migration fixture. Both pools' action fields enter the digest; anchors do not.
 _EXPECTED_V6_ORCHARD_SIG = bytes.fromhex(
     "d8135f4f857948ed5b3bffe37cdf2df87d7be666dbdff5deebc806596383668d"
     "dbc2c635a7e9f004387cd11bcaa5f71801786916fcbc50d809f12b24bf25d23b"
 )
+_EXPECTED_V6_ORCHARD_SIGHASH = bytes.fromhex(
+    "df5bc59246e4cd6a0b2023fd3db85547b663b5517330bf168cb97c9005736e59"
+)
+
+
+def _assert_v6_spendauth_signature(signature: bytes, expected: bytes, digest: bytes) -> None:
+    """Check the signed message without depending on Speculos's nonce sequence."""
+    changed_digest = bytes([digest[0] ^ 1]) + digest[1:]
+    for candidate in (expected, signature):
+        assert check_orchard_spendauth_signature_validity(_RK_ALPHA_1, candidate, digest)
+        assert not check_orchard_spendauth_signature_validity(_RK_ALPHA_1, candidate, changed_digest)
 
 # Second anchor: first byte flipped so the Orchard anchor bytes differ in every bit
 # that the first byte carries, giving an easy regression signal.
@@ -967,13 +975,7 @@ def test_pczt_v6_orchard_anchor_exclusion_regression(
     anchor: bytes,
     test_name: str,
 ):
-    """V6: the Orchard anchor is excluded from the sighash — changing its value must not alter the signature.
-
-    Each parametrised invocation runs in its own Speculos session (fresh deterministic RNG
-    start state).  If the Orchard anchor were included in the V6 sighash the signature
-    would differ from _EXPECTED_V6_ORCHARD_SIG; if it is correctly excluded both anchors
-    produce the same signature.
-    """
+    """Both Orchard anchors must produce signatures for the same known V6 digest."""
     client = ZcashCommandSender(backend)
     with client.send_pczt(
         pczt_global=PCZT_V6_GLOBAL,
@@ -984,12 +986,8 @@ def test_pczt_v6_orchard_anchor_exclusion_regression(
     ):
         _review_approve(scenario_navigator, test_name)
     orchard_sig = client.pczt_sign_orchard(action_index=0).data
-    assert orchard_sig == _EXPECTED_V6_ORCHARD_SIG, (
-        "Orchard spendAuthSig changed when Orchard anchor changed — "
-        f"Orchard anchor incorrectly excluded from V6 sighash.\n"
-        f"anchor={anchor.hex()}\n"
-        f"got:  {orchard_sig.hex()}\n"
-        f"want: {_EXPECTED_V6_ORCHARD_SIG.hex()}"
+    _assert_v6_spendauth_signature(
+        orchard_sig, _EXPECTED_V6_ORCHARD_SIG, _EXPECTED_V6_ORCHARD_SIGHASH
     )
 
 
@@ -1944,3 +1942,71 @@ def test_pczt_v1_metadata_backward_compat_in_v2_bundle(
 
     auth_sig = client.pczt_sign_ironwood(action_index=0).data
     assert len(auth_sig) == 64
+
+
+
+def test_pczt_ironwood_dummy_before_real_reuses_account_keys(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A dummy can populate the account cache before a real spend needs its ASK."""
+    client = ZcashCommandSender(backend)
+    bundle = _ironwood_bundle_with_external_recipient()
+    bundle.actions.reverse()
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    ):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_ironwood_display_private_transfer_with_change",
+        )
+    assert len(client.pczt_sign_ironwood(action_index=1).data) == 64
+
+
+@pytest.mark.parametrize("field", [
+    "signing_path", "rk", "nullifier", "spend_recipient", "cv_net", "ephemeral_key", "cmx",
+])
+def test_pczt_ironwood_cached_keys_preserve_action_checks(backend, field):
+    """A valid first action must not let a malformed second action reuse validation."""
+    client = ZcashCommandSender(backend)
+    bundle = _ironwood_bundle_with_external_recipient()
+    bundle.actions.reverse()
+    action = bundle.actions[1]
+    if field == "signing_path":
+        action.signing_path = "m/32'/133'/1'"
+        expected = Errors.SW_BAD_STATE
+    else:
+        original = getattr(action, field)
+        setattr(action, field, original[:-1] + bytes([original[-1] ^ 1]))
+        expected = Errors.SW_INVALID_TRANSACTION
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            ironwood_bundle=bundle,
+        ):
+            pytest.fail(f"Device accepted a cached-account action with invalid {field}")
+    assert error.value.status == expected
+    assert not error.value.data
+
+
+def test_pczt_v6_cached_account_path_is_checked_between_pools(backend):
+    """A cache populated by Orchard cannot authorize a different Ironwood account."""
+    client = ZcashCommandSender(backend)
+    ironwood = _valid_ironwood_bundle()
+    ironwood.actions[0].signing_path = "m/32'/133'/1'"
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
+            orchard_bundle=_valid_orchard_bundle(),
+            ironwood_bundle=ironwood,
+        ):
+            pytest.fail("Device reused account keys for a different pool's account")
+    assert error.value.status == Errors.SW_BAD_STATE
+    assert not error.value.data

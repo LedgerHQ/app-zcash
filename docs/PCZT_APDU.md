@@ -14,6 +14,11 @@ components.
 
 ## Common rules
 
+- Both shielded pools share a transaction-scoped account-key cache. Each action's
+  complete derivation path must match the first action's path, including on cache
+  hits. FVK and viewing-key derivation are reused; randomized verification keys,
+  spend ownership, nullifiers, and commitments are still checked per action.
+  Viewing keys are discarded before review, with IVK and OVK bytes zeroized.
 - The bundle command order is fixed:
   `PCZT_HEADER`, then `PCZT_TRANSPARENT_INPUT`, then
   `PCZT_TRANSPARENT_OUTPUT`, then `PCZT_ORCHARD_ACTION`, and for V6
