@@ -949,14 +949,14 @@ impl PcztParser {
         diversifier: &[u8; 11],
         claimed_pk_d: &[u8; 32],
     ) -> Result<bool, ParserError> {
-        let g_d = ledger_zcash_crypto::diversify_hash_ledger(diversifier)
+        let g_d = ledger_zcash_crypto::DiversifiedBase::derive(diversifier)
             .map_err(|_| ParserError::from_str("Bad PCZT orchard spend recipient"))?;
 
         for scope in [OrchardScope::External, OrchardScope::Internal] {
             let ivk_bytes = keys
                 .incoming_viewing_key(fvk, scope)
                 .map_err(ParserError::from_sw)?;
-            let expected_pk_d = ledger_zcash_crypto::orchard_pk_d(ivk_bytes, &g_d)
+            let expected_pk_d = ledger_zcash_crypto::orchard_pk_d_from_base(ivk_bytes, &g_d)
                 .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
 
             if &expected_pk_d == claimed_pk_d {

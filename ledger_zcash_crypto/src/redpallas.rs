@@ -14,6 +14,8 @@ use ledger_device_sdk::{
 use pasta_curves::pallas;
 use zeroize::{Zeroize as _, Zeroizing};
 
+use crate::points::Basepoint;
+
 use crate::{
     bytes::reverse_copy,
     montgomery::{
@@ -21,16 +23,6 @@ use crate::{
     },
 };
 
-// Orchard SpendAuthSig basepoint encoding
-const ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES: [u8; 32] = [
-    0x63, 0xc9, 0x75, 0xb8, 0x84, 0x72, 0x1a, 0x8d, 0x0c, 0xa1, 0x70, 0x7b, 0xe3, 0x0c, 0x7f, 0x0c,
-    0x5f, 0x44, 0x5f, 0x3e, 0x7c, 0x18, 0x8d, 0x3b, 0x06, 0xd6, 0xf1, 0x28, 0xb3, 0x23, 0x55, 0xb7,
-];
-// Orchard BindingSig basepoint encoding
-const ORCHARD_BINDINGSIG_BASEPOINT_BYTES: [u8; 32] = [
-    0x91, 0x5a, 0x3c, 0x88, 0x68, 0xc6, 0xc3, 0x0e, 0x2f, 0x80, 0x90, 0xee, 0x45, 0xd7, 0x6e, 0x40,
-    0x48, 0x20, 0x8d, 0xea, 0x5b, 0x23, 0x66, 0x4f, 0xbb, 0x09, 0xa4, 0x0f, 0x55, 0x44, 0xf4, 0x07,
-];
 const REDPALLAS_HSTAR_PERSONALIZATION: [u8; 16] = *b"Zcash_RedPallasH";
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -326,7 +318,7 @@ pub fn spendauth_randomized_verification_key_bytes(
 
     // `basepoint_mul_bytes_from_scalar_be` returns the compressed key bytes and
     // drops the SDK `EcPoint` immediately (no `point_from_sdk_point`).
-    basepoint_mul_bytes_from_scalar_be(&ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES, &randomized_bytes_be)
+    basepoint_mul_bytes_from_scalar_be(Basepoint::SpendAuth, &randomized_bytes_be)
 }
 
 /// Creates a RedPallas spend authorization signature using Ledger SDK hashing,
@@ -339,7 +331,7 @@ pub fn spendauth_sign(
     redpallas_sign(
         &signing_key.bytes,
         &signing_key.verification_key_bytes(),
-        &ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES,
+        Basepoint::SpendAuth,
         random_bytes,
         msg,
     )
@@ -355,7 +347,7 @@ pub fn binding_sign(
     redpallas_sign(
         &signing_key.bytes,
         &signing_key.verification_key_bytes(),
-        &ORCHARD_BINDINGSIG_BASEPOINT_BYTES,
+        Basepoint::Randomness,
         random_bytes,
         msg,
     )
@@ -364,14 +356,14 @@ pub fn binding_sign(
 fn redpallas_sign(
     scalar_bytes_le: &[u8; 32],
     pk_bytes: &[u8; 32],
-    basepoint_bytes: &[u8; 32],
+    basepoint: Basepoint,
     random_bytes: &[u8; 80],
     msg: &[u8],
 ) -> Result<[u8; 64], Error> {
     let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
     let nonce_bytes_le = redpallas_hstar(&[random_bytes, pk_bytes, msg])?;
     let nonce_bytes_be = canonical_scalar_bytes_be(&nonce_bytes_le)?;
-    let r_bytes = basepoint_mul_bytes_from_scalar_be(basepoint_bytes, &nonce_bytes_be)?;
+    let r_bytes = basepoint_mul_bytes_from_scalar_be(basepoint, &nonce_bytes_be)?;
 
     let challenge_bytes_le = redpallas_hstar(&[&r_bytes, pk_bytes, msg])?;
     let challenge_bytes_be = canonical_scalar_bytes_be(&challenge_bytes_le)?;
@@ -433,8 +425,7 @@ fn canonical_scalar_bytes_be(scalar_bytes_le: &[u8; 32]) -> Result<Zeroizing<[u8
 fn spendauth_verification_key_from_scalar_be(
     scalar_bytes_be: &[u8; 32],
 ) -> Result<SpendAuthVerificationKey, Error> {
-    let (bytes, point) =
-        basepoint_mul_from_scalar_be(&ORCHARD_SPENDAUTHSIG_BASEPOINT_BYTES, scalar_bytes_be)?;
+    let (bytes, point) = basepoint_mul_from_scalar_be(Basepoint::SpendAuth, scalar_bytes_be)?;
 
     Ok(SpendAuthVerificationKey {
         bytes,
@@ -445,8 +436,7 @@ fn spendauth_verification_key_from_scalar_be(
 fn binding_verification_key_from_scalar_be(
     scalar_bytes_be: &[u8; 32],
 ) -> Result<BindingVerificationKey, Error> {
-    let (bytes, point) =
-        basepoint_mul_from_scalar_be(&ORCHARD_BINDINGSIG_BASEPOINT_BYTES, scalar_bytes_be)?;
+    let (bytes, point) = basepoint_mul_from_scalar_be(Basepoint::Randomness, scalar_bytes_be)?;
 
     Ok(BindingVerificationKey {
         bytes,
@@ -455,21 +445,18 @@ fn binding_verification_key_from_scalar_be(
 }
 
 fn basepoint_mul_bytes_from_scalar_be(
-    basepoint_bytes: &[u8; 32],
+    basepoint: Basepoint,
     scalar_bytes_be: &[u8; 32],
 ) -> Result<[u8; 32], Error> {
-    let (bytes, _) = basepoint_mul_from_scalar_be(basepoint_bytes, scalar_bytes_be)?;
+    let (bytes, _) = basepoint_mul_from_scalar_be(basepoint, scalar_bytes_be)?;
     Ok(bytes)
 }
 
 fn basepoint_mul_from_scalar_be(
-    basepoint_bytes: &[u8; 32],
+    basepoint: Basepoint,
     scalar_bytes_be: &[u8; 32],
 ) -> Result<([u8; 32], EcPoint), Error> {
-    let (basepoint_x_be, basepoint_sign) = decode_pallas_point_encoding(basepoint_bytes);
-
-    let mut point = EcPoint::new(CurvesId::Pallas)?;
-    point.decompress(&basepoint_x_be, basepoint_sign)?;
+    let mut point = basepoint.to_sdk()?;
     point.rnd_scalarmul(scalar_bytes_be)?;
 
     let mut x_be = [0u8; 32];
@@ -573,16 +560,6 @@ fn base_from_canonical_repr_unchecked(repr: [u8; 32]) -> pallas::Base {
     let wide = mul_u64x4(&repr_u64x4, &r2);
     let mont = montgomery_reduce_u64x8(wide, modulus, inv);
     byte_to_fp(&mont)
-}
-
-fn decode_pallas_point_encoding(encoded: &[u8; 32]) -> ([u8; 32], u32) {
-    let mut x_le = *encoded;
-    let sign = (x_le[31] >> 7) as u32;
-    x_le[31] &= 0x7f;
-
-    let mut x_be = [0u8; 32];
-    reverse_copy(&mut x_be, &x_le);
-    (x_be, sign)
 }
 
 fn encode_pallas_point_bytes(x_be: &[u8; 32], sign: u32) -> [u8; 32] {

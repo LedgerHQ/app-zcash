@@ -1,7 +1,6 @@
 use ff::{Field, FromUniformBytes, PrimeField};
 use ledger_device_sdk::{
     debug,
-    ecc::{CurvesId, math::EcPoint},
     hash::{
         HashInit as _,
         blake2::{Blake2b_512, Blake2bWithPerso},
@@ -9,7 +8,7 @@ use ledger_device_sdk::{
 };
 use pasta_curves::pallas;
 
-use crate::{Error, bytes::reverse_copy};
+use crate::{Error, bytes::reverse_copy, points::AffinePoint};
 
 // `hash_to_field_pallas` below is a Ledger-port of `pasta_curves::hashtocurve::hash_to_field`.
 // In the original code these are `R_IN_BYTES = 128` and `CHUNKLEN = 64`.
@@ -325,7 +324,7 @@ impl JacobianPoint {
         }
     }
 
-    fn to_compressed_bytes(self) -> Result<Option<[u8; 32]>, Error> {
+    fn to_affine(self) -> Result<Option<AffinePoint>, Error> {
         if self.is_identity() {
             return Ok(None);
         }
@@ -337,32 +336,55 @@ impl JacobianPoint {
         let x = self.x.mul(&zinv2)?;
         let y = self.y.mul(&zinv2)?.mul(&zinv)?;
 
-        let mut point = EcPoint::new(CurvesId::Pallas)?;
-        point.init(&x.to_be_bytes(), &y.to_be_bytes())?;
-
-        let mut x_be = [0u8; 32];
-        let sign = point.compress(&mut x_be)?;
-        Ok(Some(encode_pallas_point_bytes(&x_be, sign)))
+        Ok(Some(AffinePoint {
+            x_be: x.to_be_bytes(),
+            y_be: y.to_be_bytes(),
+        }))
     }
 }
 
+/// A nonidentity Pallas base derived by Orchard's diversifier hash.
+///
+/// Full coordinates avoid decoding the canonical encoding again at each use.
+/// Construction is restricted to hash-to-curve; wallet-provided encodings cannot
+/// bypass point validation through this type. It holds no SDK allocation.
+#[derive(Clone, Copy)]
+pub struct DiversifiedBase(AffinePoint);
+
+impl DiversifiedBase {
+    /// Derives the base, including Orchard's identity-result fallback.
+    pub fn derive(d: &[u8; 11]) -> Result<Self, Error> {
+        let point = match hash_to_curve_pallas(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION, d)? {
+            Some(point) => point,
+            None => hash_to_curve_pallas(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION, &[])?
+                .ok_or(Error::InvalidDiversifyHashPoint)?,
+        };
+        Ok(Self(point))
+    }
+
+    /// Returns the same canonical compressed encoding used in note commitments.
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.0.to_bytes()
+    }
+
+    pub(crate) fn to_sdk(self) -> Result<ledger_device_sdk::ecc::math::EcPoint, Error> {
+        Ok(self.0.to_sdk()?)
+    }
+}
+
+/// Returns the canonical Orchard diversifier-hash encoding.
 pub fn diversify_hash_ledger(d: &[u8; 11]) -> Result<[u8; 32], Error> {
-    if let Some(g_d) = hash_to_curve_pallas(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION, d)? {
-        return Ok(g_d);
-    }
-
-    hash_to_curve_pallas(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION, &[])?
-        .ok_or(Error::InvalidDiversifyHashPoint)
+    Ok(DiversifiedBase::derive(d)?.to_bytes())
 }
 
-fn hash_to_curve_pallas(domain_prefix: &str, message: &[u8]) -> Result<Option<[u8; 32]>, Error> {
+fn hash_to_curve_pallas(domain_prefix: &str, message: &[u8]) -> Result<Option<AffinePoint>, Error> {
     let [u0, u1] = hash_to_field_pallas(domain_prefix, message)?;
     let q0 = map_to_curve_simple_swu_iso_pallas(&u0)?;
     let q1 = map_to_curve_simple_swu_iso_pallas(&u1).inspect_err(|e| {
         debug!("map_to_curve_simple_swu_iso_pallas failed for u1: {:?}", e);
         debug!("u1: {:?}", u1.to_be_bytes());
     })?;
-    iso_map_pallas(&q0.add_iso_pallas(&q1)?)?.to_compressed_bytes()
+    iso_map_pallas(&q0.add_iso_pallas(&q1)?)?.to_affine()
 }
 
 fn hash_to_field_pallas(domain_prefix: &str, message: &[u8]) -> Result<[Fp; 2], Error> {
@@ -532,9 +554,51 @@ fn iso_map_pallas(point: &JacobianPoint) -> Result<JacobianPoint, Error> {
     })
 }
 
-fn encode_pallas_point_bytes(x_be: &[u8; 32], sign: u32) -> [u8; 32] {
-    let mut x_le = [0u8; 32];
-    reverse_copy(&mut x_le, x_be);
-    x_le[31] |= ((sign & 1) as u8) << 7;
-    x_le
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ledger_device_sdk::testing::TestType;
+    use pasta_curves::{arithmetic::CurveExt, group::GroupEncoding};
+
+    #[test_case]
+    const DERIVED_BASES_MATCH_SOFTWARE_AND_DECODED_PATH: TestType = TestType {
+        modname: module_path!(),
+        name: "derived_bases_match_software_and_decoded_path",
+        f: || {
+            for d in [
+                [0; 11],
+                [1; 11],
+                [0xff; 11],
+                [
+                    0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe,
+                ],
+            ] {
+                let base = DiversifiedBase::derive(&d).map_err(|_| ())?;
+                let expected =
+                    pallas::Point::hash_to_curve(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION)(&d);
+                if base.to_bytes() != expected.to_bytes() {
+                    return Err(());
+                }
+                let initialized = base.to_sdk().map_err(|_| ())?;
+                if crate::pallas_point_to_bytes(&initialized).map_err(|_| ())? != base.to_bytes() {
+                    return Err(());
+                }
+                drop(initialized);
+                for scalar in [1u64, 7, u64::MAX] {
+                    let ivk = pallas::Base::from(scalar).to_repr();
+                    let fast = crate::orchard_pk_d_from_base(&ivk, &base).map_err(|_| ())?;
+                    let decoded = crate::orchard_pk_d(&ivk, &base.to_bytes()).map_err(|_| ())?;
+                    if fast != decoded {
+                        return Err(());
+                    }
+                }
+                for ivk in [[0; 32], [0xff; 32]] {
+                    if crate::orchard_pk_d_from_base(&ivk, &base).is_ok() {
+                        return Err(());
+                    }
+                }
+            }
+            Ok(())
+        },
+    };
 }

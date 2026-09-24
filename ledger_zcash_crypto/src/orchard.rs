@@ -21,6 +21,8 @@ use ledger_device_sdk::hash::{
 use pasta_curves::pallas;
 use zeroize::Zeroizing;
 
+use crate::points::Basepoint;
+
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
     ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
@@ -53,10 +55,6 @@ const NOTE_COMMITMENT_MESSAGE_BITS: usize = 32 * 8 + 32 * 8 + 64 + L_ORCHARD_BAS
 const PRF_OCK_ORCHARD_PERSONALIZATION: [u8; 16] = *b"Zcash_Orchardock";
 const KDF_ORCHARD_PERSONALIZATION: [u8; 16] = *b"Zcash_OrchardKDF";
 const NOTE_COMMITMENT_PERSONALIZATION: &str = "z.cash:Orchard-NoteCommit";
-const ORCHARD_NULLIFIER_K_BASEPOINT_BYTES: [u8; HASH_SIZE] = [
-    0x75, 0xca, 0x47, 0xe4, 0xa7, 0x6a, 0x6f, 0xd3, 0x9b, 0xdb, 0xb5, 0xcc, 0x92, 0xb1, 0x7e, 0x5e,
-    0xcf, 0xc9, 0xf4, 0xfa, 0x71, 0x55, 0x37, 0x2e, 0x8d, 0x19, 0xa8, 0x9c, 0x16, 0xaa, 0xe7, 0x25,
-];
 
 #[derive(Clone, Copy, Debug)]
 pub struct OrchardCompactAction {
@@ -136,10 +134,8 @@ pub fn spend_nullifier_bytes(
         // with no documented ceiling, and Speculos does not model it, so this
         // path keeps its footprint minimal by construction rather than against a
         // measured limit.
-        let nullifier_k_ec = pallas_basepoint_mul(
-            &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
-            &scalar_bytes_be(&nullifier_scalar),
-        )?;
+        let nullifier_k_ec =
+            pallas_basepoint_mul(Basepoint::Nullifier, &scalar_bytes_be(&nullifier_scalar))?;
         point_from_sdk_point(&nullifier_k_ec)? + cm
     };
 
@@ -181,10 +177,8 @@ pub fn spend_nullifier_bytes_v3(
     let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
         cm
     } else {
-        let nullifier_k_ec = pallas_basepoint_mul(
-            &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
-            &scalar_bytes_be(&nullifier_scalar),
-        )?;
+        let nullifier_k_ec =
+            pallas_basepoint_mul(Basepoint::Nullifier, &scalar_bytes_be(&nullifier_scalar))?;
         point_from_sdk_point(&nullifier_k_ec)? + cm
     };
 
@@ -315,11 +309,11 @@ fn try_compact_note_decryption_with_ivk(
         return Ok(None);
     };
 
-    let g_d = match crate::diversify_hash_ledger(&diversifier) {
+    let g_d = match crate::DiversifiedBase::derive(&diversifier) {
         Ok(g_d) => g_d,
         Err(_) => return Ok(None),
     };
-    let pk_d = crate::orchard_pk_d(&ivk.to_repr(), &g_d)?;
+    let pk_d = crate::orchard_pk_d_from_base(&ivk.to_repr(), &g_d)?;
 
     parse_and_validate_note_plaintext(
         compact,
@@ -347,7 +341,7 @@ fn parse_and_validate_note_plaintext(
     rho: &pallas::Base,
     memo: Option<Box<[u8]>>,
     expected_note_version: u8,
-    known_g_d: Option<&[u8; HASH_SIZE]>,
+    known_g_d: Option<&crate::DiversifiedBase>,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let Some(note_plaintext) = parse_note_plaintext_prefix(plaintext, expected_note_version) else {
         return Ok(None);
@@ -362,13 +356,14 @@ fn parse_and_validate_note_plaintext(
 
     let g_d = match known_g_d {
         Some(g_d) => *g_d,
-        None => match crate::diversify_hash_ledger(&note_plaintext.diversifier) {
+        None => match crate::DiversifiedBase::derive(&note_plaintext.diversifier) {
             Ok(g_d) => g_d,
             Err(_) => return Ok(None),
         },
     };
 
-    let derived_epk = key_agreement(&derived_esk, &g_d)?;
+    let derived_epk = key_agreement_with_point(&derived_esk, g_d.to_sdk()?)?;
+    let g_d = g_d.to_bytes();
     if !bytes_eq(&derived_epk, &compact.ephemeral_key) {
         return Ok(None);
     }
@@ -459,13 +454,6 @@ fn chacha20_decrypt_compact(
     let mut chacha = ChaCha20::new(key.into(), (&nonce).into());
     chacha.seek(64);
     chacha.apply_keystream(plaintext);
-}
-
-fn key_agreement(
-    scalar_bytes_le: &[u8; HASH_SIZE],
-    point_bytes: &[u8; HASH_SIZE],
-) -> Result<[u8; HASH_SIZE], Error> {
-    key_agreement_with_point(scalar_bytes_le, pallas_point_from_bytes(point_bytes)?)
 }
 
 /// Consumes a decoded point so its SDK resources are released after agreement.
