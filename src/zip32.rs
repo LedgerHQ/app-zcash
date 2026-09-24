@@ -138,9 +138,7 @@ pub fn derive_orchard_fvk_and_ask_from_sk(
     sk_bytes: &Secret<32>,
 ) -> Result<(OrchardFvk, OrchardAsk), AppSW> {
     let sk = orchard_sk_from_bytes(sk_bytes)?;
-    let fvk = OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
-    let ask = OrchardAsk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
-    Ok((fvk, ask))
+    OrchardFvk::ledger_try_from_with_ask(&sk).map_err(map_ledger_crypto_error)
 }
 
 // ASK derivation from a cached spending key (no `zip32_orchard_derive`).

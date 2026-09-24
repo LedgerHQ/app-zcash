@@ -276,25 +276,36 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the inner scalar value.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn inner(&self) -> pallas::Scalar {
-@@ -344,6 +468,17 @@
+@@ -344,6 +468,28 @@
  }
  
  impl FullViewingKey {
-+    /// Derives the internal full viewing key corresponding to this full viewing key.
++    /// Derives the full viewing key using Ledger primitives.
 +    #[cfg(feature = "ledger")]
 +    pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
++        Self::ledger_try_from_with_ask(sk).map(|(fvk, _)| fvk)
++    }
++
++    /// Derives a full viewing key and its normalized spend authorizing key together.
++    /// The returned authorizing key is the same one used to construct `ak`;
++    /// callers can use it immediately without repeating its scalar multiplication.
++    #[cfg(feature = "ledger")]
++    pub fn ledger_try_from_with_ask(
++        sk: &SpendingKey,
++    ) -> Result<(Self, SpendAuthorizingKey), ledger_zcash_crypto::Error> {
 +        let ask = SpendAuthorizingKey::ledger_try_from(sk)?;
-+        Ok(FullViewingKey {
++        let fvk = FullViewingKey {
 +            ak: (&ask).into(),
 +            nk: NullifierDerivingKey::ledger_try_from(sk)?,
 +            rivk: CommitIvkRandomness::ledger_try_from(sk)?,
-+        })
++        };
++        Ok((fvk, ask))
 +    }
 +
      /// Returns the nullifier deriving key for this full viewing key.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn nk(&self) -> &NullifierDerivingKey {
-@@ -379,6 +514,22 @@
+@@ -379,6 +525,22 @@
          )
      }
  
@@ -317,7 +328,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the payment address for this key at the given index.
      pub fn address_at(&self, j: impl Into<DiversifierIndex>, scope: Scope) -> Address {
          self.to_ivk(scope).address_at(j)
-@@ -480,6 +631,65 @@
+@@ -480,6 +642,65 @@
              Scope::Internal => OutgoingViewingKey::from_fvk(&self.derive_internal()),
          }
      }
@@ -383,7 +394,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  /// A key that provides the capability to derive a sequence of diversifiers.
-@@ -576,6 +786,23 @@
+@@ -576,6 +797,23 @@
          let ivk = KeyAgreementPrivateKey::derive_inner(fvk).unwrap();
          KeyAgreementPrivateKey(ivk.into())
      }
@@ -407,7 +418,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl KeyAgreementPrivateKey {
-@@ -612,6 +839,19 @@
+@@ -612,6 +850,19 @@
          let pk_d = DiversifiedTransmissionKey::derive(&prepared_ivk, &d);
          Address::from_parts(d, pk_d)
      }
@@ -427,7 +438,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  /// A key that provides the capability to detect and decrypt incoming notes from the block
-@@ -640,6 +880,15 @@
+@@ -640,6 +891,15 @@
              ivk: KeyAgreementPrivateKey::from_fvk(fvk),
          }
      }
@@ -443,7 +454,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl IncomingViewingKey {
-@@ -680,6 +929,16 @@
+@@ -680,6 +940,16 @@
          self.address(self.dk.get(j))
      }
  
@@ -460,7 +471,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the payment address for this key corresponding to the given diversifier.
      pub fn address(&self, d: Diversifier) -> Address {
          self.ivk.address(d)
-@@ -741,6 +1000,12 @@
+@@ -741,6 +1011,12 @@
      fn from_fvk(fvk: &FullViewingKey) -> Self {
          fvk.derive_dk_ovk().1
      }
@@ -473,7 +484,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl From<[u8; 32]> for OutgoingViewingKey {
-@@ -785,6 +1050,13 @@
+@@ -785,6 +1061,13 @@
          NonIdentityPallasPoint::from_bytes(bytes).map(DiversifiedTransmissionKey)
      }
  

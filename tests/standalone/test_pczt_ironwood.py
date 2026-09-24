@@ -1046,15 +1046,14 @@ def test_pczt_ironwood_sign_replay_in_session_rejected(
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
-# Expected Ironwood spendAuthSig for a V6 Ironwood-only PCZT on a freshly started Speculos
-# session (deterministic RNG starting point, Speculos default seed).  Constant regardless of
-# the Ironwood anchor because NU6.3 excludes the anchor from the sighash — only the
-# authorising-data digest includes it, not the sighash.
-# The empty Orchard component uses the V6 personalization b"ZTxIdOrchardH_v6" (ZIP 229),
-# not the V5 b"ZTxIdOrchardHash".
+# Retained signature vector and independently computed ZIP 244/229 digest for the
+# Ironwood-only fixture. The empty Orchard component uses b"ZTxIdOrchardH_v6".
 _EXPECTED_V6_IRONWOOD_SIG = bytes.fromhex(
     "824a4cf72c60ec42e5269a8b725449f53938ea2dabbe6875296857c234cffebe"
     "526f19bc1c102aadad8970c5e11fbfeb9ed0032563d071e6b2ccada7c4c4431c"
+)
+_EXPECTED_V6_IRONWOOD_SIGHASH = bytes.fromhex(
+    "7488ce0205f20cb5b780b4a37f0f967e3e6cc550ef93082baa07231e90567298"
 )
 
 
@@ -1072,12 +1071,7 @@ def test_pczt_v6_ironwood_anchor_exclusion_regression(
     anchor: bytes,
     test_name: str,
 ):
-    """V6: Ironwood anchor excluded from sighash — changing it must not alter the signature.
-
-    Each parametrised invocation runs in its own Speculos session (fresh deterministic RNG).
-    If the Ironwood anchor were included in the V6 sighash the signature would differ from
-    _EXPECTED_V6_IRONWOOD_SIG; if correctly excluded both anchors produce the same signature.
-    """
+    """Both Ironwood anchors must produce signatures for the same known V6 digest."""
     client = ZcashCommandSender(backend)
     with client.send_pczt(
         pczt_global=PCZT_V6_GLOBAL,
@@ -1087,12 +1081,8 @@ def test_pczt_v6_ironwood_anchor_exclusion_regression(
     ):
         _review_approve(scenario_navigator, test_name)
     ironwood_sig = client.pczt_sign_ironwood(action_index=0).data
-    assert ironwood_sig == _EXPECTED_V6_IRONWOOD_SIG, (
-        "Ironwood spendAuthSig changed when Ironwood anchor changed — "
-        f"Ironwood anchor incorrectly included in V6 sighash.\n"
-        f"anchor={anchor.hex()}\n"
-        f"got:  {ironwood_sig.hex()}\n"
-        f"want: {_EXPECTED_V6_IRONWOOD_SIG.hex()}"
+    _assert_v6_spendauth_signature(
+        ironwood_sig, _EXPECTED_V6_IRONWOOD_SIG, _EXPECTED_V6_IRONWOOD_SIGHASH
     )
 
 

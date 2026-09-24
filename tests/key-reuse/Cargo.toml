@@ -1,0 +1,34 @@
+[package]
+name = "ledger-key-reuse-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+ledger_device_sdk = { version = "1.37", features = ["sys", "unit_test"] }
+ledger_zcash_crypto = { path = "../../ledger_zcash_crypto" }
+orchard = { path = "../../vendor/orchard", default-features = false, features = ["ledger"] }
+pasta_curves = { version = "0.5", default-features = false, features = ["alloc", "repr-c"] }
+ff = { version = "0.13", default-features = false }
+
+[patch.crates-io]
+# Pulled by bitvec (via orchard)
+radium = { path = "../../vendor/radium" }
+# Pulled by bip32 (zcash_transparent) and zcash_script
+secp256k1 = { path = "../../vendor/rust-secp256k1" }
+# Used directly and by zcash_primitives
+orchard = { path = "../../vendor/orchard" }
+# Pulled by zcash_primitives
+sapling-crypto = { path = "../../vendor/sapling-crypto" }
+# Pulled by lazy_static
+spin = { path = "../../vendor/spin" }
+portable-atomic = { git = "https://github.com/taiki-e/portable-atomic.git", tag = "v1.12.0" }
+# Pulled by orchard and redjubjub
+reddsa = { path = "../../vendor/reddsa" }
+
+
+[profile.release]
+opt-level = "z"
+lto = "fat"

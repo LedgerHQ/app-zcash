@@ -468,15 +468,26 @@ impl From<FullViewingKey> for SpendValidatingKey {
 }
 
 impl FullViewingKey {
-    /// Derives the internal full viewing key corresponding to this full viewing key.
+    /// Derives the full viewing key using Ledger primitives.
     #[cfg(feature = "ledger")]
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
+        Self::ledger_try_from_with_ask(sk).map(|(fvk, _)| fvk)
+    }
+
+    /// Derives a full viewing key and its normalized spend authorizing key together.
+    /// The returned authorizing key is the same one used to construct `ak`;
+    /// callers can use it immediately without repeating its scalar multiplication.
+    #[cfg(feature = "ledger")]
+    pub fn ledger_try_from_with_ask(
+        sk: &SpendingKey,
+    ) -> Result<(Self, SpendAuthorizingKey), ledger_zcash_crypto::Error> {
         let ask = SpendAuthorizingKey::ledger_try_from(sk)?;
-        Ok(FullViewingKey {
+        let fvk = FullViewingKey {
             ak: (&ask).into(),
             nk: NullifierDerivingKey::ledger_try_from(sk)?,
             rivk: CommitIvkRandomness::ledger_try_from(sk)?,
-        })
+        };
+        Ok((fvk, ask))
     }
 
     /// Returns the nullifier deriving key for this full viewing key.
