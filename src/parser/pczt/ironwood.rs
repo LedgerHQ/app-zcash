@@ -990,7 +990,7 @@ impl PcztParser {
     }
 
     #[inline(never)]
-    fn verify_current_ironwood_rk(&self, ask: &OrchardAsk) -> Result<(), ParserError> {
+    fn verify_current_ironwood_rk(&self, ask: &OrchardValidationKey) -> Result<(), ParserError> {
         let alpha = self
             .current_action
             .alpha
@@ -1005,7 +1005,7 @@ impl PcztParser {
             .randomized_verification_key_bytes(&alpha)
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
 
-        if expected_rk != self.current_action.rk {
+        if <[u8; 32]>::from(expected_rk) != self.current_action.rk {
             return Err(ParserError::from_str(
                 "PCZT ironwood rk does not match alpha and signing key",
             ));
@@ -1117,8 +1117,12 @@ impl PcztParser {
             self.ironwood_action_parsed_count, path
         );
 
-        let ask_for_rk = self.prepare_shielded_account_keys(ctx, &path)?;
-        if let Some(ref ask) = ask_for_rk {
+        self.prepare_shielded_account_keys(ctx, &path)?;
+        if self.current_action.spend_value != 0 {
+            let ask = self
+                .orchard_validation_key
+                .as_ref()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
             self.verify_current_ironwood_rk(ask)?;
         }
         debug!(

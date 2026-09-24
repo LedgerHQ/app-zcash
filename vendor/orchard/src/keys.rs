@@ -157,7 +157,46 @@ impl SpendingKey {
 #[derive(Clone, Debug)]
 pub struct SpendAuthorizingKey(redpallas::SigningKey<SpendAuth>);
 
+/// A normalized authorizing key retained for Ledger transaction validation.
+/// The scalar is wiped on drop. This type does not clone or expose its secret.
+#[cfg(feature = "ledger")]
+pub struct LedgerValidationKey(Zeroizing<[u8; 32]>);
+
+#[cfg(feature = "ledger")]
+impl core::fmt::Debug for LedgerValidationKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LedgerValidationKey")
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "ledger")]
+impl LedgerValidationKey {
+    /// Computes a typed compressed verification key with the Ledger backend,
+    /// without constructing an intermediate curve point.
+    pub fn randomized_verification_key_bytes(
+        &self,
+        randomizer: &pallas::Scalar,
+    ) -> Result<redpallas::VerificationKeyBytes<SpendAuth>, ledger_zcash_crypto::Error> {
+        let randomizer_bytes = Zeroizing::new(randomizer.to_repr());
+        Ok(
+            ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
+                &self.0,
+                &randomizer_bytes,
+            )?
+            .into(),
+        )
+    }
+}
+
 impl SpendAuthorizingKey {
+    /// Retains the normalized scalar for repeated Ledger validation, wiping it on drop.
+    /// The caller must bind reuse to its account and discard it before user review.
+    #[cfg(feature = "ledger")]
+    pub fn ledger_validation_key(&self) -> LedgerValidationKey {
+        LedgerValidationKey(Zeroizing::new((&self.0).into()))
+    }
+
     /// Derives ask from sk. Internal use only, does not enforce all constraints.
     #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
     pub(crate) fn derive_inner(sk: &SpendingKey) -> pallas::Scalar {
@@ -190,7 +229,7 @@ impl SpendAuthorizingKey {
         self.0.randomize_ledger(randomizer)
     }
 
-    /// Computes only the bytes of the randomized spend-auth verification key
+    /// Computes a typed compressed randomized spend-auth verification key
     /// (`rk = [(ask + randomizer) mod q]·G`) for this key, without constructing
     /// the intermediate curve point. Used to verify a PCZT action's `rk` with a
     /// smaller BN/point footprint than `randomize_ledger` + key conversion.
@@ -198,15 +237,9 @@ impl SpendAuthorizingKey {
     pub fn randomized_verification_key_bytes(
         &self,
         randomizer: &pallas::Scalar,
-    ) -> Result<[u8; 32], ledger_zcash_crypto::Error> {
-        let scalar_bytes: Zeroizing<[u8; 32]> = Zeroizing::new((&self.0).into());
-        let randomizer_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(randomizer.to_repr());
-        Ok(
-            ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
-                &scalar_bytes,
-                &randomizer_bytes,
-            )?,
-        )
+    ) -> Result<redpallas::VerificationKeyBytes<SpendAuth>, ledger_zcash_crypto::Error> {
+        self.ledger_validation_key()
+            .randomized_verification_key_bytes(randomizer)
     }
 
     /// Creates a RedPallas spend authorization signing key from the given ledger signing key.

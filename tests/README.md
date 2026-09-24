@@ -15,3 +15,9 @@ the emulator's deterministic random stream before the randomized signature.
 Recipient-reuse regressions cover malformed recipient keys, wrong ownership, rho,
 rseed and nullifiers for Orchard and Ironwood. The crypto unit tests compare raw
 and validated-recipient nullifiers and reject mismatched account/base material.
+
+`test_pczt_key_reuse.py` uses distinct public notes and randomized keys to cover
+multiple real spends, leading dummy actions, both pools, wrong account/rk after
+cache reuse, and recovery with a fresh valid transaction. Orchard signatures are
+checked with the independent Python verifier. See `key-reuse/README.md` for the
+separate on-device key-vector harness covering both normalization signs.

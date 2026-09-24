@@ -9,6 +9,7 @@ use crate::utils::extended_public_key::ExtendedPublicKey;
 use crate::{AppSW, utils::bip32_path::Bip32Path};
 
 pub use orchard::keys::FullViewingKey as OrchardFvk;
+pub use orchard::keys::LedgerValidationKey as OrchardValidationKey;
 pub use orchard::keys::SpendAuthorizingKey as OrchardAsk;
 
 pub fn map_ledger_crypto_error(err: ledger_zcash_crypto::Error) -> AppSW {
@@ -126,11 +127,12 @@ pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
     Ok(orchard_fvk)
 }
 
-// FVK derivation from a cached spending key (no `zip32_orchard_derive`).
+// FVK derivation from a cached spending key (no `zip32_orchard_derive`). Kept
+// alongside the combined form because an action that spends nothing needs the
+// viewing key without materializing an authorizing key.
 pub fn derive_orchard_fvk_from_sk(sk_bytes: &Secret<32>) -> Result<OrchardFvk, AppSW> {
     let sk = orchard_sk_from_bytes(sk_bytes)?;
-    let fvk = OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
-    Ok(fvk)
+    OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)
 }
 
 // FVK + ASK derivation from a cached spending key (no `zip32_orchard_derive`).

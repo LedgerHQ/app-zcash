@@ -956,7 +956,7 @@ impl PcztParser {
         Ok(())
     }
 
-    fn verify_current_orchard_rk(&self, ask: &OrchardAsk) -> Result<(), ParserError> {
+    fn verify_current_orchard_rk(&self, ask: &OrchardValidationKey) -> Result<(), ParserError> {
         let alpha = self
             .current_action
             .alpha
@@ -966,13 +966,15 @@ impl PcztParser {
             .map_err(|_| ParserError::from_str("Bad PCZT orchard alpha"))?;
 
         // Compute rk bytes directly (no intermediate curve-point construction)
-        // to keep the BN/point footprint low: real Orchard spends run this on a
-        // BN pool already near capacity from the fvk/ask derivation.
+        // to keep the BN/point footprint low: the first real spend reaches this
+        // immediately after deriving the fvk and the authorizing key, on a BN
+        // pool already near capacity. Later spends reuse the cached scalar and
+        // do not reload the pool, but they share this path.
         let expected_rk = ask
             .randomized_verification_key_bytes(&alpha)
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
 
-        if expected_rk != self.current_action.rk {
+        if <[u8; 32]>::from(expected_rk) != self.current_action.rk {
             return Err(ParserError::from_str(
                 "PCZT orchard rk does not match alpha and signing key",
             ));
@@ -1086,8 +1088,12 @@ impl PcztParser {
             self.orchard_action_parsed_count, path
         );
 
-        let ask_for_rk = self.prepare_shielded_account_keys(ctx, &path)?;
-        if let Some(ref ask) = ask_for_rk {
+        self.prepare_shielded_account_keys(ctx, &path)?;
+        if self.current_action.spend_value != 0 {
+            let ask = self
+                .orchard_validation_key
+                .as_ref()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
             self.verify_current_orchard_rk(ask)?;
         }
         debug!(

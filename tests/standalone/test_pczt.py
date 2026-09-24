@@ -79,6 +79,8 @@ def _strict_orchard_action(
 def _review_approve(
     scenario_navigator: NavigateWithScenario,
     snapshot_test_name: str,
+    *,
+    compare: bool = True,
 ) -> None:
     scenario = NavigationScenarioData(
         scenario_navigator.device,
@@ -89,6 +91,15 @@ def _review_approve(
 
     if scenario_navigator.device.touchable:
         scenario.validation = scenario.validation[:-1]
+
+    if not compare:
+        scenario_navigator.navigator.navigate_until_text(
+            navigate_instruction=scenario.navigation,
+            validation_instructions=scenario.validation,
+            text=scenario.pattern,
+            screen_change_after_last_instruction=False,
+        )
+        return
 
     scenario_navigator.navigator.navigate_until_text_and_compare(
         navigate_instruction=scenario.navigation,
