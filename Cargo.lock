@@ -3504,7 +3504,7 @@ dependencies = [
 
 [[package]]
 name = "zcash"
-version = "3.9.4"
+version = "3.9.5"
 dependencies = [
  "arrayvec",
  "bs58",

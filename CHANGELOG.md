@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.9.5
+
+Performance release. Validating a shielded transaction repeated work the same
+transaction had already done; this removes the repetition without removing a check.
+
+- Reuse the account key, the viewing keys and the note material already derived for
+  a transaction across its shielded actions, keeping every per-action account,
+  randomized-key, ownership, nullifier and commitment check, and failing closed when
+  an action names a different account
+- Keep fixed and locally derived curve points in full coordinates instead of
+  compressing and decoding them again before each operation
+- Derive the viewing key and the spend authorizing key in a single pass, and retain
+  the normalized authorizing scalar from the first action that spends so the later
+  ones reuse it. A transaction that spends nothing never derives one
+- Reuse the recipient already checked by ownership verification when validating the
+  nullifier of the same action
+- Compute each Sinsemilla step as one doubling and one addition instead of two
+  additions, over the same refusals
+- Compute the diversifier square-root ratio directly instead of inverting the divisor
+  and searching for a root
+- Drop the viewing keys once validation is over rather than at the end of the
+  transaction, so they do not outlive the review wait
+
 ## 3.9.4
 
 - Initialize the BLAKE2b context that hashes a shielded output's memo for the review. A memo
