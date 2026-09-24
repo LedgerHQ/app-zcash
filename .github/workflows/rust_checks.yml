@@ -67,3 +67,34 @@ jobs:
         # Speculos run down rather than failing one case, so this step is also what catches a
         # memory fault reached from parsing.
         run: cargo test --locked -p zcash --features unit_test --target apex_p
+
+  key_reuse_vectors:
+    name: Check the key derivation against public vectors
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-dev-tools:latest
+    env:
+      # Speculos brings up a Qt window otherwise.
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Build and run the vectors under Speculos
+        # The harness is deliberately outside the workspace — its SDK unit-test feature must
+        # not unify into an application build — so it carries its own lockfile and cannot ride
+        # the `cargo test` steps above. `--no-run` yields a device executable that Speculos
+        # runs; the SDK runner exits non-zero on a failing case, which fails this step.
+        # The executable path comes from cargo's own JSON output, not a glob over the deps
+        # directory: cargo also emits a same-prefix, no-extension `-rodata-reloc` sibling
+        # artifact there, which a name pattern cannot tell apart from the real ELF.
+        run: |
+          export LEDGER_SDK_PATH="$FLEX_SDK"
+          elf=$(cargo test --manifest-path tests/key-reuse/Cargo.toml --lib --no-run --release --target flex --locked --message-format=json \
+            | python3 -c 'import sys, json
+          for line in sys.stdin:
+              msg = json.loads(line)
+              if msg.get("executable"):
+                  print(msg["executable"])')
+          test -n "$elf"
+          speculos --model flex --display headless "$elf"
