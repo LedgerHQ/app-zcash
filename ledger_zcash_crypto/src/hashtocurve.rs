@@ -7,6 +7,7 @@ use ledger_device_sdk::{
     },
 };
 use pasta_curves::pallas;
+use subtle::{ConditionallySelectable, ConstantTimeEq};
 
 use crate::{Error, bytes::reverse_copy, points::AffinePoint};
 
@@ -28,8 +29,7 @@ const HASH_TO_CURVE_SUFFIX: &[u8] = b"_XMD:BLAKE2b_SSWU_RO_";
 const ORCHARD_DIVERSIFY_HASH_PERSONALIZATION: &str = "z.cash:Orchard-gd";
 
 // `(t - 1) // 2` where `t * 2^s + 1 = p` with `t` odd, from
-// `pasta_curves::fields::fp.rs`. Feeds the software Tonelli-Shanks used by
-// `Fp::sqrt`.
+// `pasta_curves::fields::fp.rs`.
 const PALLAS_T_MINUS1_OVER2: [u64; 4] = [
     0x04a67c8dcc969876,
     0x0000000011234c7e,
@@ -66,12 +66,27 @@ const PALLAS_THETA: Fp = Fp::from_raw([
 ]);
 
 // `GENERATOR^t where t * 2^s + 1 = p` with `t` odd; in other words, this is a `2^s` root of unity.
-// Used by Tonelli-Shanks in `sqrt()` and by `sqrt_ratio()`.
+// Used by `sqrt_ratio()`.
 const PALLAS_ROOT_OF_UNITY: Fp = Fp::from_raw([
     0xbdad6fabd87ea32f,
     0xea322bf2b7bb7584,
     0x362120830561f81a,
     0x2bce74deac30ebda,
+]);
+
+// RFC 9380 F.2.1.1 constants c6 = Z^t and c7 = Z^((t + 1) / 2), where
+// Z = ROOT_OF_UNITY. This preserves the ratio convention used with PALLAS_THETA.
+const SQRT_RATIO_C6: pallas::Base = pallas::Base::from_raw([
+    0x3d626185ee6c5b71,
+    0x7dfb60c2fc84a3b1,
+    0xb311211e8def9ebb,
+    0x057068dce2307c79,
+]);
+const SQRT_RATIO_C7: pallas::Base = pallas::Base::from_raw([
+    0x8e8148feb3ce7e3c,
+    0x9cd6f82cf051ee50,
+    0x24e6ad93cf0beba7,
+    0x371172a1a0a88cf0,
 ]);
 
 // Constants for the degree-3 isogeny from `iso-pallas` to `pallas`, copied from
@@ -211,17 +226,6 @@ impl Fp {
 
     fn invert(&self) -> Result<Option<Self>, Error> {
         Ok(self.0.invert().map(Self).into())
-    }
-
-    // Not `Field::sqrt`: under `pasta_curves/sqrt-table`, which is enabled
-    // transitively, it lazily builds ~32 KB of lookup tables that the heap cannot
-    // hold. This form is constant-time and allocation-free.
-    fn sqrt(&self) -> Result<Option<Self>, Error> {
-        Ok(
-            ff::helpers::sqrt_tonelli_shanks(&self.0, PALLAS_T_MINUS1_OVER2)
-                .map(Self)
-                .into(),
-        )
     }
 
     fn to_be_bytes(self) -> [u8; 32] {
@@ -488,6 +492,11 @@ fn map_to_curve_simple_swu_iso_pallas(u: &Fp) -> Result<JacobianPoint, Error> {
     })
 }
 
+// Returns sqrt(num/div), or sqrt(ROOT_OF_UNITY*num/div) and false for nonsquares.
+// The allocation-free algorithm from https://www.rfc-editor.org/rfc/rfc9380#appendix-F.2.1.1
+// avoids the heap tables enabled by the app's pasta_curves feature unification.
+// Loop bounds and the exponent are public constants; selections handle nonsquares.
+#[inline(never)]
 fn sqrt_ratio(num: &Fp, div: &Fp) -> Result<(bool, Fp), Error> {
     if num.is_zero() {
         return Ok((true, Fp::ZERO));
@@ -496,21 +505,42 @@ fn sqrt_ratio(num: &Fp, div: &Fp) -> Result<(bool, Fp), Error> {
         return Ok((false, Fp::ZERO));
     }
 
-    let Some(div_inverse) = div.invert()? else {
-        return Ok((false, Fp::ZERO));
-    };
-    let quotient = num.mul(&div_inverse)?;
+    // div^(2^32 - 1), using five multiplications.
+    let mut s = div.0;
+    for i in 0..5 {
+        s = square_n(s, 1 << i) * s;
+    }
+    let w = (num.0 * s.square() * div.0).pow_vartime(PALLAS_T_MINUS1_OVER2) * s;
+    let mut x = w * num.0;
+    let mut b = x * w * div.0;
+    let is_square = square_n(b, 31).ct_eq(&pallas::Base::ONE);
 
-    if let Some(sqrt) = quotient.sqrt()? {
-        return Ok((true, sqrt));
+    let mut z = SQRT_RATIO_C6;
+    x = pallas::Base::conditional_select(&(x * SQRT_RATIO_C7), &x, is_square);
+    b = pallas::Base::conditional_select(&(b * z), &b, is_square);
+
+    for i in (2..=32).rev() {
+        let is_one = square_n(b, i - 2).ct_eq(&pallas::Base::ONE);
+        x = pallas::Base::conditional_select(&(x * z), &x, is_one);
+        z = z.square();
+        b = pallas::Base::conditional_select(&(b * z), &b, is_one);
     }
 
-    let adjusted = PALLAS_ROOT_OF_UNITY.mul(&quotient)?;
-    let Some(sqrt) = adjusted.sqrt()? else {
+    let expected =
+        pallas::Base::conditional_select(&(PALLAS_ROOT_OF_UNITY.0 * num.0), &num.0, is_square);
+    if x.square() * div.0 != expected {
         return Err(Error::InvalidDiversifyHashPoint);
-    };
+    }
 
-    Ok((false, sqrt))
+    Ok((bool::from(is_square), Fp(x)))
+}
+
+#[inline(never)]
+fn square_n(mut value: pallas::Base, count: u32) -> pallas::Base {
+    for _ in 0..count {
+        value = value.square();
+    }
+    value
 }
 
 fn iso_map_pallas(point: &JacobianPoint) -> Result<JacobianPoint, Error> {
@@ -565,6 +595,66 @@ mod tests {
     use super::*;
     use ledger_device_sdk::testing::TestType;
     use pasta_curves::{arithmetic::CurveExt, group::GroupEncoding};
+
+    #[test_case]
+    const SQRT_RATIO_CONSTANTS: TestType = TestType {
+        modname: module_path!(),
+        name: "sqrt_ratio_constants",
+        f: || {
+            let mut t = PALLAS_T_MINUS1_OVER2;
+            let mut carry = 1;
+            for limb in &mut t {
+                let next_carry = *limb >> 63;
+                *limb = (*limb << 1) | carry;
+                carry = next_carry;
+            }
+            let z = PALLAS_ROOT_OF_UNITY.0;
+            if pallas::Base::S != 32
+                || SQRT_RATIO_C6 != z.pow_vartime(t)
+                || SQRT_RATIO_C7 != z.pow_vartime(PALLAS_T_MINUS1_OVER2) * z
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const SQRT_RATIO_MATCHES_REFERENCE: TestType = TestType {
+        modname: module_path!(),
+        name: "sqrt_ratio_matches_reference",
+        f: || {
+            let inputs = [
+                pallas::Base::ZERO,
+                pallas::Base::ONE,
+                -pallas::Base::ONE,
+                pallas::Base::from(7),
+                PALLAS_ROOT_OF_UNITY.0,
+                -PALLAS_ROOT_OF_UNITY.0,
+            ];
+            for num in inputs {
+                for div in inputs {
+                    let (is_square, result) = sqrt_ratio(&Fp(num), &Fp(div)).map_err(|_| ())?;
+                    let quotient = num * div.invert().unwrap_or(pallas::Base::ZERO);
+                    let root = ff::helpers::sqrt_tonelli_shanks(&quotient, PALLAS_T_MINUS1_OVER2);
+                    let expected_square = bool::from(root.is_some())
+                        && (num == pallas::Base::ZERO || div != pallas::Base::ZERO);
+                    let expected = if is_square {
+                        num
+                    } else {
+                        num * PALLAS_ROOT_OF_UNITY.0
+                    };
+                    if is_square != expected_square
+                        || (div != pallas::Base::ZERO && result.0.square() * div != expected)
+                        || (div == pallas::Base::ZERO && result != Fp::ZERO)
+                    {
+                        return Err(());
+                    }
+                }
+            }
+            Ok(())
+        },
+    };
 
     #[test_case]
     const DERIVED_BASES_MATCH_SOFTWARE_AND_DECODED_PATH: TestType = TestType {

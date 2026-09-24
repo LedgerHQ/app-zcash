@@ -529,6 +529,7 @@ dependencies = [
  "ff",
  "ledger_device_sdk",
  "pasta_curves",
+ "subtle",
  "zeroize",
 ]
 
