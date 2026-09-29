@@ -21,3 +21,16 @@ multiple real spends, leading dummy actions, both pools, wrong account/rk after
 cache reuse, and recovery with a fresh valid transaction. Orchard signatures are
 checked with the independent Python verifier. See `key-reuse/README.md` for the
 separate on-device key-vector harness covering both normalization signs.
+
+`test_usb_reply.py` pauses emulator ticker events to verify immediate USB HID
+replies and sends overlapping commands during review to check that approval and
+rejection still apply to the original transaction. The ticker test is
+emulator-only and does not establish physical USB, BLE or NFC timings.
+`test_error_cmd.py` checks strict short/extended APDU lengths, four-byte empty
+commands and successful communication after framing errors.
+
+The app runs the SDK's `io_new` path (1.37.1 or later) on every supported target.
+`io-regression/` compiles that SDK I/O source against a scripted OS: framing
+errors, built-in replies, overlapping commands during review, rejection of every
+APDU on a locked device, and the swap panic handler's return to Exchange. See
+[APDU.md](../docs/APDU.md) for the locked-device contract.

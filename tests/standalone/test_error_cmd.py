@@ -59,16 +59,27 @@ def test_hash_sign_rejects_legacy_shielded_modes(backend):
         assert e.value.status == Errors.SW_WRONG_P1P2
 
 
-# Ensure the app returns an error when a bad data length is used
-def test_wrong_data_length(backend):
-    # APDUs must be at least 4 bytes: CLA, INS, P1, P2.
+@pytest.mark.parametrize("apdu", [
+    "e00300",         # Missing P2.
+    "e0c400000201",   # Declared length exceeds the payload.
+    "e0c40000010102", # Payload exceeds the declared length.
+    "e0c400000000",   # Truncated extended length.
+    "e0c4000000000201", # Truncated extended payload.
+])
+def test_wrong_data_length(backend, apdu):
     with pytest.raises(ExceptionRAPDU) as e:
-        backend.exchange_raw(bytes.fromhex("E00300"))
+        backend.exchange_raw(bytes.fromhex(apdu))
     assert e.value.status == Errors.SW_WRONG_APDU_LENGTH
-    # APDUs advertises a too long length
-    with pytest.raises(ExceptionRAPDU) as e:
-        backend.exchange_raw(bytes.fromhex("E003000005"))
-    assert e.value.status == Errors.SW_WRONG_APDU_LENGTH
+    assert not e.value.data
+    # A framing error must not poison the next request.
+    assert backend.exchange(cla=CLA, ins=InsType.GET_VERSION).status == 0x9000
+
+
+def test_empty_apdu_header_forms(backend):
+    expected = backend.exchange(cla=CLA, ins=InsType.GET_VERSION).data
+    # io_new accepts both ISO's four-byte form and the existing zero-Lc form.
+    for apdu in ("e0c40000", "e0c4000000"):
+        assert backend.exchange_raw(bytes.fromhex(apdu)).data == expected
 
 
 # Ensure a P1 outside the documented contract is refused rather than silently treated as a

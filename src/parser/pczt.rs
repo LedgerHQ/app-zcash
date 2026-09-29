@@ -336,6 +336,7 @@ struct PcztOrchardActionSigningRecord {
 }
 
 pub struct PcztParserCtx<'ctx> {
+    pub comm: &'ctx mut ledger_device_sdk::io::Comm,
     pub tx_state: &'ctx mut TxSigningState,
     pub tx_info: &'ctx mut TxInfo,
     pub hashers: &'ctx mut Hashers,

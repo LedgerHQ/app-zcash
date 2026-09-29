@@ -1,4 +1,4 @@
-use ledger_device_sdk::io::Comm;
+use ledger_device_sdk::io::{Command, CommandResponse};
 use ledger_device_sdk::log::{debug, error, info};
 
 use crate::AppSW;
@@ -69,54 +69,59 @@ fn finish_pczt_if_requested(ctx: &mut TxContext, requested: bool) -> Result<(), 
     Ok(())
 }
 
-pub fn handler_pczt_header(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
+pub fn handler_pczt_header<'a>(
+    command: Command<'a>,
+    ctx: &mut TxContext,
+) -> Result<CommandResponse<'a>, AppSW> {
     info!("Reset TX context for PCZT header parsing");
     ctx.reset_for_new_transaction(LegacyParserMode::Signature)?;
 
-    let data = match comm.get_data() {
-        Ok(data) => data,
-        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
-    };
+    // UI callbacks may reuse the SDK buffer while the parser reviews the transaction.
+    let data = arrayvec::ArrayVec::<u8, 255>::try_from(command.get_data())
+        .map_err(|_| reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength))?;
+    let comm = command.into_comm();
 
     if let Err(e) = ctx.pczt_parser.parse_header(
         &mut PcztParserCtx {
+            comm,
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
             swap_params: ctx.swap_params,
         },
-        data,
+        &data,
     ) {
         error!("Error parsing PCZT header data: {:#?}", e);
         return Err(map_pczt_parser_error(ctx, e));
     }
 
-    Ok(())
+    Ok(comm.begin_response())
 }
 
-pub fn handler_pczt_transparent_input(
-    comm: &mut Comm,
+pub fn handler_pczt_transparent_input<'a>(
+    command: Command<'a>,
     ctx: &mut TxContext,
     first: bool,
     last: bool,
-) -> Result<(), AppSW> {
+) -> Result<CommandResponse<'a>, AppSW> {
     if first {
         debug!("Start PCZT transparent input parsing");
     }
 
-    let data = match comm.get_data() {
-        Ok(data) => data,
-        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
-    };
+    // UI callbacks may reuse the SDK buffer while the parser reviews the transaction.
+    let data = arrayvec::ArrayVec::<u8, 255>::try_from(command.get_data())
+        .map_err(|_| reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength))?;
+    let comm = command.into_comm();
 
     if let Err(e) = ctx.pczt_parser.parse_transparent_inputs(
         &mut PcztParserCtx {
+            comm,
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
             swap_params: ctx.swap_params,
         },
-        data,
+        &data,
     ) {
         error!("Error parsing PCZT transparent input data: {:#?}", e);
         return Err(map_pczt_parser_error(ctx, e));
@@ -127,32 +132,33 @@ pub fn handler_pczt_transparent_input(
         return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength));
     }
 
-    Ok(())
+    Ok(comm.begin_response())
 }
 
-pub fn handler_pczt_transparent_output(
-    comm: &mut Comm,
+pub fn handler_pczt_transparent_output<'a>(
+    command: Command<'a>,
     ctx: &mut TxContext,
     first: bool,
     last: bool,
-) -> Result<(), AppSW> {
+) -> Result<CommandResponse<'a>, AppSW> {
     if first {
         debug!("Start PCZT transparent output parsing");
     }
 
-    let data = match comm.get_data() {
-        Ok(data) => data,
-        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
-    };
+    // UI callbacks may reuse the SDK buffer while the parser reviews the transaction.
+    let data = arrayvec::ArrayVec::<u8, 255>::try_from(command.get_data())
+        .map_err(|_| reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength))?;
+    let comm = command.into_comm();
 
     if let Err(e) = ctx.pczt_parser.parse_transparent_outputs(
         &mut PcztParserCtx {
+            comm,
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
             swap_params: ctx.swap_params,
         },
-        data,
+        &data,
     ) {
         error!("Error parsing PCZT transparent output data: {:#?}", e);
         return Err(map_pczt_parser_error(ctx, e));
@@ -163,33 +169,34 @@ pub fn handler_pczt_transparent_output(
         return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength));
     }
 
-    Ok(())
+    Ok(comm.begin_response())
 }
 
-pub fn handler_pczt_orchard_action(
-    comm: &mut Comm,
+pub fn handler_pczt_orchard_action<'a>(
+    command: Command<'a>,
     ctx: &mut TxContext,
     first: bool,
     last: bool,
     finished: bool,
-) -> Result<(), AppSW> {
+) -> Result<CommandResponse<'a>, AppSW> {
     if first {
         debug!("Start PCZT orchard action parsing");
     }
 
-    let data = match comm.get_data() {
-        Ok(data) => data,
-        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
-    };
+    // UI callbacks may reuse the SDK buffer while the parser reviews the transaction.
+    let data = arrayvec::ArrayVec::<u8, 255>::try_from(command.get_data())
+        .map_err(|_| reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength))?;
+    let comm = command.into_comm();
 
     if let Err(e) = ctx.pczt_parser.parse_orchard_actions(
         &mut PcztParserCtx {
+            comm,
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
             swap_params: ctx.swap_params,
         },
-        data,
+        &data,
     ) {
         error!("Error parsing PCZT orchard action data: {:#?}", e);
         return Err(map_pczt_parser_error(ctx, e));
@@ -202,33 +209,34 @@ pub fn handler_pczt_orchard_action(
 
     finish_pczt_if_requested(ctx, finished)?;
 
-    Ok(())
+    Ok(comm.begin_response())
 }
 
-pub fn handler_pczt_ironwood_action(
-    comm: &mut Comm,
+pub fn handler_pczt_ironwood_action<'a>(
+    command: Command<'a>,
     ctx: &mut TxContext,
     first: bool,
     last: bool,
     finished: bool,
-) -> Result<(), AppSW> {
+) -> Result<CommandResponse<'a>, AppSW> {
     if first {
         debug!("Start PCZT ironwood action parsing");
     }
 
-    let data = match comm.get_data() {
-        Ok(data) => data,
-        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
-    };
+    // UI callbacks may reuse the SDK buffer while the parser reviews the transaction.
+    let data = arrayvec::ArrayVec::<u8, 255>::try_from(command.get_data())
+        .map_err(|_| reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength))?;
+    let comm = command.into_comm();
 
     if let Err(e) = ctx.pczt_parser.parse_ironwood_actions(
         &mut PcztParserCtx {
+            comm,
             tx_state: &mut ctx.tx_signing_state,
             tx_info: &mut ctx.tx_info,
             hashers: &mut ctx.hashers,
             swap_params: ctx.swap_params,
         },
-        data,
+        &data,
     ) {
         error!("Error parsing PCZT ironwood action data: {:#?}", e);
         return Err(map_pczt_parser_error(ctx, e));
@@ -241,18 +249,15 @@ pub fn handler_pczt_ironwood_action(
 
     finish_pczt_if_requested(ctx, finished)?;
 
-    Ok(())
+    Ok(comm.begin_response())
 }
 
-pub fn handler_pczt_sign_transparent(
-    comm: &mut Comm,
+pub fn handler_pczt_sign_transparent<'a>(
+    command: Command<'a>,
     ctx: &mut TxContext,
     input_index: usize,
-) -> Result<(), AppSW> {
-    let data = match comm.get_data() {
-        Ok(data) => data,
-        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
-    };
+) -> Result<CommandResponse<'a>, AppSW> {
+    let data = command.get_data();
 
     if !data.is_empty() {
         error!("Unexpected data for PCZT transparent signing");
@@ -302,8 +307,9 @@ pub fn handler_pczt_sign_transparent(
         return Err(reset_pczt_parser_with_sw(ctx, sw));
     }
 
+    let mut response = command.into_response();
     if let Err(sw) = append_signature(
-        comm,
+        &mut response,
         &ctx.tx_info.signature_digest,
         path,
         sighash_type,
@@ -330,18 +336,15 @@ pub fn handler_pczt_sign_transparent(
         ctx.pczt_parser.reset();
     }
 
-    Ok(())
+    Ok(response)
 }
 
-pub fn handler_pczt_sign_orchard(
-    comm: &mut Comm,
+pub fn handler_pczt_sign_orchard<'a>(
+    command: Command<'a>,
     ctx: &mut TxContext,
     action_index: usize,
-) -> Result<(), AppSW> {
-    let data = match comm.get_data() {
-        Ok(data) => data,
-        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
-    };
+) -> Result<CommandResponse<'a>, AppSW> {
+    let data = command.get_data();
 
     if !data.is_empty() {
         error!("Unexpected data for PCZT orchard signing");
@@ -402,7 +405,7 @@ pub fn handler_pczt_sign_orchard(
         }
     };
 
-    comm.append(&auth_sig);
+    let response = command.into_response().extend(&auth_sig)?;
     ctx.note_signature_released();
 
     let orchard_signature_count = ctx.pczt_parser.orchard_signature_count();
@@ -418,18 +421,15 @@ pub fn handler_pczt_sign_orchard(
         ctx.pczt_parser.reset();
     }
 
-    Ok(())
+    Ok(response)
 }
 
-pub fn handler_pczt_sign_ironwood(
-    comm: &mut Comm,
+pub fn handler_pczt_sign_ironwood<'a>(
+    command: Command<'a>,
     ctx: &mut TxContext,
     action_index: usize,
-) -> Result<(), AppSW> {
-    let data = match comm.get_data() {
-        Ok(data) => data,
-        Err(_) => return Err(reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength)),
-    };
+) -> Result<CommandResponse<'a>, AppSW> {
+    let data = command.get_data();
 
     if !data.is_empty() {
         error!("Unexpected data for PCZT ironwood signing");
@@ -489,7 +489,7 @@ pub fn handler_pczt_sign_ironwood(
         }
     };
 
-    comm.append(&auth_sig);
+    let response = command.into_response().extend(&auth_sig)?;
     ctx.note_signature_released();
 
     let ironwood_signature_count = ctx.pczt_parser.ironwood_signature_count();
@@ -505,5 +505,5 @@ pub fn handler_pczt_sign_ironwood(
         ctx.pczt_parser.reset();
     }
 
-    Ok(())
+    Ok(response)
 }

@@ -1,7 +1,7 @@
 name: Rust checks
 
-# Two checks `RUST.instructions.md` asks for that no reusable workflow provides: auditing the
-# dependency tree, and running the unit tests of both crates.
+# Checks `RUST.instructions.md` asks for that no reusable workflow provides: auditing the
+# dependency tree, running the unit tests of both crates, and the I/O boundary regressions.
 
 permissions:
   contents: read
@@ -43,7 +43,7 @@ jobs:
         run: cargo audit
 
   unit_tests:
-    name: Run the unit tests
+    name: Run the unit tests and I/O regressions
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-dev-tools:latest
@@ -67,6 +67,9 @@ jobs:
         # Speculos run down rather than failing one case, so this step is also what catches a
         # memory fault reached from parsing.
         run: cargo test --locked -p zcash --features unit_test --target apex_p
+
+      - name: I/O boundary regressions
+        run: python3 tests/io-regression/run.py
 
   key_reuse_vectors:
     name: Check the key derivation against public vectors

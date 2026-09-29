@@ -4,6 +4,8 @@
 
 Performance release. Validating a shielded transaction repeated work the same
 transaction had already done; this removes the repetition without removing a check.
+Replies also no longer wait for the next ticker event, which the SDK's new I/O path
+allows once it refuses every APDU on a locked device.
 
 - Reuse the account key, the viewing keys and the note material already derived for
   a transaction across its shielded actions, keeping every per-action account,
@@ -22,6 +24,12 @@ transaction had already done; this removes the repetition without removing a che
   and searching for a root
 - Drop the viewing keys once validation is over rather than at the end of the
   transaction, so they do not outlive the review wait
+- Use the SDK's new I/O path (`io_new`) on every target: a reply leaves as soon as its
+  command completes, instead of waiting for the next ticker event
+- Require SDK 1.37.1, the first release where that path answers `DeviceLocked` to every
+  APDU on a locked device, the SDK's own built-in commands included
+- Reject an APDU whose payload length differs from its declared length
+- Return to Exchange after a swap panic even when the error reply cannot be sent
 
 ## 3.9.4
 
