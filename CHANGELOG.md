@@ -30,6 +30,10 @@ allows once it refuses every APDU on a locked device.
   APDU on a locked device, the SDK's own built-in commands included
 - Reject an APDU whose payload length differs from its declared length
 - Return to Exchange after a swap panic even when the error reply cannot be sent
+- Reserve a shielded action's ciphertext buffer at its full size, and refuse with
+  `NotEnoughMemorySpace` when it does not fit. It grew packet by packet, which needed
+  about twice its size at once, and a failed growth exited the app: a t→z with 30 or
+  more transparent inputs did so on every device
 
 ## 3.9.4
 

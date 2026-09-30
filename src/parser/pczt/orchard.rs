@@ -423,6 +423,11 @@ impl PcztParser {
             }
 
             let offset = self.pool_field_bytes.len();
+            // Reserved whole and fallibly: growing packet by packet doubles the capacity past
+            // `size` and holds the old and new blocks at once, and a failed growth exits the app.
+            self.pool_field_bytes
+                .try_reserve_exact(missing)
+                .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
             self.pool_field_bytes.resize(offset + to_read, 0);
             ok!(reader.read_exact(&mut self.pool_field_bytes[offset..]));
         }

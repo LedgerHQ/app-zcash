@@ -49,6 +49,12 @@ from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
+from .test_pczt_ironwood import (
+    _TRANSPARENT_INPUT_100K,
+    PCZT_V6_GLOBAL,
+    _ironwood_bundle_with_external_recipient,
+)
+
 # Mirrors MAX_PCZT_ORCHARD_ACTIONS_NUMBER in src/consts.rs, the bound a released build carries.
 _SHIPPED_MAX_ORCHARD_ACTIONS = 32
 
@@ -724,6 +730,34 @@ def test_pczt_transparent_input_script_must_be_p2pkh(backend, script: bytes):
 
     assert error.value.status == Errors.SW_INVALID_TRANSACTION
     assert not error.value.data
+
+
+def test_pczt_t_to_z_carries_the_shipped_transparent_input_bound(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A t→z with the shipped bound of transparent inputs parses, reviews and signs.
+
+    The transparent tests above drive t→t, which leaves the shielded parser idle. Here every input
+    stays retained on the heap while the Ironwood actions are validated, which is where the heap is
+    tightest: each action's `enc_ciphertext` is buffered then trial-decrypted with all of them
+    still held. The fee this shape implies is not realistic; only the shape is under test.
+    """
+    client = ZcashCommandSender(backend)
+    transparent_inputs = [_TRANSPARENT_INPUT_100K] * _SHIPPED_MAX_TRANSPARENT_INPUTS
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=transparent_inputs,
+        transparent_outputs=[],
+        ironwood_bundle=_ironwood_bundle_with_external_recipient(),
+    ):
+        _approve_review(scenario_navigator)
+
+    for input_index in range(_SHIPPED_MAX_TRANSPARENT_INPUTS):
+        signature = client.pczt_sign_transparent(input_index=input_index).data
+        assert len(signature) > 0, f"input {input_index} of {_SHIPPED_MAX_TRANSPARENT_INPUTS}"
+    assert len(client.pczt_sign_ironwood(action_index=0).data) > 0
 
 
 def test_pczt_transparent_inputs_at_the_shipped_bound(
