@@ -21,6 +21,7 @@ use crate::{
 };
 
 use alloc::{format, string::String, vec::Vec};
+use ledger_device_sdk::io::Comm;
 use ledger_device_sdk::nbgl::{Field, NbglReview};
 
 use crate::tx::{TransferType, TxOutput};
@@ -43,6 +44,7 @@ fn format_zec_amount(amount: u64) -> String {
 /// broadcast and therefore the case the user most needs to see. `locktime` is
 /// shown only when set, since zero constrains nothing.
 pub fn ui_display_tx(
+    comm: &mut Comm,
     outputs: &[TxOutput],
     fees: u64,
     transfer_type: TransferType,
@@ -136,5 +138,5 @@ pub fn ui_display_tx(
         )
         .glyph(load_glyph());
 
-    Ok(review.show(&my_fields))
+    Ok(review.show(comm, &my_fields))
 }

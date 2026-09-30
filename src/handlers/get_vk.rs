@@ -1,7 +1,7 @@
 use zcash_address::unified::{Encoding, Fvk, Ufvk};
 
 use alloc::format;
-use ledger_device_sdk::io::Comm;
+use ledger_device_sdk::io::{Command, CommandResponse};
 use ledger_device_sdk::log::{error, info};
 
 use crate::app_ui::address::{ui_display_orchard_fvk, ui_display_ufvk};
@@ -49,10 +49,13 @@ fn parse_vk_paths(data: &[u8], mode: P2VkMode) -> Result<(Bip32Path, Option<Bip3
     }
 }
 
-fn append_pending_vk_chunk(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), AppSW> {
+fn append_pending_vk_chunk<'a>(
+    mut response: CommandResponse<'a>,
+    ctx: &mut TxContext,
+) -> Result<CommandResponse<'a>, AppSW> {
     let pending = ctx.vk_response.as_mut().ok_or(AppSW::BadState)?;
     let end = core::cmp::min(pending.offset + VK_RESPONSE_CHUNK_LEN, pending.bytes.len());
-    comm.append(&pending.bytes[pending.offset..end]);
+    response.append(&pending.bytes[pending.offset..end])?;
     pending.offset = end;
 
     if pending.offset == pending.bytes.len() {
@@ -60,23 +63,23 @@ fn append_pending_vk_chunk(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), A
         ctx.vk_response = None;
     }
 
-    Ok(())
+    Ok(response)
 }
 
-pub fn handler_get_vk(
-    comm: &mut Comm,
+pub fn handler_get_vk<'a>(
+    command: Command<'a>,
     ctx: &mut TxContext,
     mode: P2VkMode,
     continue_response: bool,
-) -> Result<(), AppSW> {
-    let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
+) -> Result<CommandResponse<'a>, AppSW> {
+    let data = command.get_data();
 
     if continue_response {
         if !data.is_empty() {
             return Err(AppSW::WrongApduLength);
         }
 
-        return append_pending_vk_chunk(comm, ctx);
+        return append_pending_vk_chunk(command.into_response(), ctx);
     }
 
     ctx.vk_response = None;
@@ -107,12 +110,13 @@ pub fn handler_get_vk(
 
     let orchard_fvk = derive_orchard_fvk(&path)?;
 
+    let comm = command.into_comm();
     let response_bytes = match mode {
         P2VkMode::OrchardFvk => {
             let orchard_fvk_bytes = orchard_fvk.to_bytes();
             let orchard_fvk_str = format!("{}", HexSlice(&orchard_fvk_bytes));
 
-            if !ui_display_orchard_fvk(&orchard_fvk_str, account)? {
+            if !ui_display_orchard_fvk(comm, &orchard_fvk_str, account)? {
                 ctx.is_vk_display_finished = true;
                 return Err(AppSW::Deny);
             }
@@ -134,7 +138,7 @@ pub fn handler_get_vk(
 
             let ufvk_str = ufvk.encode(&network);
 
-            if !ui_display_ufvk(&ufvk_str, account)? {
+            if !ui_display_ufvk(comm, &ufvk_str, account)? {
                 ctx.is_vk_display_finished = true;
                 return Err(AppSW::Deny);
             }
@@ -148,7 +152,5 @@ pub fn handler_get_vk(
         offset: 0,
     });
 
-    append_pending_vk_chunk(comm, ctx)?;
-
-    Ok(())
+    append_pending_vk_chunk(comm.begin_response(), ctx)
 }

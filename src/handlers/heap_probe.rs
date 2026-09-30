@@ -1,4 +1,4 @@
-use ledger_device_sdk::io::Comm;
+use ledger_device_sdk::io::{Command, CommandResponse};
 
 use crate::AppSW;
 use crate::consts::{
@@ -17,7 +17,7 @@ use crate::heap_probe::largest_available_block;
 ///
 /// Holds no state and touches no transaction context, so it can be issued at any point of a PCZT
 /// session to sample the heap the parser is working against.
-pub fn handler_heap_probe(comm: &mut Comm) -> Result<(), AppSW> {
+pub fn handler_heap_probe<'a>(command: Command<'a>) -> Result<CommandResponse<'a>, AppSW> {
     let available =
         u32::try_from(largest_available_block()).map_err(|_| AppSW::TechnicalProblem)?;
     let max_orchard_actions =
@@ -28,10 +28,11 @@ pub fn handler_heap_probe(comm: &mut Comm) -> Result<(), AppSW> {
     let max_transparent_inputs =
         u16::try_from(MAX_PCZT_TRANSPARENT_INPUTS_NUMBER).map_err(|_| AppSW::TechnicalProblem)?;
 
-    comm.append(&available.to_be_bytes());
-    comm.append(&max_orchard_actions.to_be_bytes());
-    comm.append(&max_ironwood_actions.to_be_bytes());
-    comm.append(&max_transparent_inputs.to_be_bytes());
+    let mut response = command.into_response();
+    response.append(&available.to_be_bytes())?;
+    response.append(&max_orchard_actions.to_be_bytes())?;
+    response.append(&max_ironwood_actions.to_be_bytes())?;
+    response.append(&max_transparent_inputs.to_be_bytes())?;
 
-    Ok(())
+    Ok(response)
 }

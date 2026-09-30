@@ -27,7 +27,7 @@ use crate::{
 };
 
 use crate::AppSW;
-use ledger_device_sdk::io::Comm;
+use ledger_device_sdk::io::{Command, CommandResponse};
 use ledger_device_sdk::log::{debug, error};
 
 /// Handler for GET_PUBLIC_KEY APDU command.
@@ -46,13 +46,13 @@ use ledger_device_sdk::log::{debug, error};
 ///
 /// This handler uses the same address derivation logic as `swap::check_address()`
 /// via the shared `get_address_hash_from_pubkey()` helper, ensuring consistency.
-pub fn handler_get_public_key(comm: &mut Comm, display: bool) -> Result<(), AppSW> {
+pub fn handler_get_public_key<'a>(
+    command: Command<'a>,
+    display: bool,
+) -> Result<CommandResponse<'a>, AppSW> {
     debug!("Called get public key handler");
 
-    let bip32_path: Bip32Path = comm
-        .get_data()
-        .map_err(|_| AppSW::WrongApduLength)?
-        .try_into()?;
+    let bip32_path: Bip32Path = command.get_data().try_into()?;
     debug!("path {:?}", bip32_path);
 
     // Answers with no screen when `display` is false, so the app restricts its own prefixes and
@@ -71,25 +71,28 @@ pub fn handler_get_public_key(comm: &mut Comm, display: bool) -> Result<(), AppS
     let address_str = base58_address.as_str();
     debug!("address_str {:?}", address_str);
 
+    let comm = command.into_comm();
+
     // Display address on device if requested
-    if display && !ui_display_pk(address_str)? {
+    if display && !ui_display_pk(comm, address_str)? {
         return Err(AppSW::Deny);
     }
 
+    let mut response = comm.begin_response();
     let public_key = extended_public_key.public_key_slice();
-    comm.append(&[extended_public_key.public_key_len as u8]);
-    comm.append(extended_public_key.public_key_slice());
+    response.append(&[extended_public_key.public_key_len as u8])?;
+    response.append(extended_public_key.public_key_slice())?;
     debug!("Public Key: {:02X?}", public_key);
 
     let addr_len = address_str.len() as u8;
-    comm.append(&[addr_len]);
-    comm.append(address_str.as_bytes());
+    response.append(&[addr_len])?;
+    response.append(address_str.as_bytes())?;
 
     debug!("Address: {}", address_str);
 
     // Don't encode chain code length, it's always 32 bytes
     debug!("Chain Code: {}", HexSlice(&extended_public_key.chain_code));
-    comm.append(&extended_public_key.chain_code);
+    response.append(&extended_public_key.chain_code)?;
 
-    Ok(())
+    Ok(response)
 }
