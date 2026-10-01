@@ -82,6 +82,18 @@ impl core::fmt::Display for HexSlice<'_> {
     }
 }
 
+/// Refuse, with `NotEnoughMemorySpace`, work the heap has no room to finish.
+///
+/// Some allocations on the paths this guards are infallible — inside dependencies and in the review
+/// — and a failed one exits the application. Reserving a contiguous block of `bytes` fallibly and
+/// releasing it at once proves the room exists while refusing is still a status word.
+pub fn ensure_heap_headroom(bytes: usize) -> Result<(), AppSW> {
+    let mut probe: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    probe
+        .try_reserve_exact(bytes)
+        .map_err(|_| AppSW::NotEnoughMemorySpace)
+}
+
 /// Constant-time memory comparison to prevent timing attacks.
 #[inline(never)]
 pub fn secure_memcmp(buf1: &[u8], buf2: &[u8]) -> bool {

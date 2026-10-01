@@ -30,6 +30,7 @@ from typing import NamedTuple
 import pytest
 from application_client.pczt import (
     PcztGlobal,
+    PcztIronwoodBundle,
     PcztOrchardAction,
     PcztOrchardBundle,
     PcztTransparentInput,
@@ -52,7 +53,10 @@ from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 from .test_pczt_ironwood import (
     _TRANSPARENT_INPUT_100K,
     PCZT_V6_GLOBAL,
+    _dummy_ironwood_action,
+    _external_recipient_ironwood_action,
     _ironwood_bundle_with_external_recipient,
+    _split_change_bundle,
 )
 
 # Mirrors MAX_PCZT_ORCHARD_ACTIONS_NUMBER in src/consts.rs, the bound a released build carries.
@@ -272,7 +276,8 @@ def _z_to_z_bundle(action_count: int) -> PcztOrchardBundle:
     """A z→z bundle of `action_count` actions carrying `action_count - 1` real spends.
 
     One action pays the recipient, one carries the change note, and the rest spend a note against a
-    dummy output. Only one change output is allowed, so the shape holds at every count.
+    dummy output. The change stays in one note, as the shipped wallet builds it, so the shape holds at
+    every count.
     """
     if action_count < 2:
         raise ValueError("a z→z bundle needs a recipient action and a change action")
@@ -730,6 +735,99 @@ def test_pczt_transparent_input_script_must_be_p2pkh(backend, script: bytes):
 
     assert error.value.status == Errors.SW_INVALID_TRANSACTION
     assert not error.value.data
+
+
+def _assert_still_answering(client: ZcashCommandSender) -> None:
+    """The refusal left the application running: it answers the next command."""
+    assert client.get_version().status == 0x9000
+
+
+def test_pczt_full_transparent_inputs_and_shielded_actions_refuse_with_a_status_word(backend):
+    """Both bounds at once are more than the heap holds, and the device must say so, not exit.
+
+    Every transparent input stays retained while each of the 32 actions is parsed. Without a check,
+    an infallible allocation on the first action's key or decryption path exits the application;
+    the count packet now refuses first, while the refusal is still a status word.
+    """
+    client = ZcashCommandSender(backend)
+    transparent_inputs = [_transparent_input(_P2PKH_SCRIPT)] * _SHIPPED_MAX_TRANSPARENT_INPUTS
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=transparent_inputs,
+            transparent_outputs=[],
+            orchard_bundle=_z_to_z_bundle(_SHIPPED_MAX_ORCHARD_ACTIONS),
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    _assert_still_answering(client)
+
+
+def test_pczt_review_too_large_for_the_heap_refuses_before_it_is_shown(backend):
+    """A review the heap cannot build is refused before any screen, not partway through it.
+
+    Four recipients and a change note fit the output budgets, but beside the full count of
+    transparent inputs the review's own allocations no longer fit. Without a check, the application
+    exits while drawing the review.
+    """
+    actions = [_external_recipient_ironwood_action() for _ in range(_MAX_SHIELDED_DISPLAYED_OUTPUTS)]
+    actions.append(_dummy_ironwood_action())
+    bundle = PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(a.spend_value - a.value for a in actions),
+        flags=3,
+        anchor=bytes(32),
+    )
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_100K] * _SHIPPED_MAX_TRANSPARENT_INPUTS,
+            transparent_outputs=[],
+            ironwood_bundle=bundle,
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    _assert_still_answering(client)
+
+
+@pytest.mark.parametrize(
+    ("change_notes", "with_recipient"),
+    [(5, True), (4, False)],
+    ids=["recipient_and_five_change_notes", "shield_into_four_notes"],
+)
+def test_pczt_split_change_beside_the_shipped_transparent_input_bound_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    change_notes: int,
+    with_recipient: bool,
+):
+    """The largest split change each review allows still signs beside every transparent input.
+
+    One recipient and five change notes is the most the output budgets accept; shielding into four
+    notes puts the most shielded outputs on the review. Both leave the heap at its tightest when the
+    review is built, which is where a review whose allocations are not proven first exits the
+    application. The fee this shape implies is not realistic; only the shape is under test.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_100K] * _SHIPPED_MAX_TRANSPARENT_INPUTS,
+        transparent_outputs=[],
+        ironwood_bundle=_split_change_bundle(change_notes, with_recipient=with_recipient),
+    ):
+        _approve_review(scenario_navigator)
+
+    for input_index in range(_SHIPPED_MAX_TRANSPARENT_INPUTS):
+        signature = client.pczt_sign_transparent(input_index=input_index).data
+        assert len(signature) > 0, f"input {input_index} of {_SHIPPED_MAX_TRANSPARENT_INPUTS}"
+    if with_recipient:
+        assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
 
 
 def test_pczt_t_to_z_carries_the_shipped_transparent_input_bound(

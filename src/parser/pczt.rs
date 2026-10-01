@@ -28,10 +28,12 @@ use zcash_transparent::bundle::OutPoint;
 use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
 use crate::consts::MAX_PCZT_IRONWOOD_ACTIONS_NUMBER;
+use crate::consts::SHIELDED_ACTIONS_HEAP_HEADROOM;
 use crate::consts::{
     MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_SCRIPT_SIZE,
-    MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
-    MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
+    MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER, MAX_PCZT_SHIELDED_RETAINED_OUTPUTS_NUMBER,
+    MAX_PCZT_TRANSPARENT_INPUTS_NUMBER, MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, SIGHASH_ALL,
+    ZCASH_BIP44_COIN_TYPE,
 };
 use crate::parser::compute::{
     compute_shielded_signature_digest, compute_transparent_input_signature_digest,
@@ -45,6 +47,7 @@ use crate::parser::orchard_decipher::{
 use crate::parser::{HASH_SIZE, ORCHARD_MEMO_SIZE};
 use crate::tx::{Hashers, TransferType, TxInfo, TxOutput, TxOutputMemo, TxPool, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _};
+use crate::utils::ensure_heap_headroom;
 use crate::utils::{
     Bip44CheckMode, CheckDispOutput, HexSlice,
     base58_address::{Base58Address, ToBase58Address},
@@ -134,6 +137,19 @@ fn record_hidden_shielded_change_account(
             Ok(())
         }
     }
+}
+
+/// Claim room for one more shielded output of either kind, displayed or change, refusing once the
+/// budget is spent. Called before [`claim_displayed_shielded_output`] and for the same reason.
+fn claim_retained_shielded_output(tx_info: &mut TxInfo) -> Result<(), ParserError> {
+    if tx_info.retained_shielded_outputs >= MAX_PCZT_SHIELDED_RETAINED_OUTPUTS_NUMBER {
+        error!("Shielded retained-output budget exhausted");
+        return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+    }
+
+    tx_info.retained_shielded_outputs += 1;
+
+    Ok(())
 }
 
 /// Claim room for one more shielded output on the review, refusing once the budget is spent.

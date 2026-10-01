@@ -55,12 +55,21 @@ components.
   actions. A bundle declaring more is refused at its count packet, before any
   per-action field is read.
 - Independently of the action counts, at most **4 shielded outputs across both
-  shielded pools may be displayed** to the user — that is, outputs that decrypt
-  under the account's viewing key and are not the change note. The parser refuses
-  the fifth with `NotEnoughMemorySpace`. Dummy outputs and the change note carry
-  no display and do not count, so this bounds the review rather than the spend:
-  a bundle may spend 32 notes while showing one recipient, which is the shape a
-  send produces.
+  shielded pools may be displayed** to the user, and at most **6 may be retained**
+  for the review, change notes included. The parser refuses past either bound
+  with `NotEnoughMemorySpace`. Dummy outputs do not count, so this bounds the
+  review rather than the spend: a bundle may spend 32 notes while showing one
+  recipient.
+- A wallet may **split its change across several shielded notes**, each counted
+  against the retained bound: up to five beside one recipient. A transfer with no
+  external recipient shows its change notes, so shielding or rebalancing into more
+  than four notes is refused. At most one transparent change output is accepted,
+  and none beside a shielded change note.
+- The bounds above are each within what the device holds, but not all at once. A
+  payload combining them past what the heap can hold is refused with
+  `NotEnoughMemorySpace` — at a shielded action count packet when the remaining
+  actions would not fit, or before the review when its screens would not — and
+  never by the application exiting.
 - The **change note is bound to the account being spent**. A shielded output that
   decrypts under the internal viewing key, and a transparent output whose declared
   path the app recognises as its own, both record the account they return to, and

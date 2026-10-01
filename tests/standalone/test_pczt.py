@@ -1943,6 +1943,57 @@ def _mixed_real_and_dummy_orchard_bundle() -> PcztOrchardBundle:
     )
 
 
+def test_pczt_orchard_change_split_across_notes_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The Orchard half of the split-change rule: a second change note is accepted and signs.
+
+    The same change note is repeated, the device keeping no record of the notes it has seen. The
+    transparent input pays the fee the extra change note leaves uncovered.
+    """
+    base = _mixed_real_and_dummy_orchard_bundle()
+    recipient, change = base.actions
+    bundle = PcztOrchardBundle(
+        actions=[recipient, change, change],
+        flags=base.flags,
+        value_balance=base.value_balance - change.value,
+        anchor=base.anchor,
+    )
+    fee_input = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=11000,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PcztGlobal(),
+        transparent_inputs=[fee_input],
+        transparent_outputs=[],
+        orchard_bundle=bundle,
+    ):
+        scenario = NavigationScenarioData(
+            scenario_navigator.device,
+            scenario_navigator.backend,
+            UseCase.TX_REVIEW,
+            True,
+        )
+        if scenario_navigator.device.touchable:
+            scenario.validation = scenario.validation[:-1]
+        scenario_navigator.navigator.navigate_until_text(
+            navigate_instruction=scenario.navigation,
+            validation_instructions=scenario.validation,
+            text=scenario.pattern,
+            screen_change_after_last_instruction=False,
+        )
+
+    assert len(client.pczt_sign_orchard(action_index=0).data) == 64
+
+
 # Both tests below review the same bundle, so they share its review snapshots.
 _ORCHARD_TO_ORCHARD_SNAPSHOTS = "test_sign_tx_v5_orchard_to_orchard_with_change"
 

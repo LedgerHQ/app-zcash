@@ -2028,3 +2028,209 @@ def test_pczt_recipient_reuse_preserves_note_checks(backend, pool, change):
             pytest.fail("Device accepted a tampered spend")
     assert error.value.status == Errors.SW_INVALID_TRANSACTION
     assert not error.value.data
+
+
+# Own-account transparent change, under the account the Ironwood change notes return to.
+_OWN_CHANGE_PATH = "m/44'/133'/0'/1/0"
+
+
+def _split_change_bundle(change_notes: int, with_recipient: bool = True) -> PcztIronwoodBundle:
+    """An Ironwood bundle whose change is split across `change_notes` notes of account 0.
+
+    Every change note is the same dummy-spend action paying the internal IVK: the device keeps no
+    record of the notes it has seen, so repeating it keeps the note count the only variable.
+    """
+    recipient = [_external_recipient_ironwood_action()] if with_recipient else []
+    actions = recipient + [_dummy_ironwood_action() for _ in range(change_notes)]
+    return PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(a.spend_value - a.value for a in actions),
+        flags=3,
+        anchor=bytes(32),
+    )
+
+
+def _walk_review(scenario_navigator: NavigateWithScenario, approve: bool) -> None:
+    scenario = NavigationScenarioData(
+        scenario_navigator.device,
+        scenario_navigator.backend,
+        UseCase.TX_REVIEW,
+        approve,
+    )
+    if approve and scenario_navigator.device.touchable:
+        scenario.validation = scenario.validation[:-1]
+    scenario_navigator.navigator.navigate_until_text(
+        navigate_instruction=scenario.navigation,
+        validation_instructions=scenario.validation,
+        text=scenario.pattern,
+        screen_change_after_last_instruction=False,
+    )
+
+
+@pytest.mark.parametrize("change_notes", [2, 3, 4, 5])
+def test_pczt_ironwood_change_split_across_notes_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    change_notes: int,
+):
+    """Change split across several notes stays off the review, and the transaction signs.
+
+    Five change notes beside one recipient fill the retained-output budget. The review is compared
+    against goldens, so a change note leaking onto the screen fails here. The transparent input
+    covers the change notes and the fee.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_100K],
+        transparent_outputs=[],
+        ironwood_bundle=_split_change_bundle(change_notes),
+    ):
+        _review_approve(
+            scenario_navigator,
+            f"test_pczt_ironwood_change_split_across_notes_signs_{change_notes}",
+        )
+
+    assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+    assert len(client.pczt_sign_transparent(input_index=0).data) >= 70
+
+
+def test_pczt_ironwood_change_notes_count_against_the_output_budget(backend):
+    """A sixth change note beside one recipient is a seventh retained shielded output: refused."""
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_11K],
+            transparent_outputs=[],
+            ironwood_bundle=_split_change_bundle(6),
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    assert not error.value.data
+
+
+def test_pczt_ironwood_shield_into_split_notes_shows_each_note(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Shielding into four notes of one's own account shows all four, and signs.
+
+    With no external recipient the transfer is revealed as a self-transfer, so the change notes
+    are what the user reviews: four fill the display budget and must all reach the screen.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_100K],
+        transparent_outputs=[],
+        ironwood_bundle=_split_change_bundle(4, with_recipient=False),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_shield_into_split_notes_shows_each_note")
+
+    assert len(client.pczt_sign_transparent(input_index=0).data) >= 70
+
+
+def test_pczt_ironwood_split_change_in_another_account_yields_no_signature(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Every hidden change note stays bound to the account being spent.
+
+    The notes return to account 0 while the transparent input signed here belongs to account 1.
+    """
+    foreign_account_input = PcztTransparentInput(
+        prevout_txid=_TRANSPARENT_INPUT_11K.prevout_txid,
+        prevout_index=_TRANSPARENT_INPUT_11K.prevout_index,
+        value=_TRANSPARENT_INPUT_11K.value,
+        script_pubkey=_TRANSPARENT_INPUT_11K.script_pubkey,
+        sequence=_TRANSPARENT_INPUT_11K.sequence,
+        signing_path="m/44'/133'/1'/0/0",
+    )
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[foreign_account_input],
+        transparent_outputs=[],
+        ironwood_bundle=_split_change_bundle(3),
+    ):
+        _walk_review(scenario_navigator, approve=True)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        client.pczt_sign_transparent(input_index=0)
+
+    assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+    assert not error.value.data
+
+
+def test_pczt_ironwood_transparent_and_shielded_change_refused(backend):
+    """A transparent change output rules out a shielded change note beside it."""
+    client = ZcashCommandSender(backend)
+    pubkey = client._compressed_pubkey_from_path(_OWN_CHANGE_PATH)  # pylint: disable=W0212
+    own_change = PcztTransparentOutput(
+        value=1000,
+        script_pubkey=bytes.fromhex("76a914") + ripemd160(hashlib.sha256(pubkey).digest()) + bytes.fromhex("88ac"),
+        signing_path=_OWN_CHANGE_PATH,
+    )
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_100K],
+            transparent_outputs=[own_change],
+            ironwood_bundle=_split_change_bundle(1),
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_INVALID_TRANSACTION
+    assert not error.value.data
+
+
+def test_pczt_ironwood_shield_into_too_many_notes_refused(backend):
+    """A fifth revealed note would put a fifth shielded output on the review: refused."""
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_100K],
+            transparent_outputs=[],
+            ironwood_bundle=_split_change_bundle(5, with_recipient=False),
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    assert not error.value.data
+
+
+def test_pczt_ironwood_four_recipients_and_a_change_note_sign(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Four recipients beside one change note still fit: the display budget plus one change note.
+
+    The recipient action is repeated, so the four displayed outputs are the same payment.
+    """
+    actions = [_external_recipient_ironwood_action() for _ in range(4)] + [_dummy_ironwood_action()]
+    bundle = PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(a.spend_value - a.value for a in actions),
+        flags=3,
+        anchor=bytes(32),
+    )
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    ):
+        _walk_review(scenario_navigator, approve=True)
+
+    assert len(client.pczt_sign_ironwood(action_index=0).data) == 64

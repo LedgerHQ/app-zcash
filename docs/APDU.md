@@ -30,7 +30,7 @@ stated again with the command that returns it.
 | `0x6986` | `ConditionsOfUseNotSatisfied` | The request contradicts what the user approved — chiefly a change output whose account is not the one being spent. |
 | `0xB007` | `BadState` | The command has no meaning in the current phase: a continuation opened before the review, or any round resuming a finished transaction. |
 | `0x6A80` | `IncorrectData` | Malformed payload, or a derivation path outside the shape the command accepts. |
-| `0x6A84` | `NotEnoughMemorySpace` | An allocation the device refused: retained memo text past its per-transaction budget, or an Orchard derivation past the per-run cap. |
+| `0x6A84` | `NotEnoughMemorySpace` | An allocation the device refused: retained memo text past its per-transaction budget, an Orchard derivation past the per-run cap, more shielded outputs than the review may hold, or a transaction whose remaining parse or review the heap cannot hold. |
 | `0x6B00` | `WrongP1P2` | The P1/P2 combination has no meaning for this command. |
 | `0x6F03` | `RngFailure` | The hardware random number generator reported a failure. No signature is produced. |
 | `0x6985` | `Deny` | The user rejected the review. |

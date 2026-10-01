@@ -224,6 +224,11 @@ impl PcztParser {
         let has_external_output = ctx.tx_info.outputs.iter().any(|output| !output.is_change);
         let reveal_self_outputs = !has_external_output && ctx.swap_params.is_none();
         if reveal_self_outputs {
+            // Revealed change notes are displayed, so the display bound holds for them as well.
+            if ctx.tx_info.retained_shielded_outputs > MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER {
+                error!("Too many shielded outputs to reveal on the review");
+                return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+            }
             debug!("PCZT has no external outputs; displaying self-transfer output");
             // PCZT does not read tx_info.outputs after review; this only affects UI filtering.
             for output in ctx.tx_info.outputs.iter_mut() {

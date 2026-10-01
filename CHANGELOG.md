@@ -34,6 +34,15 @@ allows once it refuses every APDU on a locked device.
   `NotEnoughMemorySpace` when it does not fit. It grew packet by packet, which needed
   about twice its size at once, and a failed growth exited the app: a t→z with 30 or
   more transparent inputs did so on every device
+- Accept a shielded transaction's change split across several notes of the account
+  being spent, as wallets do to keep part of the balance spendable while the rest
+  confirms: up to five change notes beside one recipient, and four notes when
+  shielding or rebalancing. The review still shows at most four shielded outputs, and
+  at most six are retained, change notes included. A transparent change output stays
+  single, and rules out a shielded one
+- Refuse with `NotEnoughMemorySpace` a transaction whose remaining actions or review the
+  heap cannot hold, instead of exiting the app: 32 transparent inputs beside 32 shielded
+  actions, or beside four recipients and a change note, did so on every device
 
 ## 3.9.4
 

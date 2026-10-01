@@ -66,6 +66,24 @@ pub const MAX_PCZT_IRONWOOD_ACTIONS_NUMBER: usize = 32;
 // that still collects an approval; a raise therefore belongs with a fix for that, not before it.
 pub const MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER: usize = 4;
 
+// Shielded outputs one transaction may hold for its review: the displayed ones plus the change
+// notes kept off it, across both shielded pools.
+//
+// A change note holds the same encoded address and output record as a displayed output, so it is
+// bounded the same way. Six lets a wallet split its change across up to five notes beside one
+// recipient. It is measured rather than assumed: a recipient and five change notes beside the full
+// transparent input bound parse, review and sign on Nano X. A payload holding more than the heap
+// can is refused by the headroom guards and the review rehearsal, not by this count.
+pub const MAX_PCZT_SHIELDED_RETAINED_OUTPUTS_NUMBER: usize = 6;
+
+// Contiguous heap a shielded bundle must leave free once its signing records are reserved.
+//
+// Measured with the heap probe: parsing an action needs about 2.6 KiB, and below about 1.5 KiB an
+// infallible allocation on the key or decryption path exits the application. Refusing below this at
+// the count packet keeps every failure a status word; between it and the real need, the parser's
+// own fallible allocations refuse instead.
+pub const SHIELDED_ACTIONS_HEAP_HEADROOM: usize = 2560;
+
 // Highest action count the signing instructions can address, P2 carrying the action index in a
 // single byte. A measurement build raises both shielded bounds to it so that a run ends where the
 // device runs out of memory rather than where the shipped bound sits — the bound above is a figure

@@ -54,6 +54,9 @@ impl PcztParser {
         self.ironwood_signing_records
             .try_reserve_exact(action_count)
             .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
+        if action_count != 0 {
+            ensure_heap_headroom(SHIELDED_ACTIONS_HEAP_HEADROOM).map_err(ParserError::from_sw)?;
+        }
 
         // A V6 transaction spending only Orchard notes carries an empty Ironwood bundle. The flag
         // stays clear so `compute.rs` supplies the empty digest, and finalizing runs the review.
@@ -837,10 +840,14 @@ impl PcztParser {
         is_change: bool,
     ) -> Result<(), ParserError> {
         if is_change && ctx.tx_info.is_change_found {
-            return Err(ParserError::from_str("Multiple change outputs detected"));
+            return Err(ParserError::from_str(
+                "Transparent and shielded change outputs detected",
+            ));
         }
 
-        // Claimed before the address below is encoded: the budget bounds that allocation.
+        // Claimed before the address below is encoded: the budgets bound that allocation, which a
+        // change note makes too.
+        claim_retained_shielded_output(ctx.tx_info)?;
         if !is_change {
             claim_displayed_shielded_output(ctx.tx_info)?;
         } else {
@@ -855,6 +862,11 @@ impl PcztParser {
             record_hidden_shielded_change_account(ctx.tx_info, path)?;
         }
 
+        // The record's slot is reserved before anything is allocated for it, as the budgets are.
+        ctx.tx_info
+            .outputs
+            .try_reserve(1)
+            .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
         // Ironwood reuses the Orchard UA receiver typecode (0x03) — ZIP 229 defines no
         // distinct typecode for Ironwood; addresses are encoded identically to Orchard receivers.
         let address =
@@ -877,10 +889,6 @@ impl PcztParser {
             memo,
             pool: TxPool::Orchard,
         });
-
-        if is_change {
-            ctx.tx_info.is_change_found = true;
-        }
 
         Ok(())
     }
