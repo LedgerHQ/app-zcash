@@ -207,11 +207,12 @@ impl PcztParser {
         const OUTPUT_METADATA_WITHOUT_RCV_LEN: usize = ORCHARD_RAW_ADDRESS_SIZE + 8 + 32;
         const OUTPUT_METADATA_WITH_RCV_LEN: usize = OUTPUT_METADATA_WITHOUT_RCV_LEN + 32;
 
+        // Orchard carries no version byte, so an extension block follows `rcv` directly.
         match reader.remaining_len() {
             OUTPUT_METADATA_WITHOUT_RCV_LEN => {
                 return Err(ParserError::from_str("Missing PCZT orchard rcv"));
             }
-            OUTPUT_METADATA_WITH_RCV_LEN => {}
+            len if len >= OUTPUT_METADATA_WITH_RCV_LEN => {}
             _ => {
                 return Err(ParserError::from_str(
                     "Bad PCZT orchard output metadata length",
@@ -254,7 +255,11 @@ impl PcztParser {
         );
         self.current_action.rcv = Some(rcv);
 
+        self.current_action.output_account = parse_output_extensions(reader)?;
         Self::ensure_orchard_apdu_group_end(reader)?;
+        if let Some(account) = self.current_action.output_account {
+            self.prepare_own_account_keys(ctx.tx_info, account)?;
+        }
         self.finish_current_orchard_action(ctx)
     }
 
@@ -463,6 +468,7 @@ impl PcztParser {
         {
             self.current_action.note_plaintext_version = NOTE_VERSION_ORCHARD;
         }
+        self.current_action.output_account = None;
     }
 
     pub(super) fn reset_orchard_bundle_state(&mut self, action_count: usize) {
@@ -708,6 +714,19 @@ impl PcztParser {
         enc_ciphertext: &[u8],
         out_ciphertext: &[u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
     ) -> Result<(), ParserError> {
+        if let Some(account) = self.current_action.output_account {
+            let output = self.recognize_own_account_output(
+                ctx.tx_info,
+                account,
+                enc_ciphertext,
+                out_ciphertext,
+                NOTE_VERSION_ORCHARD,
+                "PCZT orchard output does not belong to the declared account",
+            )?;
+            self.validate_deciphered_orchard_output(&output)?;
+            return push_own_account_output(ctx.tx_info, output, account);
+        }
+
         if self.try_decipher_current_orchard_output(ctx, enc_ciphertext, out_ciphertext)? {
             return Ok(());
         }
@@ -858,6 +877,7 @@ impl PcztParser {
             is_change,
             memo,
             pool: TxPool::Orchard,
+            own_account: None,
         });
 
         Ok(())

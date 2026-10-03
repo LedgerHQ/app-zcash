@@ -663,6 +663,7 @@ class ZcashCommandSender:
             output_metadata = action.recipient + action.value.to_bytes(8, byteorder="little") + action.rseed
             if include_rcv:
                 output_metadata += action.rcv
+            output_metadata += action.output_extensions
             packets.append(
                 self._checked_pczt_packet(
                     output_metadata,
@@ -745,6 +746,7 @@ class ZcashCommandSender:
                 output_metadata += action.rcv
             if action.note_plaintext_version is not None:
                 output_metadata += bytes([action.note_plaintext_version])
+            output_metadata += action.output_extensions
             packets.append(
                 self._checked_pczt_packet(
                     output_metadata,

@@ -113,6 +113,14 @@ fn consume_orchard_derivation_budget() -> Result<(), AppSW> {
     Ok(())
 }
 
+/// Orchard derivations this run of the app has requested, for measurement builds only.
+#[cfg(feature = "heap_probe")]
+pub fn orchard_derivations_spent() -> u32 {
+    // SAFETY: the app is single-threaded; this reads the counter `consume_orchard_derivation_budget`
+    // alone writes.
+    unsafe { ORCHARD_DERIVATIONS }
+}
+
 // Builds an `OrchardSk` from already-derived key bytes, WITHOUT invoking
 // `zip32_orchard_derive`. Used with a key cached by the PCZT parser.
 fn orchard_sk_from_bytes(sk_bytes: &Secret<32>) -> Result<OrchardSk, AppSW> {

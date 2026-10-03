@@ -76,6 +76,16 @@ pub const MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER: usize = 4;
 // can is refused by the headroom guards and the review rehearsal, not by this count.
 pub const MAX_PCZT_SHIELDED_RETAINED_OUTPUTS_NUMBER: usize = 6;
 
+// Distinct other accounts of the seed one transaction may pay, across both shielded pools.
+//
+// Each costs one Orchard derivation against the per-run budget and keeps two viewing keys for the
+// parse. Every output to another account is displayed, so the displayed-output budget already caps
+// them at four; this bound states it where the derivations are counted.
+pub const MAX_PCZT_OWN_ACCOUNTS: usize = MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER;
+
+// Tag of the output-metadata extension naming the ZIP 32 account an output pays.
+pub const PCZT_OUTPUT_EXTENSION_ACCOUNT: u8 = 0x01;
+
 // Contiguous heap a shielded bundle must leave free once its signing records are reserved.
 //
 // Measured with the heap probe: parsing an action needs about 2.6 KiB, and below about 1.5 KiB an

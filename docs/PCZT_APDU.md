@@ -190,6 +190,7 @@ Packet sequence:
      - `value u64`
      - `rseed [u8; 32]`
      - `rcv [u8; 32]`
+     - optional output extension block — see "Output extension block" below
 
 3. Bundle trailer packet, only when Orchard action count is greater than `0`:
    - `flags u8`
@@ -219,6 +220,65 @@ action is accepted:
 - Non-zero undecryptable outputs are rejected.
 
 Dummy spends are not represented by this compact APDU subset.
+
+### Output extension block
+
+The output metadata packet may end with an extension block: a sequence of
+entries `tag u8 · len u8 · value[len]` running to the end of the packet. It
+lives in the PCZT metadata only; no extension enters any digest the device signs.
+A packet without the block is unchanged — 115 bytes for Orchard, 115 or 116 for
+Ironwood — so a host that never sends one is unaffected, and an app that predates
+the block refuses a longer packet rather than misreading it.
+
+| Tag | `len` | Value |
+| --- | --- | --- |
+| `0x01` | `4` | Destination account: the ZIP 32 account index the output pays, `u32` little-endian, unhardened (`< 2^31`). |
+
+The block follows `rcv` in an Orchard packet. In an Ironwood packet it follows
+the `notePlaintextVersion` byte, which is then mandatory: the version byte is
+what keeps the two optional parts apart, so a 117-byte packet, or an extension
+sent without the version byte, is refused.
+
+Refused with `IncorrectData`, ending the PCZT session: an unknown tag, a tag
+repeated within one block, a `len` other than the one its tag requires, a value
+cut short by the end of the packet, and an account index with the hardened bit
+set.
+
+### Transfers to another account of the seed
+
+An output declared for an account (tag `0x01`) is a claim the device proves
+before it shows it:
+
+- The device builds the account's path itself, `m/32'/<coin_type>'/<index>'`,
+  taking purpose and coin type from the path of the account being spent, so a
+  mainnet transaction cannot reach a testnet key or the reverse. The account
+  being spent is not a valid declaration.
+- It derives that account's full viewing key, keeps only its internal and
+  external incoming viewing keys, and accepts the output only if its
+  `enc_ciphertext` decrypts under one of them and passes the full note
+  validation: `epk` rederived from the note's `rseed`, `cmx` recomputed (V3 for
+  Ironwood), and the decrypted value and recipient equal to `value` and
+  `recipient`. Anything else refuses the transaction with `IncorrectData`; a
+  declared output is never accepted as change, as a payment recovered by the
+  outgoing viewing key, or as a dummy.
+- Recognition does not depend on the outgoing ciphertext, so it holds whether the
+  sender recorded the output under its external OVK, its internal OVK, or none.
+- Each distinct account costs one Orchard derivation against the per-run budget,
+  once per transaction however many outputs name it. At most **4 distinct
+  accounts** per transaction; a fifth is refused with `NotEnoughMemorySpace`, as
+  is a derivation past the per-run budget or one the heap cannot serve.
+- A recognized output is an external transfer for every other rule: never change,
+  never hidden, and counted against both the displayed and the retained output
+  budgets. Change notes beside it stay hidden. Under swap it carries no address
+  to compare with the approved destination, so the transaction is refused.
+- The review shows its amount, then `Output #i account` with the value
+  `Account index <n>` — the ZIP 32 index, which starts at 0 — then its memo if it
+  has one. No address is shown.
+- The destination account's viewing keys are wiped on a new `PCZT_HEADER`, on
+  any parse error, and before the review, like the source account's.
+
+Undeclared outputs are handled exactly as before; an undeclared output the
+source account cannot recover is still refused.
 
 ## PCZT_IRONWOOD_ACTION
 
@@ -279,8 +339,8 @@ per value pool — Orchard holds V2, Ironwood holds V3 (`BundleVersion::note_ver
 plaintext belonging to the other pool is not a compatibility case to accommodate but a note this
 bundle cannot hold.
 
-When the output metadata packet is 116 bytes, the final byte is `notePlaintextVersion` and it **must
-be `0x03`**. Any other value is rejected with "Bad PCZT ironwood notePlaintextVersion". The 115-byte
+When the output metadata packet is 116 bytes or more, byte 116 is `notePlaintextVersion` and it **must
+be `0x03`**; anything after it is the output extension block described under `PCZT_ORCHARD_ACTION`. Any other value is rejected with "Bad PCZT ironwood notePlaintextVersion". The 115-byte
 form (no `notePlaintextVersion` byte) is still valid and means `0x03`: the parser's per-action reset
 leaves the field at that value, so the two encodings agree.
 

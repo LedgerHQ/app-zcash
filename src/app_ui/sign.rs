@@ -159,7 +159,14 @@ pub fn ui_display_tx(
         let idx = idx + 1;
         name_strs.push((
             try_format(format_args!("Output #{idx} amount"))?,
-            try_format(format_args!("Output #{idx} address"))?,
+            // An output to another account of the seed is shown by that account rather than by an
+            // address: the ZIP 32 index, worded as an index since wallets often number accounts
+            // from 1.
+            if output.own_account.is_some() {
+                try_format(format_args!("Output #{idx} account"))?
+            } else {
+                try_format(format_args!("Output #{idx} address"))?
+            },
             // The memo carries the index of its output, and is shown right after it below. Grouped
             // at the end under a label naming only the kind, a memo could not be traced back to a
             // recipient — an output without one contributes no field, so position identifies
@@ -171,7 +178,13 @@ pub fn ui_display_tx(
                 .transpose()?,
         ));
 
-        value_strs.push(format_zec_amount(output.amount)?);
+        value_strs.push((
+            format_zec_amount(output.amount)?,
+            output
+                .own_account
+                .map(|account| try_format(format_args!("Account index {account}")))
+                .transpose()?,
+        ));
     }
 
     // Define transaction review fields: two per output, its memo, then fees, lock time and expiry.
@@ -188,11 +201,14 @@ pub fn ui_display_tx(
     {
         my_fields.push(Field {
             name: name_strs[idx].0.as_str(),
-            value: value_strs[idx].as_str(),
+            value: value_strs[idx].0.as_str(),
         });
         my_fields.push(Field {
             name: name_strs[idx].1.as_str(),
-            value: &output.address,
+            value: value_strs[idx]
+                .1
+                .as_deref()
+                .unwrap_or(output.address.as_str()),
         });
 
         if let (Some(label), Some(memo)) = (name_strs[idx].2.as_ref(), output.memo.as_ref()) {

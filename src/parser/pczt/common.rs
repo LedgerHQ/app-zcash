@@ -217,6 +217,8 @@ impl PcztParser {
             ironwood_vb
         );
 
+        // An output to another account of the seed is not change, so it counts as external here: the
+        // change notes beside it stay hidden, and it is shown.
         // In the case of internal transfers between pools (for example, transparent -> Orchard or Orchard -> transparent),
         // we have to display the internal outputs on the clear-sign screen.
         // Not in swap mode: there is no screen to reveal anything on, and clearing `is_change`
@@ -242,11 +244,12 @@ impl PcztParser {
         let spent_from_private = spent_from_private || self.ironwood_spend_value_sum > 0;
         let transfer_type =
             TransferType::classify(spent_from_public, spent_from_private, &ctx.tx_info.outputs);
-        // No validation remains after this point. Dropping the decipher cache
-        // wipes both IVKs and the OVK before the human review wait.
+        // No validation remains after this point. Dropping the decipher caches
+        // wipes every IVK and the OVK before the human review wait.
         self.orchard_fvk = None;
         self.orchard_validation_key = None;
         ctx.tx_info.orchard_decipher_keys = None;
+        discard_own_account_keys(ctx.tx_info);
         // Swap mode substitutes validation for review, exactly as the legacy path does: the user
         // already approved the operation in the Exchange app, which drives this flow without
         // interaction, so prompting here would both stall it and ask about something the user has

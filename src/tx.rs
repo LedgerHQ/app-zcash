@@ -13,7 +13,7 @@ use zcash_protocol::consensus::BranchId;
 use ledger_device_sdk::log::error;
 
 use crate::AppSW;
-use crate::parser::orchard_decipher::OrchardDecipherKeys;
+use crate::parser::orchard_decipher::{OrchardDecipherKeys, OwnAccountKeys};
 use crate::parser::personalization::ZCASH_IRONWOOD_HASH_PERSONALIZATION;
 use crate::parser::personalization::{
     ZCASH_OUTPUTS_HASH_PERSONALIZATION, ZCASH_PREVOUTS_HASH_PERSONALIZATION,
@@ -114,6 +114,9 @@ pub struct TxOutput {
     pub is_change: bool,
     pub memo: Option<TxOutputMemo>,
     pub pool: TxPool,
+    /// ZIP 32 index of another account of the seed this output pays, proven by decrypting it under
+    /// that account's viewing key. Such an output is shown by its account, not by an address.
+    pub own_account: Option<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -217,6 +220,9 @@ pub struct TxInfo {
     pub branch_id_raw: u32,
 
     pub orchard_decipher_keys: Option<OrchardDecipherKeys>,
+    /// Viewing keys of the other accounts the transaction pays, derived once per account and
+    /// dropped with the source account's keys.
+    pub own_account_keys: Vec<OwnAccountKeys>,
 }
 
 /// Refuse a signature that would spend from an account other than the one the change returns to.

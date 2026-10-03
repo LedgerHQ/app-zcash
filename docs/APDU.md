@@ -29,8 +29,8 @@ stated again with the command that returns it.
 | --- | --- | --- |
 | `0x6986` | `ConditionsOfUseNotSatisfied` | The request contradicts what the user approved — chiefly a change output whose account is not the one being spent. |
 | `0xB007` | `BadState` | The command has no meaning in the current phase: a continuation opened before the review, or any round resuming a finished transaction. |
-| `0x6A80` | `IncorrectData` | Malformed payload, or a derivation path outside the shape the command accepts. |
-| `0x6A84` | `NotEnoughMemorySpace` | An allocation the device refused: retained memo text past its per-transaction budget, an Orchard derivation past the per-run cap, more shielded outputs than the review may hold, or a transaction whose remaining parse or review the heap cannot hold. |
+| `0x6A80` | `IncorrectData` | Malformed payload, or a derivation path outside the shape the command accepts — including a malformed output extension block, and a shielded output declared for an account it does not decrypt under or for the account being spent. |
+| `0x6A84` | `NotEnoughMemorySpace` | An allocation the device refused: retained memo text past its per-transaction budget, an Orchard derivation past the per-run cap, more shielded outputs than the review may hold, outputs declared for more than four other accounts, or a transaction whose remaining parse or review the heap cannot hold. |
 | `0x6B00` | `WrongP1P2` | The P1/P2 combination has no meaning for this command. |
 | `0x6F03` | `RngFailure` | The hardware random number generator reported a failure. No signature is produced. |
 | `0x6985` | `Deny` | The user rejected the review. |
@@ -300,6 +300,14 @@ Once even the digest no longer fits the budget the command returns
 `NotEnoughMemorySpace` (`0x6A84`). The budget holds two maximum-length memos,
 well above what a wallet-built transaction carries. The same applies to
 `INS_PCZT_IRONWOOD_ACTION`, which shares the rendering.
+
+An output may declare the account of the seed it pays, in an extension block at
+the end of its metadata packet. The device derives that account's viewing keys,
+shows the output as `Account index <n>` only if it decrypts under one of them,
+and refuses the transaction with `IncorrectData` otherwise; a fifth distinct
+account is refused with `NotEnoughMemorySpace`. The same applies to
+`INS_PCZT_IRONWOOD_ACTION`. See
+[PCZT_APDU.md](./PCZT_APDU.md#transfers-to-another-account-of-the-seed).
 
 For **V5 transactions**, `P2 = 0x01` on the last APDU marks the PCZT payload
 as complete. For **V6 transactions**, the last APDU of this command must use

@@ -27,6 +27,18 @@ from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
+from .own_account_vectors import (
+    IRONWOOD_ACCOUNT_1_EXTERNAL_EXTERNAL_OVK,
+    IRONWOOD_ACCOUNT_1_EXTERNAL_INTERNAL_OVK,
+    IRONWOOD_ACCOUNT_1_EXTERNAL_NO_OVK,
+    IRONWOOD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK,
+    IRONWOOD_ACCOUNT_1_INTERNAL_INTERNAL_OVK,
+    IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK,
+    IRONWOOD_ACCOUNT_1_MEMO,
+    MALFORMED_OUTPUT_EXTENSIONS,
+    own_account_ironwood_action,
+)
+
 # NU6.3 (Ironwood) network identifiers
 _V6_TX_VERSION = 6
 _V6_VERSION_GROUP_ID = 0xD884B698
@@ -2234,3 +2246,174 @@ def test_pczt_ironwood_four_recipients_and_a_change_note_sign(
         _walk_review(scenario_navigator, approve=True)
 
     assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+
+
+# ── Transfers to another account of the same seed ──────────────────────────────
+#
+# The host may declare, in an output's metadata, the ZIP 32 account the output pays. The device then
+# derives that account's viewing keys and accepts the output only if it decrypts under one of its
+# IVKs, whatever outgoing record the sender kept. The vectors live in own_account_vectors.py.
+
+_OWN_ACCOUNT_TRANSFER_VECTORS = {
+    "internal_address_external_ovk": IRONWOOD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK,
+    "internal_address_internal_ovk": IRONWOOD_ACCOUNT_1_INTERNAL_INTERNAL_OVK,
+    "internal_address_no_ovk": IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK,
+    "external_address_external_ovk": IRONWOOD_ACCOUNT_1_EXTERNAL_EXTERNAL_OVK,
+    "external_address_internal_ovk": IRONWOOD_ACCOUNT_1_EXTERNAL_INTERNAL_OVK,
+    "external_address_no_ovk": IRONWOOD_ACCOUNT_1_EXTERNAL_NO_OVK,
+}
+
+
+def _own_account_ironwood_bundle(*own_actions: PcztIronwoodAction, change: bool = False) -> PcztIronwoodBundle:
+    """Account 0 spends 300 000 zatoshis and pays the given actions; the rest is the fee.
+
+    With `change`, a 10 000-zatoshi change note of account 0 sits beside them.
+    """
+    actions = [_valid_ironwood_action(), *own_actions]
+    if change:
+        actions.append(_dummy_ironwood_action())
+    return PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(action.spend_value - action.value for action in actions),
+        flags=3,
+        anchor=bytes(32),
+    )
+
+
+def _send_own_account_ironwood(client: ZcashCommandSender, bundle: PcztIronwoodBundle):
+    return client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    )
+
+
+def _assert_own_account_ironwood_refused(
+    client: ZcashCommandSender,
+    bundle: PcztIronwoodBundle,
+    status: Errors = Errors.SW_INVALID_TRANSACTION,
+) -> None:
+    """The bundle is refused while it is parsed, the session ends, and the app keeps answering."""
+    with pytest.raises(ExceptionRAPDU) as error:
+        with _send_own_account_ironwood(client, bundle):
+            pass
+    assert error.value.status == status
+
+    with pytest.raises(ExceptionRAPDU):
+        client.pczt_sign_ironwood(action_index=0)
+    assert client.get_version().status == 0x9000
+
+
+@pytest.mark.parametrize("vector", _OWN_ACCOUNT_TRANSFER_VECTORS.values(), ids=_OWN_ACCOUNT_TRANSFER_VECTORS.keys())
+def test_pczt_ironwood_own_account_transfer_signs(backend, scenario_navigator: NavigateWithScenario, vector):
+    """A declared transfer to account 1 signs and shows `Account index 1`, whatever the OVK policy.
+
+    Every case draws the same screens — amount and account, no address — so all of them compare
+    against one golden set: the recognition does not depend on which address of the destination
+    account is paid, nor on the outgoing record the sender kept.
+    """
+    client = ZcashCommandSender(backend)
+
+    with _send_own_account_ironwood(client, _own_account_ironwood_bundle(own_account_ironwood_action(vector))):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_own_account_transfer")
+
+    assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+
+
+def test_pczt_ironwood_own_account_transfer_shows_its_memo(backend, scenario_navigator: NavigateWithScenario):
+    """The memo of a transfer to another account is shown, after the account it goes to."""
+    client = ZcashCommandSender(backend)
+
+    with _send_own_account_ironwood(client, _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_MEMO))):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_own_account_transfer_shows_its_memo")
+
+    assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+
+
+def test_pczt_ironwood_own_account_transfer_beside_change_keeps_change_hidden(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Beside a transfer to account 1, the change note of account 0 stays off the review.
+
+    The transfer counts as an external output, so nothing triggers the self-transfer reveal: the
+    review shows the transfer, its memo and the fee, and no change note.
+    """
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_MEMO), change=True)
+
+    with _send_own_account_ironwood(client, bundle):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_ironwood_own_account_transfer_beside_change_keeps_change_hidden",
+        )
+
+    assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+
+
+def test_pczt_ironwood_own_account_transfer_rejected_by_user(backend, scenario_navigator: NavigateWithScenario):
+    """Rejecting the review of a transfer to another account releases no signature."""
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK))
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with _send_own_account_ironwood(client, bundle):
+            scenario_navigator.review_reject(test_name="test_pczt_ironwood_own_account_transfer_rejected_by_user")
+    assert error.value.status == Errors.SW_DENY
+
+    with pytest.raises(ExceptionRAPDU):
+        client.pczt_sign_ironwood(action_index=0)
+
+
+@pytest.mark.parametrize(
+    "vector",
+    [IRONWOOD_ACCOUNT_1_INTERNAL_INTERNAL_OVK, IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK],
+    ids=["internal_ovk", "no_ovk"],
+)
+def test_pczt_ironwood_own_account_output_undeclared_is_refused(backend, vector):
+    """Without a declaration, an output account 0 cannot recover is refused, as it always was."""
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(vector, declared=None))
+
+    _assert_own_account_ironwood_refused(client, bundle)
+
+
+def test_pczt_ironwood_own_account_declared_for_another_account_is_refused(backend):
+    """An output to account 1 declared for account 2 does not decrypt under account 2: refused.
+
+    The external OVK record would let account 0 recover the output as an ordinary payment, which is
+    precisely what a failed declaration must not fall back to.
+    """
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK, declared=2))
+
+    _assert_own_account_ironwood_refused(client, bundle)
+
+
+def test_pczt_ironwood_own_account_declaring_the_source_account_is_refused(backend):
+    """Declaring account 0, the account being spent, is refused before any derivation."""
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, declared=0))
+
+    _assert_own_account_ironwood_refused(client, bundle)
+
+
+@pytest.mark.parametrize("extensions", MALFORMED_OUTPUT_EXTENSIONS.values(), ids=MALFORMED_OUTPUT_EXTENSIONS.keys())
+def test_pczt_ironwood_own_account_malformed_extension_is_refused(backend, extensions: bytes):
+    """Every malformed extension block is refused, and the session with it."""
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, extensions=extensions))
+
+    _assert_own_account_ironwood_refused(client, bundle)
+
+
+def test_pczt_ironwood_own_account_extension_without_version_byte_is_refused(backend):
+    """An Ironwood extension block must follow the notePlaintextVersion byte.
+
+    Sent without it, the tag lands where the version byte belongs and is refused as a version.
+    """
+    client = ZcashCommandSender(backend)
+    action = own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, note_plaintext_version=None)
+
+    _assert_own_account_ironwood_refused(client, _own_account_ironwood_bundle(action))

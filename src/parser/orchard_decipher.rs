@@ -7,7 +7,7 @@ use crate::{AppSW, zip32::map_ledger_crypto_error};
 pub(crate) use ledger_zcash_crypto::orchard::{
     DecipheredOrchardOutput, ORCHARD_ENC_CIPHERTEXT_SIZE, ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE,
     ORCHARD_OUT_CIPHERTEXT_SIZE, ORCHARD_RAW_ADDRESS_SIZE, OrchardActionCiphertext,
-    OrchardCompactAction, decipher_compact_value, decipher_value_with_ovk,
+    OrchardCompactAction, decipher_compact_value, decipher_value_with_ivk, decipher_value_with_ovk,
 };
 
 pub(crate) struct OrchardDecipherKeys {
@@ -69,5 +69,45 @@ impl OrchardDecipherKeys {
             self.external_ivk = Some(ivk[32..].try_into().map_err(|_| AppSW::TechnicalProblem)?);
         }
         self.external_ivk.as_ref().ok_or(AppSW::TechnicalProblem)
+    }
+}
+
+/// Incoming viewing keys of another account of the seed, which an output of the transaction pays.
+///
+/// Only the IVKs are kept: they are what recognizes the output, and the full viewing key they come
+/// from is dropped as soon as they are taken. Wiped on drop like the source account's keys.
+pub(crate) struct OwnAccountKeys {
+    /// ZIP 32 account index, unhardened.
+    pub account: u32,
+    pub internal_ivk: [u8; 32],
+    pub external_ivk: [u8; 32],
+}
+
+impl Drop for OwnAccountKeys {
+    fn drop(&mut self) {
+        self.internal_ivk.zeroize();
+        self.external_ivk.zeroize();
+    }
+}
+
+impl OwnAccountKeys {
+    pub(crate) fn from_fvk(account: u32, fvk: &FullViewingKey) -> Result<Self, AppSW> {
+        let mut keys = Self {
+            account,
+            internal_ivk: [0u8; 32],
+            external_ivk: [0u8; 32],
+        };
+        for (scope, ivk) in [
+            (Scope::Internal, &mut keys.internal_ivk),
+            (Scope::External, &mut keys.external_ivk),
+        ] {
+            let bytes = zeroize::Zeroizing::new(
+                fvk.to_ivk_ledger(scope)
+                    .map_err(map_ledger_crypto_error)?
+                    .to_bytes(),
+            );
+            ivk.copy_from_slice(&bytes[32..]);
+        }
+        Ok(keys)
     }
 }

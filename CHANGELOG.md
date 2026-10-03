@@ -43,6 +43,12 @@ allows once it refuses every APDU on a locked device.
 - Refuse with `NotEnoughMemorySpace` a transaction whose remaining actions or review the
   heap cannot hold, instead of exiting the app: 32 transparent inputs beside 32 shielded
   actions, or beside four recipients and a change note, did so on every device
+- Recognize a shielded transfer to another account of the same seed. The host may
+  declare, in an output's metadata, the ZIP 32 account it pays; the device derives that
+  account's viewing keys and shows the output as `Account index <n>` with its amount and
+  memo, only if it decrypts under them, whatever outgoing record the sender kept. A
+  declaration the output does not prove, or naming the account being spent, is refused.
+  At most four distinct accounts per transaction, each costing one derivation
 
 ## 3.9.4
 
