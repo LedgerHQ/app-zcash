@@ -1992,7 +1992,8 @@ pub mod testing {
 
             ArbitraryBundleInputs {
                 rng: StdRng::from_seed(rng_seed),
-                sk,
+                // Cloned for each case: the key wipes itself on drop, so it is not `Copy`.
+                sk: sk.clone(),
                 anchor: frontier.root().into(),
                 notes: notes_and_auth_paths,
                 output_amounts

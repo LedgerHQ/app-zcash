@@ -66,6 +66,19 @@ diff -ruN a/Cargo.toml b/Cargo.toml
 -
 -[profile.release]
 -debug = 2
+diff -ruN a/src/builder.rs b/src/builder.rs
+--- a/src/builder.rs
++++ b/src/builder.rs
+@@ -1992,7 +1992,8 @@
+ 
+             ArbitraryBundleInputs {
+                 rng: StdRng::from_seed(rng_seed),
+-                sk,
++                // Cloned for each case: the key wipes itself on drop, so it is not `Copy`.
++                sk: sk.clone(),
+                 anchor: frontier.root().into(),
+                 notes: notes_and_auth_paths,
+                 output_amounts
 diff -ruN a/src/bundle/commitments.rs b/src/bundle/commitments.rs
 --- a/src/bundle/commitments.rs
 +++ b/src/bundle/commitments.rs
