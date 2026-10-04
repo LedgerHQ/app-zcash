@@ -69,6 +69,11 @@ mod io_legacy {
     pub const BOLOS_INS_GET_VERSION: u8 = 1;
     pub const BOLOS_INS_QUIT: u8 = 0xa7;
     pub const BOLOS_INS_SET_PKI_CERT: u8 = 6;
+    // The SDK's rule, mirrored because its `io_legacy` is not compiled here: the only built-in
+    // command answered while another command is in flight.
+    pub fn is_bolos_apdu_allowed_in_flight(cla: u8, ins: u8) -> bool {
+        cla == 0xb0 && ins == BOLOS_INS_GET_VERSION
+    }
     pub struct PkiLoadCertificateError;
     impl From<u32> for PkiLoadCertificateError {
         fn from(_: u32) -> Self {
@@ -237,6 +242,42 @@ fn overlapping_review_commands_preserve_the_original_reply() {
     comm.send(&[42], io::StatusWords::Ok).unwrap();
     expected.push((USB, vec![42, 0x90, 0x00]));
     OS.with_borrow(|os| assert_eq!(os.replies, expected));
+}
+
+#[test]
+fn builtins_other_than_get_version_are_refused_during_review() {
+    reset();
+    static STORAGE: io::CommStorage = io::CommStorage::new();
+    let comm = io::init_comm(&STORAGE);
+    enqueue(USB, &VERSION);
+    let comm = comm.next_command().into_comm();
+    let callback = OS.with_borrow(|os| os.review_callback.unwrap());
+    // Reaching quit or the certificate loader panics the shim, so a pass proves they never ran.
+    enqueue(USB, &[0xb0, io_legacy::BOLOS_INS_QUIT, 0, 0, 0]);
+    assert!(!callback());
+    enqueue(BLE, &[0xb0, io_legacy::BOLOS_INS_SET_PKI_CERT, 0, 0, 1, 0]);
+    assert!(!callback());
+    enqueue(USB, &[0xb0, io_legacy::BOLOS_INS_GET_VERSION, 0, 0, 0]);
+    assert!(!callback());
+    comm.send(&[42], io::StatusWords::Ok).unwrap();
+    OS.with_borrow(|os| {
+        let statuses: Vec<_> = os
+            .replies
+            .iter()
+            .map(|(transport, bytes)| (*transport, bytes[bytes.len() - 2..].to_vec()))
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                (USB, vec![0x69, 0x01]),
+                (BLE, vec![0x69, 0x01]),
+                (USB, vec![0x90, 0x00]),
+                (USB, vec![0x90, 0x00]),
+            ]
+        );
+        assert_eq!(os.replies.last().unwrap().1, vec![42, 0x90, 0x00]);
+        assert!(os.builtin_calls > 0, "GET_VERSION is still answered in flight");
+    });
 }
 
 #[test]
