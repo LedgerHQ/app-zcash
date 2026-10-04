@@ -41,7 +41,9 @@ its own logs rather than host discrimination.
 
 `0x6901` `CmdNotAccepted` comes from the SDK when another application command
 arrives while a command is still being processed, including during review. Wait
-for the original command to finish before retrying.
+for the original command to finish before retrying. The SDK's built-in commands
+(`CLA = 0xB0`) get the same answer while a command is in flight, except
+GET_VERSION, which is answered so that a host can still identify the app.
 
 An APDU whose payload length differs from its declared length, in the short or the
 extended form, is refused by the SDK before it reaches the app (`0x6700` `BadLen`
@@ -54,7 +56,7 @@ When a PIN is configured and the device is locked, every APDU is answered `0x551
 `DeviceLocked` before it is decoded, whatever its class: Zcash instructions and the
 SDK's built-in commands (`CLA = 0xB0`: app name/version, quit, certificate load)
 alike, including those queued while a screen is displayed. The SDK applies the check
-to each received frame (`ledger_device_sdk` 1.37.1 and later, `io_new`), as the
+to each received frame (`ledger_device_sdk` 1.38.0, `io_new`), as the
 legacy I/O path did.
 
 ## Accepted derivation paths
