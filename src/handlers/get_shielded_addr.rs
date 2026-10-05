@@ -1,5 +1,5 @@
 use orchard::keys::Scope;
-use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
+use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver, Revision, Uitem};
 
 use ledger_device_sdk::io::{Command, CommandResponse};
 use ledger_device_sdk::log::{error, info};
@@ -116,9 +116,12 @@ pub fn handler_get_shielded_addr<'a>(
 
             let network = orchard_network(&path);
 
-            let orchard_address = UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(
-                orchard_address.to_raw_address_bytes(),
-            )])
+            let orchard_address = UnifiedAddress::try_from_items(
+                Revision::R0,
+                alloc::vec![Uitem::Data(Receiver::Orchard(
+                    orchard_address.to_raw_address_bytes(),
+                ))],
+            )
             .map_err(|_| AppSW::TechnicalProblem)?;
 
             let orchard_address_str = orchard_address.encode(&network);

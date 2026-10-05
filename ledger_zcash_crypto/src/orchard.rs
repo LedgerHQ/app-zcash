@@ -11,7 +11,7 @@ use chacha20::{
     ChaCha20,
     cipher::{KeyIvInit, StreamCipher, StreamCipherSeek},
 };
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::AeadInPlace};
+use chacha20poly1305::{AeadInOut, ChaCha20Poly1305, KeyInit};
 use ff::{Field, PrimeField};
 use ledger_device_sdk::hash::{
     HashInit as _,
@@ -566,7 +566,12 @@ fn chacha20poly1305_decrypt<const PLAINTEXT_SIZE: usize>(
     };
 
     ChaCha20Poly1305::new(key.into())
-        .decrypt_in_place_detached((&[0u8; 12]).into(), &[], plaintext, tag.into())
+        .decrypt_inout_detached(
+            (&[0u8; 12]).into(),
+            &[],
+            (&mut plaintext[..]).into(),
+            tag.into(),
+        )
         .is_ok()
 }
 

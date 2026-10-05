@@ -7,6 +7,60 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-29
+
+### Added
+- `orchard::pczt::Action::decrypt_output_with_ivk`
+- `orchard::pczt::Action::decrypt_compact_output_with_ivk`
+- `orchard::pczt::Action::recover_output_with_ovk`
+- `orchard::pczt::UnsupportedBundleVersion`
+- `impl From<&orchard::pczt::Action> for orchard::note_encryption::CompactAction`
+- `zeroize` feature flag (enabled by default), which enables the `zeroize`
+  dependency (without its default features, so `no_std` is preserved), turns on
+  `pasta_curves/zeroize`, `reddsa/zeroize` and `zip32/zeroize`, and provides:
+  - `impl zeroize::{Zeroize, ZeroizeOnDrop} for orchard::keys::SpendingKey`
+  - `impl zeroize::{Zeroize, ZeroizeOnDrop} for orchard::keys::SpendAuthorizingKey`
+  - `impl zeroize::{Zeroize, ZeroizeOnDrop} for orchard::primitives::redpallas::SigningKey`
+  When enabled, these types are zeroized on drop, and the intermediate values
+  produced while deriving them from a spending key are zeroized after use.
+- `orchard::note_encryption::COMPACT_NOTE_SIZE`, `NOTE_PLAINTEXT_SIZE` and
+  `ENC_CIPHERTEXT_SIZE`.
+- `orchard::note_encryption::{NotePlaintextBytes, NoteCiphertextBytes,
+  CompactNotePlaintextBytes, CompactNoteCiphertextBytes}`, the Orchard
+  instantiations of the new `zcash_note_encryption::Domain` associated types,
+  along with a re-export of `zcash_note_encryption::note_bytes::NoteBytesData`
+  that they alias.
+- `orchard::primitives::redpallas::SigningKey::to_bytes`
+- `orchard::circuit::ProvingKey::verifying_key`, which reuses the verifying
+  key generated as part of proving-key construction instead of deriving it
+  again.
+- `orchard::tree::MerkleHashOrchard::combine_batch`, which hashes same-level
+  Merkle node pairs together and shares one projective-to-affine normalization
+  across each batch.
+
+### Changed
+- MSRV is now 1.88
+- Migrated to `ff 0.14`, `group 0.14`, `pasta_curves 0.6`, `rand 0.10`,
+  `rand_core 0.10`, `reddsa 0.6`, `zcash_note_encryption 0.5`, `zip32 0.3`, 
+  `halo2_proofs 0.4`, `incrementalmerkletree 0.9`, `shardtree 0.8`.
+- Under the `unstable-voting-circuits` feature: migrated to `halo2_gadgets 0.6`.
+- Public APIs that took an `RngCore` (with or without `CryptoRng`) now take a
+  `rand_core 0.10` `Rng` in its place, as `RngCore` is deprecated in
+  `rand_core 0.10`.
+- `orchard::keys::SpendingKey` no longer implements `Copy` (it still implements
+  `Clone`), and its `Debug` impl no longer prints the key material.
+- `orchard::note::TransmittedNoteCiphertext::enc_ciphertext` is now an
+  `orchard::note_encryption::NoteCiphertextBytes` instead of a `[u8; 580]`.
+  The wrapper is a `Copy` newtype over the same array; use `.0` (or
+  `AsRef<[u8]>`) to reach the bytes.
+- `tracing` is now an optional dependency, enabled by the `circuit` feature.
+
+### Removed
+- `impl From<SigningKey<T>> for [u8; 32]` and
+  `impl From<&SigningKey<T>> for [u8; 32]` in `orchard::primitives::redpallas`.
+  Use `SigningKey::to_bytes` instead; the caller must zeroize the returned
+  bytes.
+
 ## [0.15.5] - 2026-08-02
 
 ### Changed

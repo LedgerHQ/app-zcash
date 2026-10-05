@@ -1,0 +1,43 @@
+# Ledger delta for the vendored `secp256k1` crate.
+#
+# Base: crates.io package secp256k1 0.33.1
+# Apply from vendor/secp256k1 with: patch -p1 -E < ../patches/secp256k1_dep.patch
+#
+# Routes the global-context spinlock through `portable-atomic`: 0.33 added the lock, whose
+# `AtomicBool::compare_exchange` does not exist on targets without compare-and-swap (nanox,
+# Cortex-M0). `unsafe-assume-single-core` is enabled on nanox only, as for the vendored `spin`.
+#
+# Regenerate with vendor/generate_patches.sh, which also verifies the result.
+#
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -108,6 +108,15 @@
+ version = "0.14.0"
+ default-features = false
+ 
++[target.'cfg(target_os = "nanox")'.dependencies.portable-atomic]
++version = "1"
++features = ["unsafe-assume-single-core"]
++default-features = false
++
++[target.'cfg(not(target_os = "nanox"))'.dependencies.portable-atomic]
++version = "1"
++default-features = false
++
+ [dependencies.serde]
+ version = "1.0.103"
+ optional = true
+diff -ruN a/src/context/spinlock.rs b/src/context/spinlock.rs
+--- a/src/context/spinlock.rs
++++ b/src/context/spinlock.rs
+@@ -3,7 +3,8 @@
+ use core::cell::UnsafeCell;
+ use core::hint::spin_loop;
+ use core::ops::{Deref, DerefMut};
+-use core::sync::atomic::{AtomicBool, Ordering};
++// Through portable-atomic: some targets lack the compare-and-swap this lock needs.
++use portable_atomic::{AtomicBool, Ordering};
+ 
+ use crate::context::internal::SelfContainedContext;
+ 

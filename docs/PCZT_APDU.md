@@ -103,6 +103,10 @@ Single packet:
   - `coin_type u32`
   - `tx_modifiable u8`
 
+The app accepts a `consensus_branch_id` only if it is a consensus branch id defined by the protocol
+(Sprout's `0`, then Overwinter through NU7) and rejects any other value, ending the session with
+`SW_INVALID_TRANSACTION`.
+
 The PCZT version field encodes the PCZT wire-format revision:
 
 - Version `1` is required for V5 (Orchard) transactions.

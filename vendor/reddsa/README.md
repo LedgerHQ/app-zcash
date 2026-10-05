@@ -21,14 +21,14 @@ verifying the signature:
 
 ```rust
 # use std::convert::TryFrom;
-use rand::thread_rng;
+use rand::rng;
 use reddsa::*;
 
 let msg = b"Hello!";
 
 // Generate a secret key and sign the message
-let sk = SigningKey::<sapling::Binding>::new(thread_rng());
-let sig = sk.sign(thread_rng(), msg);
+let sk = SigningKey::<sapling::Binding>::new(rng());
+let sig = sk.sign(rng(), msg);
 
 // Types can be converted to raw byte arrays using From/Into
 let sig_bytes: [u8; 64] = sig.into();
@@ -45,14 +45,19 @@ assert!(
 
 ## FROST
 
-You can enable ZIP-312 re-randomized FROST support with the `frost` feature.
-This is still experimental since ZIP-312 is still a draft.
+ZIP-312 re-randomized FROST support will be provided by
+the [`frost`](https://github.com/ZcashFoundation/frost) repository.
 
 ## docs
 
 ```shell,no_run
 cargo doc --features "nightly" --open
 ```
+
+## Developers guide
+
+See [DEVELOPERS.md](DEVELOPERS.md).
+
 
 [reddsa]: https://zips.z.cash/protocol/protocol.pdf#concretereddsa
 [zebra]: https://github.com/ZcashFoundation/zebra

@@ -19,7 +19,7 @@ use ledger_device_sdk::hash::HashInit as _;
 use ledger_device_sdk::hash::blake2::{Blake2b_256, Blake2bWithPerso as _};
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::log::{debug, error, info};
-use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
+use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver, Revision, Uitem};
 use zcash_encoding::CompactSize;
 use zcash_primitives::transaction::TxVersion;
 use zcash_primitives::transaction::components::orchard as orchard_component;

@@ -10,14 +10,15 @@ publish = false
 ledger_device_sdk = { version = "1.38", features = ["sys", "unit_test"] }
 ledger_zcash_crypto = { path = "../../ledger_zcash_crypto" }
 orchard = { path = "../../vendor/orchard", default-features = false, features = ["ledger"] }
-pasta_curves = { version = "0.5", default-features = false, features = ["alloc", "repr-c"] }
-ff = { version = "0.13", default-features = false }
+pasta_curves = { version = "0.6", default-features = false, features = ["alloc", "repr-c"] }
+ff = { version = "0.14", default-features = false }
 
 [patch.crates-io]
 # Pulled by bitvec (via orchard)
 radium = { path = "../../vendor/radium" }
 # Pulled by bip32 (zcash_transparent) and zcash_script
-secp256k1 = { path = "../../vendor/rust-secp256k1" }
+secp256k1 = { path = "../../vendor/secp256k1" }
+secp256k1-sys = { path = "../../vendor/secp256k1-sys" }
 # Used directly and by zcash_primitives
 orchard = { path = "../../vendor/orchard" }
 # Pulled by zcash_primitives

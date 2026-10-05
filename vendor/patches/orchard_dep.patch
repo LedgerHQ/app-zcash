@@ -1,33 +1,50 @@
 # Ledger delta for the vendored `orchard` crate.
 #
-# Base: crates.io package orchard 0.15.5 (git 29d1d55db62153dcaeef8ef631c8991c53ed1248)
+# Base: crates.io package orchard 0.16.0 (git 8190e4d9b7e9c0140964e88b71f95276d2b50470)
 # Apply from vendor/orchard with: patch -p1 -E < ../patches/orchard_dep.patch
 #
-# Regenerate: fetch the base artifact, then diff it against the vendored tree.
+# Upstream equivalents that replaced earlier hunks of this delta (each checked against the 0.16.0
+# source before the hunk was retired):
+#   - `tracing` optional and enabled by `circuit` only: upstream `Cargo.toml` now declares the same.
+#   - Test strategy `sk: sk.clone()` in `src/builder.rs`: present upstream (`SpendingKey` is no
+#     longer `Copy`).
+#   - `SpendingKey` no longer `Copy`, redacted `Debug`, wipe on `Drop`: upstream provides all three
+#     (`Debug` via `finish_non_exhaustive`, `Zeroize` / `ZeroizeOnDrop` / `Drop`), the latter behind
+#     its `zeroize` feature. The `ledger` feature below enables `zeroize`, so the wipe-on-drop
+#     guarantee holds for every build that uses the Ledger API.
+# Ledger additions kept: the `ledger` feature and `ledger_zcash_crypto` dependency, the Ledger API
+# in `src/{builder,bundle/commitments,keys,note_encryption,spec}.rs` and
+# `src/primitives/redpallas.rs`, and the test code ported to the `rand 0.10` `UnwrapErr(SysRng)`.
 #
+# Regenerate with vendor/generate_patches.sh, which also verifies the result.
+#
+diff -ruN a/.cargo_vcs_info.json b/.cargo_vcs_info.json
+--- a/.cargo_vcs_info.json
++++ b/.cargo_vcs_info.json
+@@ -1,6 +0,0 @@
+-{
+-  "git": {
+-    "sha1": "8190e4d9b7e9c0140964e88b71f95276d2b50470"
+-  },
+-  "path_in_vcs": ""
+-}
+\ No newline at end of file
 diff -ruN a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -48,6 +48,7 @@
- circuit = [
-     "dep:halo2_gadgets",
-     "dep:halo2_proofs",
-+    "dep:tracing",
-     "std",
- ]
- default = [
-@@ -70,6 +71,10 @@
-     "proptest",
+@@ -73,6 +73,11 @@
      "rand/std",
+     "rand/std_rng",
  ]
 +ledger = [
 +    "dep:ledger_zcash_crypto",
 +    "reddsa/ledger",
++    "zeroize",
 +]
  unstable-frost = []
  unstable-voting-circuits = []
  verifier-fingerprint = [
-@@ -103,6 +108,10 @@
+@@ -122,6 +127,10 @@
  path = "benches/small.rs"
  harness = false
  
@@ -36,28 +53,9 @@ diff -ruN a/Cargo.toml b/Cargo.toml
 +optional = true
 +
  [dependencies.aes]
- version = "0.8"
+ version = "0.9"
  
-@@ -213,6 +222,7 @@
- 
- [dependencies.tracing]
- version = "0.1"
-+optional = true
- default-features = false
- 
- [dependencies.visibility]
-@@ -224,6 +234,10 @@
- [dependencies.zcash_spec]
- version = "0.2.1"
- 
-+[dependencies.zeroize]
-+version = "1.6.0"
-+default-features = false
-+
- [dependencies.zip32]
- version = "0.2.0"
- default-features = false
-@@ -270,8 +284,3 @@
+@@ -306,8 +315,3 @@
      "flamegraph",
  ]
  
@@ -66,19 +64,140 @@ diff -ruN a/Cargo.toml b/Cargo.toml
 -
 -[profile.release]
 -debug = 2
-diff -ruN a/src/builder.rs b/src/builder.rs
---- a/src/builder.rs
-+++ b/src/builder.rs
-@@ -1992,7 +1992,8 @@
- 
-             ArbitraryBundleInputs {
-                 rng: StdRng::from_seed(rng_seed),
--                sk,
-+                // Cloned for each case: the key wipes itself on drop, so it is not `Copy`.
-+                sk: sk.clone(),
-                 anchor: frontier.root().into(),
-                 notes: notes_and_auth_paths,
-                 output_amounts
+diff -ruN a/Cargo.toml.orig b/Cargo.toml.orig
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -1,130 +0,0 @@
+-[package]
+-name = "orchard"
+-version = "0.16.0"
+-authors = [
+-    "Sean Bowe <ewillbefull@gmail.com>",
+-    "Jack Grigg <thestr4d@gmail.com>",
+-    "Daira-Emma Hopwood <daira@jacaranda.org>",
+-    "Ying Tong Lai",
+-    "Kris Nuttycombe <kris@nutty.land>",
+-]
+-edition = "2021"
+-rust-version = "1.88"
+-description = "The Orchard shielded transaction protocol"
+-license = "MIT OR Apache-2.0"
+-repository = "https://github.com/zcash/orchard"
+-documentation = "https://docs.rs/orchard"
+-readme = "README.md"
+-categories = ["cryptography::cryptocurrencies"]
+-keywords = ["zcash"]
+-
+-[package.metadata.docs.rs]
+-all-features = true
+-rustdoc-args = ["--cfg", "docsrs", "--html-in-header", "katex-header.html"]
+-
+-[dependencies]
+-aes = "0.9"
+-ff = { version = "0.14", default-features = false }
+-fpe = { version = "0.7", default-features = false, features = ["alloc"] }
+-group = "0.14"
+-zcash_spec = "0.2.1"
+-
+-# Circuit
+-halo2_gadgets = { version = "0.6", optional = true, default-features = false }
+-halo2_proofs = { version = "0.4", optional = true, default-features = false, features = ["batch", "floor-planner-v1-legacy-pdqsort"] }
+-pasta_curves = { version = "0.6", features = ["glv"] }
+-poseidon = { package = "halo2_poseidon", version = "0.2" }
+-reddsa = { version = "0.6", default-features = false }
+-sinsemilla = "0.2"
+-
+-# CSPRNG
+-rand = { version = "0.10", default-features = false }
+-rand_core = { version = "0.10", default-features = false }
+-
+-# Zcash protocol
+-blake2b_simd = { version = "1", default-features = false }
+-bitvec = { version = "1", default-features = false }
+-incrementalmerkletree = "0.9"
+-zcash_note_encryption = "0.5.1"
+-zip32 = { version = "0.3", default-features = false }
+-
+-# Secret management
+-subtle = { version = "2.6", default-features = false }
+-
+-# Encodings
+-hex = { version = "0.4", default-features = false, features = ["alloc"] }
+-serde = { version = "1.0", default-features = false, features = ["derive"] }
+-
+-# Boilerplate
+-getset = "0.1"
+-lazy_static = "1"
+-nonempty = { version = "0.11", default-features = false }
+-visibility = "0.1.1"
+-zeroize = { version = "1", optional = true, default-features = false }
+-
+-# Logging
+-tracing = { version = "0.1", optional = true, default-features = false }
+-
+-# No-std support
+-corez = { version = "0.1.1", default-features = false, features = ["alloc"] }
+-
+-# Developer tooling dependencies
+-image = { version = "0.25", optional = true }
+-plotters = { version = "0.3.0", optional = true }
+-memuse = { version = "0.2.2", default-features = false }
+-proptest = { version = "1", optional = true }
+-
+-[dev-dependencies]
+-criterion = "0.5"
+-halo2_gadgets = { version = "0.6", features = ["test-dependencies"] }
+-hex = "0.4"
+-proptest = "1"
+-rand = { version = "0.10", features = ["chacha", "std", "std_rng", "sys_rng", "thread_rng"] }
+-sinsemilla = { version = "0.2", features = ["test-dependencies"] }
+-zcash_note_encryption = { version = "0.5.1", features = ["pre-zip-212"] }
+-incrementalmerkletree = { version = "0.9", features = ["test-dependencies"] }
+-shardtree = "0.8"
+-
+-[target.'cfg(unix)'.dev-dependencies]
+-inferno = { version = "0.11", default-features = false, features = ["multithreaded", "nameattr"] }
+-pprof = { version = "0.15", features = ["criterion", "flamegraph"] }
+-
+-[lib]
+-bench = false
+-
+-[features]
+-default = ["circuit", "multicore", "std", "zeroize"]
+-std = ["corez/std", "group/wnaf-memuse", "reddsa/std"]
+-circuit = ["dep:halo2_gadgets", "dep:halo2_proofs", "dep:tracing", "std"]
+-unstable-frost = []
+-unstable-voting-circuits = []
+-multicore = ["halo2_proofs?/multicore"]
+-dev-graph = ["halo2_proofs?/dev-graph", "image", "plotters"]
+-verifier-fingerprint = ["circuit", "halo2_proofs/unstable-verifier-fingerprint"]
+-test-dependencies = ["proptest", "rand/std", "rand/std_rng"]
+-zeroize = ["dep:zeroize", "pasta_curves/zeroize", "reddsa/zeroize", "zip32/zeroize"]
+-
+-[[bench]]
+-name = "note_decryption"
+-harness = false
+-required-features = ["circuit"]
+-
+-[[bench]]
+-name = "small"
+-harness = false
+-
+-[[bench]]
+-name = "circuit"
+-harness = false
+-required-features = ["circuit"]
+-
+-[[bench]]
+-name = "orchard_k11_prover"
+-harness = false
+-required-features = ["circuit"]
+-
+-[profile.release]
+-debug = true
+-
+-[profile.bench]
+-debug = true
 diff -ruN a/src/bundle/commitments.rs b/src/bundle/commitments.rs
 --- a/src/bundle/commitments.rs
 +++ b/src/bundle/commitments.rs
@@ -106,49 +225,16 @@ diff -ruN a/src/bundle/commitments.rs b/src/bundle/commitments.rs
 diff -ruN a/src/keys.rs b/src/keys.rs
 --- a/src/keys.rs
 +++ b/src/keys.rs
-@@ -2,6 +2,7 @@
- 
- use alloc::boxed::Box;
- use alloc::vec::Vec;
-+use core::fmt;
- use corez::io::{self, Read, Write};
- 
- use ::zip32::{AccountId, ChildIndex};
-@@ -18,6 +19,7 @@
- use rand::RngCore;
+@@ -18,6 +18,8 @@
+ use rand::Rng;
  use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
  use zcash_note_encryption::EphemeralKeyBytes;
-+use zeroize::{Zeroize as _, Zeroizing};
++#[cfg(feature = "ledger")]
++use zeroize::Zeroizing;
+ #[cfg(feature = "zeroize")]
+ use zeroize::{Zeroize, ZeroizeOnDrop};
  
- use crate::{
-     address::Address,
-@@ -40,9 +42,24 @@
- /// $\mathsf{sk}$ as defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
- ///
- /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
--#[derive(Debug, Copy, Clone)]
-+/// Deliberately not `Copy`: this is the master Orchard spending key, and an implicit copy would
-+/// leave a duplicate behind that the `Drop` below cannot reach. `Debug` is implemented by hand so
-+/// that no `{:?}` can print the key material.
-+#[derive(Clone)]
- pub struct SpendingKey([u8; 32]);
- 
-+impl fmt::Debug for SpendingKey {
-+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-+        f.debug_tuple("SpendingKey").field(&"<redacted>").finish()
-+    }
-+}
-+
-+impl Drop for SpendingKey {
-+    fn drop(&mut self) {
-+        self.0.zeroize();
-+    }
-+}
-+
- impl ConstantTimeEq for SpendingKey {
-     fn ct_eq(&self, other: &Self) -> Choice {
-         self.to_bytes().ct_eq(other.to_bytes())
-@@ -93,6 +110,24 @@
+@@ -127,6 +129,24 @@
          &self.0
      }
  
@@ -173,7 +259,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Derives the Orchard spending key for the given seed, coin type, and account.
      pub fn from_zip32_seed(
          seed: &[u8],
-@@ -122,19 +157,123 @@
+@@ -158,6 +178,38 @@
  #[derive(Clone, Debug)]
  pub struct SpendAuthorizingKey(redpallas::SigningKey<SpendAuth>);
  
@@ -209,18 +295,25 @@ diff -ruN a/src/keys.rs b/src/keys.rs
 +    }
 +}
 +
+ #[cfg(feature = "zeroize")]
+ impl Zeroize for SpendAuthorizingKey {
+     fn zeroize(&mut self) {
+@@ -170,6 +222,13 @@
+ impl ZeroizeOnDrop for SpendAuthorizingKey {}
+ 
  impl SpendAuthorizingKey {
 +    /// Retains the normalized scalar for repeated Ledger validation, wiping it on drop.
 +    /// The caller must bind reuse to its account and discard it before user review.
 +    #[cfg(feature = "ledger")]
 +    pub fn ledger_validation_key(&self) -> LedgerValidationKey {
-+        LedgerValidationKey(Zeroizing::new((&self.0).into()))
++        LedgerValidationKey(Zeroizing::new(self.0.to_bytes()))
 +    }
 +
      /// Derives ask from sk. Internal use only, does not enforce all constraints.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn derive_inner(sk: &SpendingKey) -> pallas::Scalar {
-         to_scalar(PrfExpand::ORCHARD_ASK.with(&sk.0))
+@@ -189,12 +248,77 @@
+         key
      }
  
 +    /// Derives ask from sk, using the same logic as `derive_inner` but with additional checks to ensure that the resulting ask is valid.
@@ -297,7 +390,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl From<&SpendingKey> for SpendAuthorizingKey {
-@@ -248,6 +387,15 @@
+@@ -314,6 +438,15 @@
  }
  
  impl NullifierDerivingKey {
@@ -313,7 +406,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      pub(crate) fn prf_nf(&self, rho: pallas::Base) -> pallas::Base {
          prf_nf(self.0, rho)
      }
-@@ -284,6 +432,15 @@
+@@ -353,6 +486,15 @@
  }
  
  impl CommitIvkRandomness {
@@ -329,7 +422,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the inner scalar value.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn inner(&self) -> pallas::Scalar {
-@@ -344,6 +501,28 @@
+@@ -413,6 +555,28 @@
  }
  
  impl FullViewingKey {
@@ -358,7 +451,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the nullifier deriving key for this full viewing key.
      #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
      pub(crate) fn nk(&self) -> &NullifierDerivingKey {
-@@ -379,6 +558,22 @@
+@@ -448,6 +612,22 @@
          )
      }
  
@@ -381,7 +474,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the payment address for this key at the given index.
      pub fn address_at(&self, j: impl Into<DiversifierIndex>, scope: Scope) -> Address {
          self.to_ivk(scope).address_at(j)
-@@ -480,6 +675,65 @@
+@@ -549,6 +729,65 @@
              Scope::Internal => OutgoingViewingKey::from_fvk(&self.derive_internal()),
          }
      }
@@ -447,7 +540,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  /// A key that provides the capability to derive a sequence of diversifiers.
-@@ -576,6 +830,23 @@
+@@ -645,6 +884,23 @@
          let ivk = KeyAgreementPrivateKey::derive_inner(fvk).unwrap();
          KeyAgreementPrivateKey(ivk.into())
      }
@@ -471,7 +564,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl KeyAgreementPrivateKey {
-@@ -612,6 +883,19 @@
+@@ -681,6 +937,19 @@
          let pk_d = DiversifiedTransmissionKey::derive(&prepared_ivk, &d);
          Address::from_parts(d, pk_d)
      }
@@ -491,7 +584,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  /// A key that provides the capability to detect and decrypt incoming notes from the block
-@@ -640,6 +924,15 @@
+@@ -709,6 +978,15 @@
              ivk: KeyAgreementPrivateKey::from_fvk(fvk),
          }
      }
@@ -507,7 +600,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl IncomingViewingKey {
-@@ -680,6 +973,16 @@
+@@ -749,6 +1027,16 @@
          self.address(self.dk.get(j))
      }
  
@@ -524,7 +617,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
      /// Returns the payment address for this key corresponding to the given diversifier.
      pub fn address(&self, d: Diversifier) -> Address {
          self.ivk.address(d)
-@@ -741,6 +1044,12 @@
+@@ -810,6 +1098,12 @@
      fn from_fvk(fvk: &FullViewingKey) -> Self {
          fvk.derive_dk_ovk().1
      }
@@ -537,7 +630,7 @@ diff -ruN a/src/keys.rs b/src/keys.rs
  }
  
  impl From<[u8; 32]> for OutgoingViewingKey {
-@@ -785,6 +1094,13 @@
+@@ -854,6 +1148,13 @@
          NonIdentityPallasPoint::from_bytes(bytes).map(DiversifiedTransmissionKey)
      }
  
@@ -554,19 +647,19 @@ diff -ruN a/src/keys.rs b/src/keys.rs
 diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 --- a/src/note_encryption.rs
 +++ b/src/note_encryption.rs
-@@ -579,9 +579,11 @@
+@@ -641,9 +641,11 @@
  
  #[cfg(test)]
  mod tests {
 +    use alloc::string::String;
      use alloc::vec::Vec;
  
-     use rand::rngs::OsRng;
+     use rand::{rand_core::UnwrapErr, rngs::SysRng};
 +    use std::println;
      use zcash_note_encryption::{
          batch, try_compact_note_decryption, try_note_decryption, try_output_recovery_with_ovk,
          BatchDomain, Domain, EphemeralKeyBytes, NoteEncryption,
-@@ -1022,4 +1024,1140 @@
+@@ -1090,4 +1092,1141 @@
              assert_eq!(batched_wnaf, expected);
          }
      }
@@ -850,7 +943,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +    //! ```
 +
 +    use alloc::{string::String, vec::Vec};
-+    use rand::rngs::OsRng;
++    use rand::{rand_core::UnwrapErr, rngs::SysRng};
 +    use std::println;
 +    use zcash_note_encryption::Domain;
 +
@@ -1039,7 +1132,8 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +        let value_net = NoteValue::from_raw(200_000) - NoteValue::from_raw(180_000);
 +        let ext_cv_net = ValueCommitment::derive(value_net, ext_rcv);
 +
-+        let out_ct = encryptor.encrypt_outgoing_plaintext(&ext_cv_net, &ext_cmx, &mut OsRng);
++        let out_ct =
++            encryptor.encrypt_outgoing_plaintext(&ext_cv_net, &ext_cmx, &mut UnwrapErr(SysRng));
 +        println!(
 +            "_EXT_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
 +            hex_lines(out_ct.as_ref())
@@ -1155,7 +1249,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +            hex_str(&cv_net.to_bytes())
 +        );
 +
-+        let out_ct = encryptor.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut OsRng);
++        let out_ct = encryptor.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut UnwrapErr(SysRng));
 +        println!(
 +            "_MEMO_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
 +            hex_lines(out_ct.as_ref())
@@ -1229,7 +1323,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +    //! ```
 +
 +    use alloc::{string::String, vec::Vec};
-+    use rand::rngs::OsRng;
++    use rand::{rand_core::UnwrapErr, rngs::SysRng};
 +    use std::println;
 +
 +    use crate::{
@@ -1394,7 +1488,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +                    OrchardDomain::epk_bytes(encryptor.epk()).0,
 +                    encryptor.encrypt_note_plaintext().as_ref().to_vec(),
 +                    encryptor
-+                        .encrypt_outgoing_plaintext(&cv_net, &cmx, &mut OsRng)
++                        .encrypt_outgoing_plaintext(&cv_net, &cmx, &mut UnwrapErr(SysRng))
 +                        .as_ref()
 +                        .to_vec(),
 +                )
@@ -1405,7 +1499,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +                    IronwoodDomain::epk_bytes(encryptor.epk()).0,
 +                    encryptor.encrypt_note_plaintext().as_ref().to_vec(),
 +                    encryptor
-+                        .encrypt_outgoing_plaintext(&cv_net, &cmx, &mut OsRng)
++                        .encrypt_outgoing_plaintext(&cv_net, &cmx, &mut UnwrapErr(SysRng))
 +                        .as_ref()
 +                        .to_vec(),
 +                )
@@ -1710,9 +1804,9 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 diff -ruN a/src/primitives/redpallas.rs b/src/primitives/redpallas.rs
 --- a/src/primitives/redpallas.rs
 +++ b/src/primitives/redpallas.rs
-@@ -5,6 +5,9 @@
- use pasta_curves::pallas;
- use rand::{CryptoRng, RngCore};
+@@ -7,6 +7,9 @@
+ #[cfg(feature = "zeroize")]
+ use zeroize::{Zeroize, ZeroizeOnDrop};
  
 +/// A compressed RedDSA verification key encoding, without decoded point state.
 +pub use reddsa::VerificationKeyBytes;
@@ -1720,7 +1814,7 @@ diff -ruN a/src/primitives/redpallas.rs b/src/primitives/redpallas.rs
  #[cfg(feature = "std")]
  pub use reddsa::batch;
  
-@@ -55,6 +58,42 @@
+@@ -68,6 +71,42 @@
      }
  }
  
@@ -1762,11 +1856,11 @@ diff -ruN a/src/primitives/redpallas.rs b/src/primitives/redpallas.rs
 +
  impl<T: SigType> SigningKey<T> {
      /// Creates a signature of type `T` on `msg` using this `SigningKey`.
-     pub fn sign<R: RngCore + CryptoRng>(&self, rng: R, msg: &[u8]) -> Signature<T> {
+     pub fn sign<R: Rng + CryptoRng>(&self, mut rng: R, msg: &[u8]) -> Signature<T> {
 diff -ruN a/src/spec.rs b/src/spec.rs
 --- a/src/spec.rs
 +++ b/src/spec.rs
-@@ -60,6 +60,34 @@
+@@ -61,6 +61,34 @@
          assert!(!bool::from(p.is_identity()));
          NonIdentityPallasPoint(p)
      }

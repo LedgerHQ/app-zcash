@@ -1,4 +1,4 @@
-use zcash_address::unified::{Encoding, Fvk, Ufvk};
+use zcash_address::unified::{Encoding, Fvk, Revision, Ufvk, Uitem};
 
 use alloc::format;
 use ledger_device_sdk::io::{Command, CommandResponse};
@@ -130,10 +130,13 @@ pub fn handler_get_vk<'a>(
 
             let network = orchard_network(&path);
 
-            let ufvk = Ufvk::try_from_items(alloc::vec![
-                Fvk::Orchard(orchard_fvk.to_bytes()),
-                Fvk::P2pkh(transparent_bytes),
-            ])
+            let ufvk = Ufvk::try_from_items(
+                Revision::R0,
+                alloc::vec![
+                    Uitem::Data(Fvk::Orchard(orchard_fvk.to_bytes())),
+                    Uitem::Data(Fvk::P2pkh(transparent_bytes)),
+                ],
+            )
             .map_err(|_| AppSW::TechnicalProblem)?;
 
             let ufvk_str = ufvk.encode(&network);

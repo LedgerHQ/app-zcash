@@ -29,7 +29,7 @@ mod tests {
                 let actual: [u8; 32] = ask
                     .randomize_ledger(&pallas::Scalar::ZERO)
                     .map_err(|_| ())?
-                    .into();
+                    .to_bytes();
                 if fvk.to_bytes() != expected_fvk
                     || actual != expected_ask
                     || ask

@@ -44,6 +44,11 @@ _V6_TX_VERSION = 6
 _V6_VERSION_GROUP_ID = 0xD884B698
 _NU6_3_BRANCH_ID = 0x37A5165B  # BranchId::Nu6_3
 
+# NU7 identifiers: the branch id zcash_protocol defines for BranchId::Nu7, and the neighbouring value
+# that is not a defined branch id.
+_NU7_BRANCH_ID = 0x77190AD9
+_UNDEFINED_ADJACENT_BRANCH_ID = 0x77190AD8
+
 PCZT_V6_GLOBAL = PcztGlobal(
     tx_version=_V6_TX_VERSION,
     version_group_id=_V6_VERSION_GROUP_ID,
@@ -808,6 +813,90 @@ def test_pczt_ironwood_unknown_branch_id_rejected(
             ironwood_bundle=_valid_ironwood_bundle(),
         ):
             pytest.fail("Device accepted a PCZT with unknown branch ID")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_pczt_ironwood_nu7_branch_id_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A V6 PCZT under the NU7 branch id with a shielded Ironwood bundle is reviewed and signed."""
+    client = ZcashCommandSender(backend)
+
+    nu7_global = PcztGlobal(
+        tx_version=_V6_TX_VERSION,
+        version_group_id=_V6_VERSION_GROUP_ID,
+        consensus_branch_id=_NU7_BRANCH_ID,
+    )
+
+    with client.send_pczt(
+        pczt_global=nu7_global,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=_valid_ironwood_bundle(),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_nu7_branch_id_signs")
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+
+def test_pczt_nu7_transparent_only_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A transparent-only V6 PCZT under the NU7 branch id is reviewed and signed."""
+    client = ZcashCommandSender(backend)
+
+    nu7_global = PcztGlobal(
+        tx_version=_V6_TX_VERSION,
+        version_group_id=_V6_VERSION_GROUP_ID,
+        consensus_branch_id=_NU7_BRANCH_ID,
+    )
+    transparent_input = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=300000,
+        script_pubkey=_TRANSPARENT_INPUT_SCRIPT,
+        sequence=bytes.fromhex("00000000"),
+        signing_path=_TRANSPARENT_INPUT_PATH,
+    )
+
+    # A V6 transaction always carries the Ironwood section; with no shielded action it is empty.
+    with client.send_pczt(
+        pczt_global=nu7_global,
+        transparent_inputs=[transparent_input],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=PcztIronwoodBundle(actions=[], flags=0, value_balance=0, anchor=bytes(32)),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_nu7_transparent_only_signs")
+
+    response = client.pczt_sign_transparent(input_index=0).data
+    assert len(response) > 1
+    assert response[-1] == 0x01  # SIGHASH_ALL, as in the V5 transparent signing tests
+
+
+def test_pczt_ironwood_undefined_adjacent_branch_id_rejected(
+    backend,
+):
+    """A branch id next to the NU7 one, but not defined by the protocol, is still rejected."""
+    client = ZcashCommandSender(backend)
+
+    bad_global = PcztGlobal(
+        tx_version=_V6_TX_VERSION,
+        version_group_id=_V6_VERSION_GROUP_ID,
+        consensus_branch_id=_UNDEFINED_ADJACENT_BRANCH_ID,
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=bad_global,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            ironwood_bundle=_valid_ironwood_bundle(),
+        ):
+            pytest.fail("Device accepted a PCZT with an undefined branch ID")
 
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 

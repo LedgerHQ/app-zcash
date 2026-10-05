@@ -42,7 +42,12 @@ from .own_account_vectors import (
     ORCHARD_ACCOUNT_1_MEMO,
     own_account_orchard_action,
 )
-from .test_pczt_ironwood import _valid_orchard_action
+from .test_pczt_ironwood import (
+    _NU7_BRANCH_ID,
+    _TRANSPARENT_OUTPUT_299K,
+    _valid_orchard_action,
+    _valid_orchard_bundle,
+)
 
 # Mirrors MAX_PCZT_SCRIPT_SIZE in src/consts.rs, itself the host's single-byte CompactSize limit.
 _MAX_PCZT_SCRIPT_SIZE = 252
@@ -2426,3 +2431,21 @@ def test_pczt_orchard_own_account_malformed_extension_is_refused(backend, extens
         client,
         own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK, extensions=extensions),
     )
+
+
+def test_pczt_orchard_v5_nu7_branch_id_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A V5 Orchard PCZT under the NU7 branch id signs with the unchanged contract."""
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PcztGlobal(consensus_branch_id=_NU7_BRANCH_ID),
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        orchard_bundle=_valid_orchard_bundle(),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_orchard_v5_nu7_branch_id_signs")
+
+    assert len(client.pczt_sign_orchard(action_index=0).data) == 64

@@ -858,12 +858,14 @@ impl PcztParser {
             .outputs
             .try_reserve(1)
             .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
-        let address =
-            UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(output.raw_address)])
-                .map(|address| address.encode(&network))
-                // No fallback string: a recipient the user cannot check against their own
-                // wallet is worse than refusing to sign.
-                .map_err(|_| ParserError::from_str("Cannot encode PCZT orchard output address"))?;
+        let address = UnifiedAddress::try_from_items(
+            Revision::R0,
+            alloc::vec![Uitem::Data(Receiver::Orchard(output.raw_address))],
+        )
+        .map(|address| address.encode(&network))
+        // No fallback string: a recipient the user cannot check against their own
+        // wallet is worse than refusing to sign.
+        .map_err(|_| ParserError::from_str("Cannot encode PCZT orchard output address"))?;
         let memo = Self::orchard_output_memo_display(ctx.tx_info, &output, is_change)?;
 
         debug!(

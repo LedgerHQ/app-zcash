@@ -11,20 +11,21 @@
 #           and need `patch -p1 -E`; without `-E` a deletion leaves a zero-byte
 #           file behind instead of removing it, and the result stops matching the
 #           vendored tree.
-#   git     A clone at a pinned ref, patched with `git apply`. Only
-#           rust-secp256k1 needs this: its vendored tree keeps the sibling
-#           `secp256k1-sys` crate, which the published package does not carry.
+#   git     A clone at a pinned ref, patched with `git apply`, for a vendored
+#           tree that needs files the published package does not carry. No
+#           current pin uses it.
 #
 # Fields: name|kind|coordinate. For `crates` the coordinate is the version; for
 # `git` it is the clone URL and the ref, separated by a space.
 
 VENDORED_DEPS=(
-    "orchard|crates|0.15.5"
+    "orchard|crates|0.16.0"
     "radium|crates|0.7.0"
-    "reddsa|crates|0.5.1"
-    "sapling-crypto|crates|0.7.0"
+    "reddsa|crates|0.6.1"
+    "sapling-crypto|crates|0.9.0"
     "spin|crates|0.9.8"
-    "rust-secp256k1|git|https://github.com/rust-bitcoin/rust-secp256k1.git secp256k1-0.29.1"
+    "secp256k1|crates|0.33.1"
+    "secp256k1-sys|crates|0.14.1"
 )
 
 # Present in one tree and not the other for reasons that have nothing to do with

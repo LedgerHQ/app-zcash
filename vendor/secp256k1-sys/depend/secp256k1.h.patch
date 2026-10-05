@@ -1,0 +1,12 @@
+299,301d297
+< SECP256K1_API secp256k1_context *secp256k1_context_clone(
+<     const secp256k1_context *ctx
+< ) SECP256K1_ARG_NONNULL(1) SECP256K1_WARN_UNUSED_RESULT;
+317,319d312
+< SECP256K1_API void secp256k1_context_destroy(
+<     secp256k1_context *ctx
+< ) SECP256K1_ARG_NONNULL(1);
+682d674
+< SECP256K1_API const secp256k1_nonce_function secp256k1_nonce_function_rfc6979;
+685d676
+< SECP256K1_API const secp256k1_nonce_function secp256k1_nonce_function_default;

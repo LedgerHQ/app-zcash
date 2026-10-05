@@ -7,6 +7,12 @@ transaction had already done; this removes the repetition without removing a che
 Replies also no longer wait for the next ticker event, which the SDK's new I/O path
 allows once it refuses every APDU on a locked device.
 
+- Accept the NU7 consensus branch id; any branch id the protocol does not define is
+  still rejected
+- Move to the `zcash_protocol` 0.11 crate set and re-base the vendored `orchard`,
+  `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1; vendor `secp256k1` 0.33.1 and
+  `secp256k1-sys` 0.14.1 in place of the `rust-secp256k1` tree, carrying the same build stub
+  and routing the 0.33 context lock through `portable-atomic` so Nano X still builds
 - Reuse the account key, the viewing keys and the note material already derived for
   a transaction across its shielded actions, keeping every per-action account,
   randomized-key, ownership, nullifier and commitment check, and failing closed when

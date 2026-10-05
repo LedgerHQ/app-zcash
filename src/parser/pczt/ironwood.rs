@@ -889,12 +889,14 @@ impl PcztParser {
             .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
         // Ironwood reuses the Orchard UA receiver typecode (0x03) — ZIP 229 defines no
         // distinct typecode for Ironwood; addresses are encoded identically to Orchard receivers.
-        let address =
-            UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(output.raw_address)])
-                .map(|address| address.encode(&network))
-                // No fallback string: a recipient the user cannot check against their own
-                // wallet is worse than refusing to sign.
-                .map_err(|_| ParserError::from_str("Cannot encode PCZT ironwood output address"))?;
+        let address = UnifiedAddress::try_from_items(
+            Revision::R0,
+            alloc::vec![Uitem::Data(Receiver::Orchard(output.raw_address))],
+        )
+        .map(|address| address.encode(&network))
+        // No fallback string: a recipient the user cannot check against their own
+        // wallet is worse than refusing to sign.
+        .map_err(|_| ParserError::from_str("Cannot encode PCZT ironwood output address"))?;
         let memo = Self::ironwood_output_memo_display(ctx.tx_info, &output, is_change)?;
 
         debug!(

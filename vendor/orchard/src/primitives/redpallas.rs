@@ -3,7 +3,9 @@
 use core::cmp::{Ord, Ordering, PartialOrd};
 
 use pasta_curves::pallas;
-use rand::{CryptoRng, RngCore};
+use rand::{CryptoRng, Rng};
+#[cfg(feature = "zeroize")]
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A compressed RedDSA verification key encoding, without decoded point state.
 pub use reddsa::VerificationKeyBytes;
@@ -12,7 +14,7 @@ pub use reddsa::VerificationKeyBytes;
 pub use reddsa::batch;
 
 #[cfg(test)]
-use rand::rngs::OsRng;
+use rand::{rand_core::UnwrapErr, rngs::SysRng};
 
 /// A RedPallas signature type.
 pub trait SigType: reddsa::SigType + private::Sealed {}
@@ -26,18 +28,29 @@ pub type Binding = reddsa::orchard::Binding;
 impl SigType for Binding {}
 
 /// A RedPallas signing key.
+///
+/// If the `zeroize` feature is enabled, the secret scalar is zeroized on drop.
 #[derive(Clone, Debug)]
 pub struct SigningKey<T: SigType>(reddsa::SigningKey<T>);
 
-impl<T: SigType> From<SigningKey<T>> for [u8; 32] {
-    fn from(sk: SigningKey<T>) -> [u8; 32] {
-        sk.0.into()
+#[cfg(feature = "zeroize")]
+impl<T: SigType> Zeroize for SigningKey<T> {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
     }
 }
 
-impl<T: SigType> From<&SigningKey<T>> for [u8; 32] {
-    fn from(sk: &SigningKey<T>) -> [u8; 32] {
-        sk.0.into()
+// The inner `reddsa::SigningKey` zeroizes itself on drop.
+#[cfg(feature = "zeroize")]
+impl<T: SigType> ZeroizeOnDrop for SigningKey<T> {}
+
+impl<T: SigType> SigningKey<T> {
+    /// Returns the canonical byte encoding of the secret scalar.
+    ///
+    /// The returned array is secret key material; the caller is responsible for
+    /// zeroizing it once it is no longer needed.
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.0.to_bytes()
     }
 }
 
@@ -45,7 +58,7 @@ impl<T: SigType> TryFrom<[u8; 32]> for SigningKey<T> {
     type Error = reddsa::Error;
 
     fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
-        bytes.try_into().map(SigningKey)
+        reddsa::SigningKey::from_bytes(&bytes).map(SigningKey)
     }
 }
 
@@ -96,8 +109,8 @@ impl SigningKey<SpendAuth> {
 
 impl<T: SigType> SigningKey<T> {
     /// Creates a signature of type `T` on `msg` using this `SigningKey`.
-    pub fn sign<R: RngCore + CryptoRng>(&self, rng: R, msg: &[u8]) -> Signature<T> {
-        Signature(self.0.sign(rng, msg))
+    pub fn sign<R: Rng + CryptoRng>(&self, mut rng: R, msg: &[u8]) -> Signature<T> {
+        Signature(self.0.sign(&mut rng, msg))
     }
 }
 
@@ -155,7 +168,7 @@ impl VerificationKey<SpendAuth> {
     /// Used in the note encryption tests.
     #[cfg(test)]
     pub(crate) fn dummy() -> Self {
-        VerificationKey((&reddsa::SigningKey::new(OsRng)).into())
+        VerificationKey((&reddsa::SigningKey::new(UnwrapErr(SysRng))).into())
     }
 
     /// Randomizes this verification key with the given `randomizer`.
@@ -241,7 +254,7 @@ pub mod testing {
         /// Generate a uniformly distributed RedDSA spend authorization signing key.
         pub fn arb_spendauth_signing_key()(
             sk in prop::array::uniform32(prop::num::u8::ANY)
-                .prop_map(reddsa::SigningKey::try_from)
+                .prop_map(|bytes| reddsa::SigningKey::from_bytes(&bytes))
                 .prop_filter("Values must be parseable as valid signing keys", |r| r.is_ok())
         ) -> SigningKey<SpendAuth> {
             SigningKey(sk.unwrap())
@@ -252,7 +265,7 @@ pub mod testing {
         /// Generate a uniformly distributed RedDSA binding signing key.
         pub fn arb_binding_signing_key()(
             sk in prop::array::uniform32(prop::num::u8::ANY)
-                .prop_map(reddsa::SigningKey::try_from)
+                .prop_map(|bytes| reddsa::SigningKey::from_bytes(&bytes))
                 .prop_filter("Values must be parseable as valid signing keys", |r| r.is_ok())
         ) -> SigningKey<Binding> {
             SigningKey(sk.unwrap())
