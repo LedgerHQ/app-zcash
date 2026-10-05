@@ -76,6 +76,24 @@ cargo ledger build nanox
 ```
 This command will build the app for the Nano X, but you can use any supported device (`nanox`, `nanosplus`, `stax`, `flex`)
 
+#### Testnet build
+
+```bash
+cargo ledger build nanox -- --features variant_testnet
+```
+The `variant_testnet` feature builds the testnet app, named `Zcash Test`. It uses coin type `1'`
+(transparent prefixes `tm…`/`t2…`, testnet unified encodings) and its install parameters declare
+only the `44'/1'` and `32'/1'` derivation paths, so it can neither derive nor sign under the
+mainnet coin type. Its name, icons and home screen differ from the mainnet app. It is the only way
+to build the testnet logic; the default build is unchanged. A variant build writes to the same
+output path as the default one, so rebuild before switching between them.
+
+Its functional tests live in `tests/testnet` and need the variant build:
+```bash
+cargo ledger build flex -- --features variant_testnet
+pytest tests/testnet --tb=short -q --device flex
+```
+
 ### Testing
 #### Ragger functional tests
 This boilerplate app comes with functional tests implemented with Ledger's [Ragger](https://github.com/LedgerHQ/ragger) test framework.

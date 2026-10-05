@@ -17,9 +17,9 @@ pub const SIGHASH_ALL: u8 = 0x01;
 pub const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
 pub const ZIP32_PATH_LEN: usize = 3;
 pub const ZIP32_PURPOSE: u32 = 32;
-#[cfg(not(feature = "testnet"))]
+#[cfg(not(feature = "variant_testnet"))]
 pub const ZCASH_BIP44_COIN_TYPE: u32 = 133;
-#[cfg(feature = "testnet")]
+#[cfg(feature = "variant_testnet")]
 pub const ZCASH_BIP44_COIN_TYPE: u32 = 1;
 
 // Transparent inputs one transaction may spend.

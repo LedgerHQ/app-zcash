@@ -16,15 +16,15 @@ pub const TRANSPARENT_ADDRESS_B58_LEN: usize = 35;
 type P2pkhPayload = [u8; 22];
 
 // T-address P2PKH prefix.
-#[cfg(not(feature = "testnet"))]
+#[cfg(not(feature = "variant_testnet"))]
 const TRANSPARENT_ADDRESS_PREFIX: [u8; 2] = [0x1C, 0xB8];
-#[cfg(feature = "testnet")]
+#[cfg(feature = "variant_testnet")]
 const TRANSPARENT_ADDRESS_PREFIX: [u8; 2] = [0x1D, 0x25];
 
 // T-address P2SH prefix.
-#[cfg(not(feature = "testnet"))]
+#[cfg(not(feature = "variant_testnet"))]
 const P2SH_ADDRESS_PREFIX: [u8; 2] = [0x1C, 0xBD];
-#[cfg(feature = "testnet")]
+#[cfg(feature = "variant_testnet")]
 const P2SH_ADDRESS_PREFIX: [u8; 2] = [0x1C, 0xBA];
 
 const P2PKH_PREFIX_LEN: usize = 2;

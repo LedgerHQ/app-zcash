@@ -13,6 +13,9 @@ allows once it refuses every APDU on a locked device.
   `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1; vendor `secp256k1` 0.33.1 and
   `secp256k1-sys` 0.14.1 in place of the `rust-secp256k1` tree, carrying the same build stub
   and routing the 0.33 context lock through `portable-atomic` so Nano X still builds
+- Add a testnet build variant (`variant_testnet`): app `Zcash Test`, derivation paths under
+  coin type `1'`, distinct icons and home screen. It replaces the former `testnet` feature,
+  which built testnet logic under the mainnet install parameters
 - Reuse the account key, the viewing keys and the note material already derived for
   a transaction across its shielded actions, keeping every per-action account,
   randomized-key, ownership, nullifier and commitment check, and failing closed when

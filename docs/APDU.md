@@ -72,6 +72,10 @@ constraint differs by purpose: signing needs to know whether a path is a change
 path, whereas key export must not dictate a shape to the host. The requirement is
 stated with each command below.
 
+The testnet build (`variant_testnet`) is installed with `44'/1'` and `32'/1'` instead,
+and accepts coin type `1'` only; a mainnet build accepts coin type `133'` only. Every
+other coin type is refused with the same status word, in both builds.
+
 ## Legacy transparent signing commands
 
 Four commands implement the transparent and V4-Sapling signing flow the app inherits from

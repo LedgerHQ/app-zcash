@@ -42,6 +42,19 @@ jobs:
         # path that makes them unreachable. Anything else fails here.
         run: cargo audit
 
+  clippy_testnet:
+    name: Lint the testnet variant
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-dev-tools:latest
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Clippy (variant_testnet)
+        # The testnet logic is compiled out of every other build, so only this step sees it.
+        run: cargo clippy --release --locked --target flex --features variant_testnet -- -D warnings
+
   unit_tests:
     name: Run the unit tests and I/O regressions
     runs-on: ubuntu-latest

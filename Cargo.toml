@@ -68,7 +68,10 @@ debug = true
 [features]
 default = ["ledger_device_sdk/nano_nbgl", "legacy_path"]
 
-testnet = []
+# The only way to build the testnet logic: it selects SDK build variant 0, whose install
+# parameters (name, icons, derivation paths) travel with the binary, so the testnet address
+# prefixes and coin type never ship under the mainnet install parameters, nor the reverse.
+variant_testnet = ["ledger_device_sdk/variant_0"]
 
 # Enables debug logging
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
@@ -111,6 +114,25 @@ icon = "icons/flex_app_zcash.gif"
 
 [package.metadata.ledger.apex_p]
 icon = "icons/apex_app_zcash.gif"
+
+[package.metadata.ledger.variants.0]
+name = "Zcash Test"
+path = ["44'/1'", "32'/1'"]
+
+[package.metadata.ledger.variants.0.nanox]
+icon = "icons/nanox_app_zcash_test.gif"
+
+[package.metadata.ledger.variants.0.nanosplus]
+icon = "icons/nanox_app_zcash_test.gif"
+
+[package.metadata.ledger.variants.0.stax]
+icon = "icons/stax_app_zcash_test.gif"
+
+[package.metadata.ledger.variants.0.flex]
+icon = "icons/flex_app_zcash_test.gif"
+
+[package.metadata.ledger.variants.0.apex_p]
+icon = "icons/apex_app_zcash_test.gif"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
