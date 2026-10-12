@@ -927,10 +927,12 @@ impl PcztParser {
             ParserError::from_str("PCZT ironwood spend does not belong to signing key")
         })?;
 
-        let fvk_bytes = fvk.to_bytes();
-        let nk: [u8; 32] = fvk_bytes[32..64]
-            .try_into()
-            .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
+        let fvk_bytes = zeroize::Zeroizing::new(fvk.to_bytes());
+        let nk: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+            fvk_bytes[32..64]
+                .try_into()
+                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?,
+        );
         let expected_nullifier = ledger_zcash_crypto::orchard::spend_nullifier_v3_for_recipient(
             &nk,
             &recipient,
