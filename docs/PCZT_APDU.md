@@ -18,7 +18,7 @@ components.
   complete derivation path must match the first action's path, including on cache
   hits. FVK and viewing-key derivation are reused; randomized verification keys,
   spend ownership, nullifiers, and commitments are still checked per action.
-  Viewing keys are discarded before review, with IVK and OVK bytes zeroized.
+  Viewing keys are discarded before review, with FVK, IVK and OVK bytes zeroized.
 - The bundle command order is fixed:
   `PCZT_HEADER`, then `PCZT_TRANSPARENT_INPUT`, then
   `PCZT_TRANSPARENT_OUTPUT`, then `PCZT_ORCHARD_ACTION`, and for V6
@@ -301,8 +301,17 @@ prepares the viewing-key cache without materializing the scalar: the first actio
 that spends derives it, and the real actions after that reuse it instead of
 repeating the normalization. A bundle that spends nothing never derives one.
 The retained scalar uses wipe-on-drop storage and redacted debug formatting; it
-is discarded before user review and on parser reset or error. Signing still
-derives its key through the original post-approval path.
+is discarded before user review and on parser reset or error. The account FVK
+follows the same lifetime and is zeroized when dropped. Both are held across the
+action APDUs of one bundle, a window that the account spending key the parser
+caches for signing already spans. A host that stops sending mid-bundle keeps them
+until the next parser reset. Signing still derives its key through the original
+post-approval path.
+
+The SpendAuthSig and BindingSig basepoints are held as fixed affine coordinates
+rather than decoded from their 32-byte encodings at each use. Each one is checked
+against its encoding by a unit test, so the signatures commit to the same
+basepoints.
 
 Computed randomized verification keys stay typed as compressed keys until their
 bytes are compared with the action's wire encoding. This does not add curve-point
