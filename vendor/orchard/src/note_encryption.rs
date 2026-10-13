@@ -1654,4 +1654,180 @@ mod gen_v3_ext_vectors {
             hex_lines(encryptor.encrypt_note_plaintext().as_ref())
         );
     }
+
+    // _INTERNAL_RECIPIENT — the account's internal-scope (change) address.
+    const INTERNAL_RECIPIENT: [u8; 43] = hex_decode_43(
+        b"ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a",
+    );
+    const INTERNAL_SPEND_VALUE: u64 = 20_000;
+    const INTERNAL_SPEND_RHO: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x09;
+        b
+    };
+    const INTERNAL_SPEND_RSEED: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x1d;
+        b
+    };
+    const INTERNAL_OUTPUT_RSEED: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x31;
+        b
+    };
+    const INTERNAL_RCV: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x45;
+        b
+    };
+
+    /// The spend nullifier of a note paying `spend_recipient`, and the cmx of the
+    /// zero-valued output to `output_recipient` that the same action creates.
+    fn spend_nullifier_and_dummy_cmx(
+        fvk: &FullViewingKey,
+        spend_recipient: Address,
+        spend_value: u64,
+        spend_rho: [u8; 32],
+        spend_rseed: [u8; 32],
+        output_recipient: Address,
+        output_rseed: [u8; 32],
+        version: NoteVersion,
+    ) -> ([u8; 32], [u8; 32]) {
+        let spend_rho = Rho::from_bytes(&spend_rho)
+            .into_option()
+            .expect("spend rho must be valid");
+        let spend_rseed = Option::from(RandomSeed::from_bytes(spend_rseed, &spend_rho))
+            .expect("spend rseed must be valid for rho");
+        let spend_note: Note = Option::from(Note::from_parts(
+            spend_recipient,
+            NoteValue::from_raw(spend_value),
+            spend_rho,
+            spend_rseed,
+            version,
+        ))
+        .expect("spend note must be valid");
+        let nullifier = spend_note.nullifier(fvk).to_bytes();
+
+        let output_rho = Rho::from_bytes(&nullifier)
+            .into_option()
+            .expect("the nullifier must be a valid field element");
+        let output_rseed = Option::from(RandomSeed::from_bytes(output_rseed, &output_rho))
+            .expect("output rseed must be valid for rho");
+        let output_note: Note = Option::from(Note::from_parts(
+            output_recipient,
+            NoteValue::from_raw(0),
+            output_rho,
+            output_rseed,
+            version,
+        ))
+        .expect("output note must be valid");
+        (nullifier, ExtractedNoteCommitment::from(output_note.commitment()).to_bytes())
+    }
+
+    fn address(raw: &[u8; 43]) -> Address {
+        Address::from_parts(
+            Diversifier::from_bytes(raw[..11].try_into().unwrap()),
+            DiversifiedTransmissionKey::from_bytes(raw[11..].try_into().unwrap())
+                .expect("pk_d must be valid"),
+        )
+    }
+
+    fn cv_net(spend_value: u64, rcv: [u8; 32]) -> [u8; 32] {
+        let rcv = ValueCommitTrapdoor::from_bytes(rcv)
+            .into_option()
+            .expect("rcv must be a valid scalar");
+        ValueCommitment::derive(NoteValue::from_raw(spend_value) - NoteValue::from_raw(0), rcv)
+            .to_bytes()
+    }
+
+    fn byte_tagged(tag: u8) -> [u8; 32] {
+        let mut b = [0u8; 32];
+        b[0] = tag;
+        b
+    }
+
+    /// Generate the vectors of a real spend of an internal-scope note, for
+    /// test_pczt_key_reuse.py.
+    ///
+    /// The note pays the account's change address, so the device recognizes it
+    /// through the internal IVK only. Its zero-valued output also goes to that
+    /// address and carries no ciphertext: the device then accepts it on the
+    /// recomputed cmx alone. Printed for both pools, which commit notes with
+    /// different versions. The same derivation first reproduces the committed
+    /// vectors of `_valid_orchard_action` and `_valid_ironwood_action`, which
+    /// the device already accepts.
+    ///
+    /// ```sh
+    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    /// cd /tmp && cargo test --manifest-path <worktree>/vendor/orchard/Cargo.toml \
+    ///   --target "$HOST" --target-dir /tmp/orchard-host \
+    ///   --no-default-features --features std \
+    ///   -- gen_internal_spend_vectors --nocapture
+    /// ```
+    #[test]
+    fn gen_internal_spend_vectors() {
+        let fvk = FullViewingKey::from_bytes(&FVK_BYTES).expect("Speculos Orchard FVK must decode");
+        let internal = address(&INTERNAL_RECIPIENT);
+        assert_eq!(fvk.scope_for_address(&internal), Some(Scope::Internal));
+
+        // _valid_orchard_action / _valid_ironwood_action: an external-scope note.
+        let external_spend = |version| {
+            spend_nullifier_and_dummy_cmx(
+                &fvk,
+                address(&SPEND_RECIPIENT),
+                300_000,
+                byte_tagged(0x06),
+                byte_tagged(0x1a),
+                internal,
+                byte_tagged(0x2e),
+                version,
+            )
+        };
+        assert_eq!(
+            hex_str(&cv_net(300_000, byte_tagged(0x42))),
+            "00b3324110776396d31646041679fd6530d57c353c6be0a93a0cd55b30aa6d8b"
+        );
+        let (nf, cmx) = external_spend(NoteVersion::V2);
+        assert_eq!(
+            hex_str(&nf),
+            "08f337fd695cb5ca2ad7ced8ec14afed06d2f8a0e5e3d8b58dffbc69e4f81b2f"
+        );
+        assert_eq!(
+            hex_str(&cmx),
+            "825f806345d7c2ae67fe186120cc5b8a370c2cedb55ccf76527e9efa43c94d30"
+        );
+        let (nf, cmx) = external_spend(NoteVersion::V3);
+        assert_eq!(
+            hex_str(&nf),
+            "ed37cc733c228dc3dda2cf088ba646f9d204adc9d8d6f95ec36126eb742c3a10"
+        );
+        assert_eq!(
+            hex_str(&cmx),
+            "704b2bfa354eb974b10efe385d7ec56a12abbb906a3a95500bf9d6bbfcb7b73e"
+        );
+
+        println!("\n# ---- internal-scope spend (gen_internal_spend_vectors) ----");
+        println!(
+            "_INTERNAL_SPEND_CV_NET = bytes.fromhex(\"{}\")",
+            hex_str(&cv_net(INTERNAL_SPEND_VALUE, INTERNAL_RCV))
+        );
+        for (pool, version) in [("ORCHARD", NoteVersion::V2), ("IRONWOOD", NoteVersion::V3)] {
+            let (nullifier, cmx) = spend_nullifier_and_dummy_cmx(
+                &fvk,
+                internal,
+                INTERNAL_SPEND_VALUE,
+                INTERNAL_SPEND_RHO,
+                INTERNAL_SPEND_RSEED,
+                internal,
+                INTERNAL_OUTPUT_RSEED,
+                version,
+            );
+            println!(
+                "_{}_INTERNAL_SPEND_NULLIFIER = bytes.fromhex(\"{}\")",
+                pool,
+                hex_str(&nullifier)
+            );
+            println!("_{}_INTERNAL_SPEND_CMX = bytes.fromhex(\"{}\")", pool, hex_str(&cmx));
+        }
+    }
 }
