@@ -385,6 +385,19 @@ impl TryFrom<ApduHeader> for Instruction {
     }
 }
 
+/// The outcome of a command once its reply has been attempted. A reply the transport did not
+/// deliver fails the command, so the transaction state it reached is reset like on any error and
+/// a swap ends refused.
+fn delivered_status(sent: Result<(), CommError>, status: AppSW) -> AppSW {
+    match sent {
+        Ok(()) => status,
+        Err(err) => {
+            error!("APDU reply not delivered");
+            err.into()
+        }
+    }
+}
+
 fn show_status_and_home_if_needed(
     comm: &mut Comm,
     ins: &Instruction,
@@ -541,8 +554,11 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
         let ins = match command.decode::<Instruction>() {
             Ok(ins) => ins,
             Err(sw) => {
-                // Decode failures must not reach a transaction handler.
-                command.reply(&[], sw).expect("APDU reply failed");
+                // Decode failures must not reach a transaction handler. No state was touched,
+                // so a reply the transport loses leaves nothing to undo.
+                if command.reply(&[], sw).is_err() {
+                    error!("APDU reply not delivered");
+                }
                 continue;
             }
         };
@@ -550,14 +566,9 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
         debug!("Received APDU {:?}", ins);
 
         let status = match handle_apdu(command, &ins, tx_ctx) {
-            Ok(response) => {
-                response.send(AppSW::Ok).expect("APDU reply failed");
-                AppSW::Ok
-            }
-            Err(sw) => {
-                comm.send(&[], sw).expect("APDU reply failed");
-                sw
-            }
+            Ok(response) => delivered_status(response.send(AppSW::Ok).map(|_| ()), AppSW::Ok),
+            // Not `Comm::send`: it unwraps the transport result inside the SDK.
+            Err(sw) => delivered_status(comm.begin_response().send(sw).map(|_| ()), sw),
         };
         show_status_and_home_if_needed(comm, &ins, tx_ctx, &status);
 
@@ -672,4 +683,40 @@ pub fn panic_handler(info: &PanicInfo) -> ! {
 
     error!("Panicking: {:?}\n", info);
     ledger_device_sdk::exiting_panic(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppSW, delivered_status};
+    use ledger_device_sdk::io::CommError;
+    use ledger_device_sdk::testing::TestType;
+
+    #[test_case]
+    const DELIVERED_REPLY_KEEPS_ITS_STATUS: TestType = TestType {
+        modname: module_path!(),
+        name: "delivered_reply_keeps_its_status",
+        f: || {
+            if delivered_status(Ok(()), AppSW::Ok) != AppSW::Ok
+                || delivered_status(Ok(()), AppSW::Deny) != AppSW::Deny
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// A signature the host never received must not leave the command counted as a success.
+    #[test_case]
+    const UNDELIVERED_REPLY_FAILS_THE_COMMAND: TestType = TestType {
+        modname: module_path!(),
+        name: "undelivered_reply_fails_the_command",
+        f: || {
+            for err in [CommError::IoError, CommError::Overflow] {
+                if delivered_status(Err(err), AppSW::Ok) == AppSW::Ok {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
 }

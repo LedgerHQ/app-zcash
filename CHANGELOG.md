@@ -23,15 +23,20 @@ allows once it refuses every APDU on a locked device.
 - Compute the diversifier square-root ratio directly instead of inverting the divisor
   and searching for a root
 - Drop the viewing keys once validation is over rather than at the end of the
-  transaction, so they do not outlive the review wait
+  transaction, so they do not outlive the review wait, and wipe the full viewing key
+  along with the incoming and outgoing ones
 - Use the SDK's new I/O path (`io_new`) on every target: a reply leaves as soon as its
   command completes, instead of waiting for the next ticker event
-- Require SDK 1.38.0. Its `io_new` path answers `DeviceLocked` to every APDU on a locked
+- Require SDK 1.41.0. Its `io_new` path answers `DeviceLocked` to every APDU on a locked
   device, the SDK's own built-in commands included, and while a command is in flight
   answers only the built-in GET_VERSION: quit and certificate load received during a
-  review are refused with `CmdNotAccepted`
+  review are refused with `CmdNotAccepted`. A swap whose amount, fee, address or extra
+  ID from Exchange does not fit its buffer now fails instead of going on with a
+  truncated value
 - Reject an APDU whose payload length differs from its declared length
 - Return to Exchange after a swap panic even when the error reply cannot be sent
+- Count a reply the transport fails to deliver as a failed command: the transaction is
+  reset, and a swap reports a failure to Exchange
 - Reserve a shielded action's ciphertext buffer at its full size, and refuse with
   `NotEnoughMemorySpace` when it does not fit. It grew packet by packet, which needed
   about twice its size at once, and a failed growth exited the app: a t→z with 30 or

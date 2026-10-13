@@ -46,7 +46,7 @@ impl PcztParser {
                 OrchardDecipherKeys::from_fvk(&fvk, orchard_network(path))
                     .map_err(ParserError::from_sw)?,
             );
-            self.orchard_fvk = Some(fvk);
+            self.orchard_fvk = Some(RetainedOrchardFvk::new(fvk));
         }
         if validation_key.is_some() {
             self.orchard_validation_key = validation_key;

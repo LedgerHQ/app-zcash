@@ -830,6 +830,8 @@ impl PcztParser {
         network: NetworkType,
         is_change: bool,
     ) -> Result<(), ParserError> {
+        // Only a transparent change sets the flag, and the transparent outputs are parsed before
+        // either shielded bundle, so this is where the two kinds of change meet.
         if is_change && ctx.tx_info.is_change_found {
             return Err(ParserError::from_str(
                 "Transparent and shielded change outputs detected",
@@ -925,10 +927,12 @@ impl PcztParser {
             ParserError::from_str("PCZT orchard spend does not belong to signing key")
         })?;
 
-        let fvk_bytes = fvk.to_bytes();
-        let nk: [u8; 32] = fvk_bytes[32..64]
-            .try_into()
-            .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
+        let fvk_bytes = zeroize::Zeroizing::new(fvk.to_bytes());
+        let nk: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+            fvk_bytes[32..64]
+                .try_into()
+                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?,
+        );
         let expected_nullifier = ledger_zcash_crypto::orchard::spend_nullifier_for_recipient(
             &nk,
             &recipient,

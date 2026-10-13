@@ -34,6 +34,11 @@ pub(crate) fn swap_panic_handler(info: &PanicInfo) -> ! {
 
     // A fresh Comm has no transport. Use the registered static instance, as the
     // SDK's exiting panic handler does, but return to Exchange afterward.
+    //
+    // SAFETY: a panic raised inside a `Comm` method leaves that method's borrow on the stack
+    // below this frame, mid-update. The reply restarts staging at offset zero and carries the
+    // status word alone, so nothing that method left in the buffer is sent, and no frame below
+    // runs again once control returns to Exchange.
     unsafe {
         if !SWAP_COMM.is_null() {
             let _ = (*SWAP_COMM).begin_response().send(io::StatusWords::Panic);
