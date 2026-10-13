@@ -56,7 +56,7 @@ When a PIN is configured and the device is locked, every APDU is answered `0x551
 `DeviceLocked` before it is decoded, whatever its class: Zcash instructions and the
 SDK's built-in commands (`CLA = 0xB0`: app name/version, quit, certificate load)
 alike, including those queued while a screen is displayed. The SDK applies the check
-to each received frame before any decoding (`ledger_device_sdk` 1.38.0,
+to each received frame before any decoding (`ledger_device_sdk` 1.41.0,
 `src/io_new/event.rs`), and its legacy I/O path applies the same check
 (`src/io_legacy.rs`). The app holds no lock check of its own.
 

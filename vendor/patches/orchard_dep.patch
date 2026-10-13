@@ -553,7 +553,7 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
      use zcash_note_encryption::{
          batch, try_compact_note_decryption, try_note_decryption, try_output_recovery_with_ovk,
          BatchDomain, Domain, EphemeralKeyBytes, NoteEncryption,
-@@ -1022,4 +1024,810 @@
+@@ -1022,4 +1024,820 @@
              assert_eq!(batched_wnaf, expected);
          }
      }
@@ -1254,7 +1254,10 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +            version,
 +        ))
 +        .expect("output note must be valid");
-+        (nullifier, ExtractedNoteCommitment::from(output_note.commitment()).to_bytes())
++        (
++            nullifier,
++            ExtractedNoteCommitment::from(output_note.commitment()).to_bytes(),
++        )
 +    }
 +
 +    fn address(raw: &[u8; 43]) -> Address {
@@ -1269,8 +1272,11 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +        let rcv = ValueCommitTrapdoor::from_bytes(rcv)
 +            .into_option()
 +            .expect("rcv must be a valid scalar");
-+        ValueCommitment::derive(NoteValue::from_raw(spend_value) - NoteValue::from_raw(0), rcv)
-+            .to_bytes()
++        ValueCommitment::derive(
++            NoteValue::from_raw(spend_value) - NoteValue::from_raw(0),
++            rcv,
++        )
++        .to_bytes()
 +    }
 +
 +    fn byte_tagged(tag: u8) -> [u8; 32] {
@@ -1360,7 +1366,11 @@ diff -ruN a/src/note_encryption.rs b/src/note_encryption.rs
 +                pool,
 +                hex_str(&nullifier)
 +            );
-+            println!("_{}_INTERNAL_SPEND_CMX = bytes.fromhex(\"{}\")", pool, hex_str(&cmx));
++            println!(
++                "_{}_INTERNAL_SPEND_CMX = bytes.fromhex(\"{}\")",
++                pool,
++                hex_str(&cmx)
++            );
 +        }
 +    }
  }

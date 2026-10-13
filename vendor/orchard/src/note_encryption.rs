@@ -1721,7 +1721,10 @@ mod gen_v3_ext_vectors {
             version,
         ))
         .expect("output note must be valid");
-        (nullifier, ExtractedNoteCommitment::from(output_note.commitment()).to_bytes())
+        (
+            nullifier,
+            ExtractedNoteCommitment::from(output_note.commitment()).to_bytes(),
+        )
     }
 
     fn address(raw: &[u8; 43]) -> Address {
@@ -1736,8 +1739,11 @@ mod gen_v3_ext_vectors {
         let rcv = ValueCommitTrapdoor::from_bytes(rcv)
             .into_option()
             .expect("rcv must be a valid scalar");
-        ValueCommitment::derive(NoteValue::from_raw(spend_value) - NoteValue::from_raw(0), rcv)
-            .to_bytes()
+        ValueCommitment::derive(
+            NoteValue::from_raw(spend_value) - NoteValue::from_raw(0),
+            rcv,
+        )
+        .to_bytes()
     }
 
     fn byte_tagged(tag: u8) -> [u8; 32] {
@@ -1827,7 +1833,11 @@ mod gen_v3_ext_vectors {
                 pool,
                 hex_str(&nullifier)
             );
-            println!("_{}_INTERNAL_SPEND_CMX = bytes.fromhex(\"{}\")", pool, hex_str(&cmx));
+            println!(
+                "_{}_INTERNAL_SPEND_CMX = bytes.fromhex(\"{}\")",
+                pool,
+                hex_str(&cmx)
+            );
         }
     }
 }
