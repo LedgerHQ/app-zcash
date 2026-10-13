@@ -842,39 +842,63 @@ def test_pczt_review_too_large_for_the_heap_refuses_before_it_is_shown(backend):
     _assert_still_answering(client)
 
 
+# Transparent inputs beside a shielding into four notes. That review shows the most shielded
+# outputs, so it is the one the heap bounds first: 27 inputs fit on Flex and Nano S Plus and 28 do
+# not. This stays below that edge, which moves with what the SDK allocates for a review.
+_SHIELD_INTO_FOUR_NOTES_INPUTS = 24
+
+
 @pytest.mark.parametrize(
-    ("change_notes", "with_recipient"),
-    [(5, True), (4, False)],
+    ("change_notes", "with_recipient", "inputs"),
+    [(5, True, _SHIPPED_MAX_TRANSPARENT_INPUTS), (4, False, _SHIELD_INTO_FOUR_NOTES_INPUTS)],
     ids=["recipient_and_five_change_notes", "shield_into_four_notes"],
 )
-def test_pczt_split_change_beside_the_shipped_transparent_input_bound_signs(
+def test_pczt_split_change_beside_transparent_inputs_signs(
     backend,
     scenario_navigator: NavigateWithScenario,
     change_notes: int,
     with_recipient: bool,
+    inputs: int,
 ):
-    """The largest split change each review allows still signs beside every transparent input.
+    """The largest split change each review allows still signs beside many transparent inputs.
 
-    One recipient and five change notes is the most the output budgets accept; shielding into four
-    notes puts the most shielded outputs on the review. Both leave the heap at its tightest when the
-    review is built, which is where a review whose allocations are not proven first exits the
-    application. The fee this shape implies is not realistic; only the shape is under test.
+    One recipient and five change notes is the most the output budgets accept, and signs beside every
+    transparent input; shielding into four notes puts the most shielded outputs on the review. Both
+    leave the heap at its tightest when the review is built. The fee this shape implies is not
+    realistic; only the shape is under test.
     """
     client = ZcashCommandSender(backend)
 
     with client.send_pczt(
         pczt_global=PCZT_V6_GLOBAL,
-        transparent_inputs=[_TRANSPARENT_INPUT_100K] * _SHIPPED_MAX_TRANSPARENT_INPUTS,
+        transparent_inputs=[_TRANSPARENT_INPUT_100K] * inputs,
         transparent_outputs=[],
         ironwood_bundle=_split_change_bundle(change_notes, with_recipient=with_recipient),
     ):
         _approve_review(scenario_navigator)
 
-    for input_index in range(_SHIPPED_MAX_TRANSPARENT_INPUTS):
+    for input_index in range(inputs):
         signature = client.pczt_sign_transparent(input_index=input_index).data
-        assert len(signature) > 0, f"input {input_index} of {_SHIPPED_MAX_TRANSPARENT_INPUTS}"
+        assert len(signature) > 0, f"input {input_index} of {inputs}"
     if with_recipient:
         assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+
+
+def test_pczt_shield_into_four_notes_beside_every_transparent_input_is_refused(backend):
+    """Past what the heap holds for its review, the transaction is refused, not the app exited."""
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_100K] * _SHIPPED_MAX_TRANSPARENT_INPUTS,
+            transparent_outputs=[],
+            ironwood_bundle=_split_change_bundle(4, with_recipient=False),
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    _assert_still_answering(client)
 
 
 def test_pczt_t_to_z_carries_the_shipped_transparent_input_bound(
