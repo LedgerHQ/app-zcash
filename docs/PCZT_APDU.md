@@ -67,11 +67,14 @@ components.
   and none beside a shielded change note (`IncorrectData`). The transparent outputs
   are parsed before either shielded bundle, so it is the shielded change note that
   is refused.
-- The bounds above are each within what the device holds, but not all at once. A
+- The bounds above are each within what the device holds, but not all at once:
+  shielding into four notes, for instance, fits beside a couple of dozen
+  transparent inputs but not beside 32. A
   payload combining them past what the heap can hold is refused with
   `NotEnoughMemorySpace` — at a shielded action count packet when the remaining
-  actions would not fit, or before the review when its screens would not. The
-  review's own allocations are made fallibly first, in the order it makes them. A
+  actions would not fit, or before the review when its screens would not. Before
+  the review is built, the heap must hold every block it allocates as one free
+  block, which the first-fit allocator then serves in any order. A
   few allocations made while parsing an action, such as encoding a shielded
   output's address, stay infallible: the headroom required at the count packet,
   measured against the bounds above, is what keeps them within the heap.
