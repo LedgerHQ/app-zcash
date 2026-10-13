@@ -28,9 +28,14 @@ def main():
         shutil.copyfile(sdk_dir / "src/seph.rs", work / "sdk_seph.rs")
         shutil.copyfile(Path(__file__).with_name("sdk_io.rs"), work / "sdk_io.rs")
         binary = work / "sdk-io-tests"
-        subprocess.run(["rustc", "--edition=2024", "--test", str(work / "sdk_io.rs"),
-                        "-o", str(binary)], check=True)
-        subprocess.run([str(binary), "--test-threads=1"], check=True)
+        # nano_nbgl compiles in the NBGL loan the review callbacks require, as on every target.
+        subprocess.run(["rustc", "--edition=2024", "--test", "--cfg", 'feature="nano_nbgl"',
+                        str(work / "sdk_io.rs"), "-o", str(binary)], check=True)
+        # The SDK lets one Comm exist per process, as on a device, so each test gets its own.
+        listing = subprocess.check_output([str(binary), "--list"], text=True)
+        names = [line.removesuffix(": test") for line in listing.splitlines() if line.endswith(": test")]
+        for name in names:
+            subprocess.run([str(binary), "--exact", name], check=True)
         shutil.copyfile(root / "src/swap/panic_handler.rs", work / "swap_panic_handler.rs")
         shutil.copyfile(Path(__file__).with_name("swap_panic.rs"), work / "swap_panic.rs")
         for failure in (False, True):

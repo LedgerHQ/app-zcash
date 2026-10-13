@@ -135,6 +135,8 @@ pub unsafe fn os_registry_get_current_app_tag(_: u32, _: *mut u8, _: u32) -> u32
     OS.with_borrow_mut(|os| os.builtin_calls += 1);
     0
 }
+pub unsafe fn ux_process_ticker_event() {}
+pub unsafe fn ux_process_default_event() {}
 pub unsafe fn os_perso_is_pin_set() -> u8 {
     BOLOS_TRUE as u8
 }
@@ -229,16 +231,19 @@ fn overlapping_review_commands_preserve_the_original_reply() {
     let comm = comm.next_command().into_comm();
     let callback = OS.with_borrow(|os| os.review_callback.unwrap());
     let mut expected = Vec::new();
-    for transport in [
-        OS_IO_PACKET_TYPE_RAW_APDU,
-        USB,
-        OS_IO_PACKET_TYPE_USB_WEBUSB_APDU,
-        BLE,
-    ] {
-        enqueue(transport, &VERSION);
-        assert!(!callback());
-        expected.push((transport, vec![0x69, 0x01]));
-    }
+    // The review lends its Comm to the callbacks for as long as it is displayed.
+    comm.lend_to_nbgl(|| {
+        for transport in [
+            OS_IO_PACKET_TYPE_RAW_APDU,
+            USB,
+            OS_IO_PACKET_TYPE_USB_WEBUSB_APDU,
+            BLE,
+        ] {
+            enqueue(transport, &VERSION);
+            assert!(!callback());
+            expected.push((transport, vec![0x69, 0x01]));
+        }
+    });
     comm.send(&[42], io::StatusWords::Ok).unwrap();
     expected.push((USB, vec![42, 0x90, 0x00]));
     OS.with_borrow(|os| assert_eq!(os.replies, expected));
@@ -253,12 +258,14 @@ fn builtins_other_than_get_version_are_refused_during_review() {
     let comm = comm.next_command().into_comm();
     let callback = OS.with_borrow(|os| os.review_callback.unwrap());
     // Reaching quit or the certificate loader panics the shim, so a pass proves they never ran.
-    enqueue(USB, &[0xb0, io_legacy::BOLOS_INS_QUIT, 0, 0, 0]);
-    assert!(!callback());
-    enqueue(BLE, &[0xb0, io_legacy::BOLOS_INS_SET_PKI_CERT, 0, 0, 1, 0]);
-    assert!(!callback());
-    enqueue(USB, &[0xb0, io_legacy::BOLOS_INS_GET_VERSION, 0, 0, 0]);
-    assert!(!callback());
+    comm.lend_to_nbgl(|| {
+        enqueue(USB, &[0xb0, io_legacy::BOLOS_INS_QUIT, 0, 0, 0]);
+        assert!(!callback());
+        enqueue(BLE, &[0xb0, io_legacy::BOLOS_INS_SET_PKI_CERT, 0, 0, 1, 0]);
+        assert!(!callback());
+        enqueue(USB, &[0xb0, io_legacy::BOLOS_INS_GET_VERSION, 0, 0, 0]);
+        assert!(!callback());
+    });
     comm.send(&[42], io::StatusWords::Ok).unwrap();
     OS.with_borrow(|os| {
         let statuses: Vec<_> = os

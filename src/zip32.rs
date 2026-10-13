@@ -12,6 +12,35 @@ pub use orchard::keys::FullViewingKey as OrchardFvk;
 pub use orchard::keys::LedgerValidationKey as OrchardValidationKey;
 pub use orchard::keys::SpendAuthorizingKey as OrchardAsk;
 
+/// An Orchard FVK held across APDUs. Its `nk` and `rivk` are viewing-key secrets, wiped on drop
+/// like the IVK and OVK derived from them.
+pub struct RetainedOrchardFvk(OrchardFvk);
+
+// `zeroize_flat_type` below requires a value with no drop glue of its own.
+const _: () = assert!(!core::mem::needs_drop::<OrchardFvk>());
+
+impl RetainedOrchardFvk {
+    pub fn new(fvk: OrchardFvk) -> Self {
+        Self(fvk)
+    }
+}
+
+impl core::ops::Deref for RetainedOrchardFvk {
+    type Target = OrchardFvk;
+
+    fn deref(&self) -> &OrchardFvk {
+        &self.0
+    }
+}
+
+impl Drop for RetainedOrchardFvk {
+    fn drop(&mut self) {
+        // SAFETY: the FVK owns only fixed-size field elements and byte arrays (no pointer, no
+        // `Drop`), for which all-zero bytes are a valid value, and it is not read again.
+        unsafe { zeroize::zeroize_flat_type(&mut self.0) }
+    }
+}
+
 pub fn map_ledger_crypto_error(err: ledger_zcash_crypto::Error) -> AppSW {
     match err {
         ledger_zcash_crypto::Error::InvalidKeyDiscarded => AppSW::Deny,
