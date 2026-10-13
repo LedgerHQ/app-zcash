@@ -9,7 +9,7 @@ exclude = ["vendor/rust-secp256k1"]
 # 1.38.0 it still runs BOLOS commands other than GET_VERSION, quit and certificate load among them,
 # while a review is displayed.
 # Expressed as a requirement rather than left to the lock file, which a regeneration could move.
-ledger_device_sdk = { version = "1.38.0", features = ["sys", "io_new"] }
+ledger_device_sdk = { version = "1.41.0", features = ["sys", "io_new"] }
 zeroize = { version = "1.6.0", default-features = false }
 
 [package]

@@ -5,7 +5,8 @@ uses `cargo metadata --locked` to locate the same published SDK used by the app.
 It compiles the SDK's command decoder, built-in handlers, and review callbacks
 with scripted OS calls and transport packets. The tests check framing errors,
 built-in replies, and overlapping command rejection without rerouting the
-original reply.
+original reply. Each test runs in its own process, since the SDK allows a single
+`Comm` per application.
 
 The runner also compiles the application's actual swap panic handler in a small
 `no_std` host executable. A failed error response must still return to Exchange,
