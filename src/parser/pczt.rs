@@ -1098,7 +1098,8 @@ impl PcztParser {
         ensure_heap_headroom(SHIELDED_ACTIONS_HEAP_HEADROOM).map_err(ParserError::from_sw)?;
 
         let keys = {
-            let fvk = derive_orchard_fvk(&path).map_err(ParserError::from_sw)?;
+            let fvk =
+                RetainedOrchardFvk::new(derive_orchard_fvk(&path).map_err(ParserError::from_sw)?);
             OwnAccountKeys::from_fvk(account, &fvk).map_err(ParserError::from_sw)?
         };
         tx_info.own_account_keys.push(keys);
@@ -1392,12 +1393,16 @@ mod tests {
     };
 
     fn zip32_path(account: u32) -> Bip32Path {
+        zip32_path_for_coin(crate::consts::ZCASH_BIP44_COIN_TYPE, account)
+    }
+
+    fn zip32_path_for_coin(coin_type: u32, account: u32) -> Bip32Path {
         let mut encoded = [0u8; 12];
-        for (chunk, component) in encoded.chunks_exact_mut(4).zip([
-            0x8000_0020,
-            0x8000_0000 | crate::consts::ZCASH_BIP44_COIN_TYPE,
-            account,
-        ]) {
+        for (chunk, component) in
+            encoded
+                .chunks_exact_mut(4)
+                .zip([0x8000_0020, 0x8000_0000 | coin_type, account])
+        {
             chunk.copy_from_slice(&component.to_be_bytes());
         }
         Bip32Path::from_dpath(3, &encoded).unwrap_or_default()
@@ -1415,6 +1420,25 @@ mod tests {
                 || own_account_path(&source, 0).is_ok()
                 || own_account_path(&zip32_path(0x8000_0002), 2).is_ok()
             {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// A source path on the other network's coin type builds no destination: a mainnet build
+    /// never reaches a testnet account's keys, nor the reverse.
+    #[test_case]
+    const OWN_ACCOUNT_PATH_STAYS_ON_THE_BUILD_NETWORK: TestType = TestType {
+        modname: module_path!(),
+        name: "own_account_path_stays_on_the_build_network",
+        f: || {
+            let other_coin_type = if crate::consts::ZCASH_BIP44_COIN_TYPE == 133 {
+                1
+            } else {
+                133
+            };
+            if own_account_path(&zip32_path_for_coin(other_coin_type, 0x8000_0000), 1).is_ok() {
                 return Err(());
             }
             Ok(())
