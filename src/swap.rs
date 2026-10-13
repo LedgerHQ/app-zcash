@@ -99,6 +99,8 @@ pub enum SwapAppErrorCode {
     UnexpectedExternalOutputCount = 0x06,
     BufferOverflow = 0x07,
     UnsupportedDestinationExtraId = 0x08,
+    OwnAccountDestination = 0x09,
+    EmptyDestination = 0x0A,
 }
 
 impl SwapAppErrorCodeTrait for SwapAppErrorCode {
@@ -153,6 +155,18 @@ pub fn check_swap_params(
     }
 
     let output = external_outputs[0];
+
+    // A transfer to another account of the seed is shown by its account and carries no address,
+    // so it can never be the destination the user approved in Exchange. Refused outright: the
+    // address comparison below would accept it against an empty destination.
+    if output.own_account.is_some() {
+        error!("Swap output pays another account of the seed");
+        return Err(SwapError::with_message(
+            SwapErrorCommonCode::ErrorWrongDestination,
+            SwapAppErrorCode::OwnAccountDestination,
+            "Destination is another account of the seed".to_string(),
+        ));
+    }
 
     // Validate amount
     // Parse amount (u64 from big-endian bytes, right aligned in 16-byte buffer)
@@ -232,6 +246,15 @@ pub fn check_swap_params(
                 "Failed to UTF-8 decode destination str".to_string(),
             )
         })?;
+
+    if swap_dest.is_empty() {
+        error!("Swap destination is empty");
+        return Err(SwapError::with_message(
+            SwapErrorCommonCode::ErrorWrongDestination,
+            SwapAppErrorCode::EmptyDestination,
+            "Empty destination".to_string(),
+        ));
+    }
 
     if output.address != swap_dest {
         error!(
@@ -385,4 +408,80 @@ fn get_printable_amount(
     debug!("Formatted amount: {:?} ", printable.as_str());
 
     Ok(printable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_swap_params;
+    use crate::tx::{TxOutput, TxPool};
+    use alloc::string::String;
+    use alloc::vec;
+    use ledger_device_sdk::libcall::swap::CreateTxParams;
+    use ledger_device_sdk::testing::TestType;
+
+    const AMOUNT: u64 = 100_000;
+    const FEE: u64 = 1_000;
+    const DESTINATION: &str = "t1b1Rbw2shhJkP6MCnCyxCPuyFedHrwKty8";
+
+    fn params(destination: &str) -> CreateTxParams {
+        let mut params = CreateTxParams::default();
+        let amount_start = params.amount.len() - 8;
+        params.amount[amount_start..].copy_from_slice(&AMOUNT.to_be_bytes());
+        let fee_start = params.fee_amount.len() - 8;
+        params.fee_amount[fee_start..].copy_from_slice(&FEE.to_be_bytes());
+        params.dest_address[..destination.len()].copy_from_slice(destination.as_bytes());
+        params.dest_address_len = destination.len();
+        params
+    }
+
+    fn output(address: &str, own_account: Option<u32>) -> TxOutput {
+        TxOutput {
+            amount: AMOUNT,
+            address: String::from(address),
+            is_change: false,
+            memo: None,
+            pool: TxPool::Orchard,
+            own_account,
+        }
+    }
+
+    #[test_case]
+    const MATCHING_DESTINATION_IS_ACCEPTED: TestType = TestType {
+        modname: module_path!(),
+        name: "matching_destination_is_accepted",
+        f: || {
+            check_swap_params(&params(DESTINATION), &vec![output(DESTINATION, None)], FEE)
+                .map_err(|_| ())
+        },
+    };
+
+    /// Refused whatever the destination: the output's empty address against an empty destination,
+    /// and, so that this refusal is shown to hold on its own, an address equal to the destination.
+    #[test_case]
+    const OWN_ACCOUNT_OUTPUT_IS_REFUSED: TestType = TestType {
+        modname: module_path!(),
+        name: "own_account_output_is_refused",
+        f: || {
+            for (destination, address) in [(DESTINATION, ""), ("", ""), (DESTINATION, DESTINATION)]
+            {
+                let outputs = vec![output(address, Some(1))];
+                if check_swap_params(&params(destination), &outputs, FEE).is_ok() {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const EMPTY_DESTINATION_IS_REFUSED: TestType = TestType {
+        modname: module_path!(),
+        name: "empty_destination_is_refused",
+        f: || {
+            if check_swap_params(&params(""), &vec![output("", None)], FEE).is_ok() {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 }
