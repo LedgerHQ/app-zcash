@@ -38,8 +38,10 @@ from application_client.pczt import (
     pczt_transaction_bytes,
 )
 from application_client.zcash_command_sender import (
+    CLA,
     MAX_PCZT_TRANSPARENT_INPUTS,
     Errors,
+    InsType,
     ZcashCommandSender,
 )
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
@@ -54,6 +56,7 @@ from .test_pczt_ironwood import (
     _TRANSPARENT_INPUT_100K,
     PCZT_V6_GLOBAL,
     _dummy_ironwood_action,
+    _valid_ironwood_action,
     _external_recipient_ironwood_action,
     _ironwood_bundle_with_external_recipient,
     _split_change_bundle,
@@ -61,6 +64,10 @@ from .test_pczt_ironwood import (
 
 # Mirrors MAX_PCZT_ORCHARD_ACTIONS_NUMBER in src/consts.rs, the bound a released build carries.
 _SHIPPED_MAX_ORCHARD_ACTIONS = 32
+# Mirrors MAX_PCZT_IRONWOOD_ACTIONS_NUMBER in src/consts.rs.
+_SHIPPED_MAX_IRONWOOD_ACTIONS = 32
+# What the transparent payment leaves for the fee, so that a transaction stays within the review's limits.
+_FEE = 1000
 
 # Mirrors MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER: shielded outputs one transaction may show.
 _MAX_SHIELDED_DISPLAYED_OUTPUTS = 4
@@ -760,6 +767,46 @@ def test_pczt_full_transparent_inputs_and_shielded_actions_refuse_with_a_status_
             orchard_bundle=_z_to_z_bundle(_SHIPPED_MAX_ORCHARD_ACTIONS),
         ):
             pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    _assert_still_answering(client)
+
+
+def test_pczt_full_transparent_inputs_and_ironwood_actions_refuse_at_the_count_packet(backend):
+    """The Ironwood count packet applies the same headroom check as the Orchard one.
+
+    The refusal is required at the count packet itself, before any action field is sent: past it,
+    a later allocation would refuse too, so only the packet it comes on tells the check apart. Every
+    action is a real spend with no change note and one transparent output takes all but the fee, so
+    with fewer inputs the same transaction reaches the review.
+    """
+    client = ZcashCommandSender(backend)
+    transparent_inputs = [_transparent_input(_P2PKH_SCRIPT)] * _SHIPPED_MAX_TRANSPARENT_INPUTS
+    actions = [_valid_ironwood_action() for _ in range(_SHIPPED_MAX_IRONWOOD_ACTIONS)]
+    total_in = sum(i.value for i in transparent_inputs) + sum(a.spend_value - a.value for a in actions)
+    payment = PcztTransparentOutput(value=total_in - _FEE, script_pubkey=_P2PKH_SCRIPT)
+    bundle = PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(a.spend_value - a.value for a in actions),
+        flags=_FLAGS,
+        anchor=bytes(32),
+    )
+    # pylint: disable=protected-access
+    client._send_pczt_header(PCZT_V6_GLOBAL)
+    client._send_pczt_transparent_inputs(transparent_inputs)
+    client._send_pczt_transparent_outputs_sync([payment])
+    client._send_pczt_orchard_actions_sync(PcztOrchardBundle(actions=[], flags=0, value_balance=0, anchor=bytes(32)))
+    packets = client._build_pczt_ironwood_action_packets(bundle)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_IRONWOOD_ACTION,
+            p1=client._pczt_chunk_p1(0, len(packets)),
+            p2=client._pczt_chunk_p2(0, len(packets), pczt_finished=True),
+            data=packets[0],
+        )
+    # pylint: enable=protected-access
 
     assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
     _assert_still_answering(client)
