@@ -839,6 +839,8 @@ impl PcztParser {
         network: NetworkType,
         is_change: bool,
     ) -> Result<(), ParserError> {
+        // Only a transparent change sets the flag, and the transparent outputs are parsed before
+        // either shielded bundle, so this is where the two kinds of change meet.
         if is_change && ctx.tx_info.is_change_found {
             return Err(ParserError::from_str(
                 "Transparent and shielded change outputs detected",

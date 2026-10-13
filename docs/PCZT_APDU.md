@@ -64,12 +64,17 @@ components.
   against the retained bound: up to five beside one recipient. A transfer with no
   external recipient shows its change notes, so shielding or rebalancing into more
   than four notes is refused. At most one transparent change output is accepted,
-  and none beside a shielded change note.
+  and none beside a shielded change note (`IncorrectData`). The transparent outputs
+  are parsed before either shielded bundle, so it is the shielded change note that
+  is refused.
 - The bounds above are each within what the device holds, but not all at once. A
   payload combining them past what the heap can hold is refused with
   `NotEnoughMemorySpace` — at a shielded action count packet when the remaining
-  actions would not fit, or before the review when its screens would not — and
-  never by the application exiting.
+  actions would not fit, or before the review when its screens would not. The
+  review's own allocations are made fallibly first, in the order it makes them. A
+  few allocations made while parsing an action, such as encoding a shielded
+  output's address, stay infallible: the headroom required at the count packet,
+  measured against the bounds above, is what keeps them within the heap.
 - The **change note is bound to the account being spent**. A shielded output that
   decrypts under the internal viewing key, and a transparent output whose declared
   path the app recognises as its own, both record the account they return to, and
