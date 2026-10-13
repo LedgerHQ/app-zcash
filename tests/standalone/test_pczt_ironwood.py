@@ -11,6 +11,7 @@ from application_client.pczt import (
     PcztOrchardBundle,
     PcztTransparentInput,
     PcztTransparentOutput,
+    output_account_extension,
 )
 from application_client.zcash_command_sender import (
     CLA,
@@ -2377,6 +2378,19 @@ def test_pczt_ironwood_own_account_output_undeclared_is_refused(backend, vector)
     bundle = _own_account_ironwood_bundle(own_account_ironwood_action(vector, declared=None))
 
     _assert_own_account_ironwood_refused(client, bundle)
+
+
+def test_pczt_ironwood_own_account_declared_for_a_recipient_outside_the_seed_is_refused(backend):
+    """A payment to a recipient outside the seed, declared for account 1, is refused.
+
+    Account 0's external OVK recovers it as an ordinary payment, which a failed declaration must not
+    fall back to.
+    """
+    action = _external_recipient_ironwood_action()
+    action.output_extensions = output_account_extension(1)
+    action.note_plaintext_version = 0x03
+
+    _assert_own_account_ironwood_refused(ZcashCommandSender(backend), _own_account_ironwood_bundle(action))
 
 
 def test_pczt_ironwood_own_account_declared_for_another_account_is_refused(backend):

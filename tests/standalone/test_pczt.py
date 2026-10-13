@@ -10,6 +10,7 @@ from application_client.pczt import (
     PcztOrchardBundle,
     PcztTransparentInput,
     PcztTransparentOutput,
+    output_account_extension,
     pczt_transaction_bytes,
 )
 from application_client.zcash_command_sender import (
@@ -2408,6 +2409,18 @@ def test_pczt_orchard_own_account_declared_for_another_account_is_refused(backen
     client = ZcashCommandSender(backend)
 
     _assert_own_account_orchard_refused(client, own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK, declared=2))
+
+
+def test_pczt_orchard_own_account_declared_for_a_recipient_outside_the_seed_is_refused(backend):
+    """A payment to a recipient outside the seed, declared for account 1, is refused.
+
+    Account 0's external OVK recovers it as an ordinary payment, which a failed declaration must not
+    fall back to.
+    """
+    action = _mixed_real_and_dummy_orchard_bundle().actions[0]
+    action.output_extensions = output_account_extension(1)
+
+    _assert_own_account_orchard_refused(ZcashCommandSender(backend), action)
 
 
 def test_pczt_orchard_own_account_declaring_the_source_account_is_refused(backend):

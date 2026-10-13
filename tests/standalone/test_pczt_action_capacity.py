@@ -1086,6 +1086,34 @@ def test_pczt_own_account_outputs_to_four_accounts_sign(
     _sign_transparent_inputs(client, 1)
 
 
+def test_pczt_own_account_outputs_to_a_fifth_account_are_refused(backend):
+    """A fifth distinct account is refused at its declaration, before its keys are derived.
+
+    Its output carries account 4's note declared as account 5. Past the bound it would fail to
+    decrypt under account 5 and be refused with IncorrectData instead, so the status word tells which
+    check refused it.
+    """
+    four = [IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, IRONWOOD_ACCOUNT_2, IRONWOOD_ACCOUNT_3, IRONWOOD_ACCOUNT_4]
+    inputs, bundle = _own_account_shield([*four, IRONWOOD_ACCOUNT_4])
+    bundle.actions[-1] = own_account_ironwood_action(IRONWOOD_ACCOUNT_4, declared=5)
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=inputs,
+            transparent_outputs=[],
+            ironwood_bundle=bundle,
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    assert not error.value.data
+    with pytest.raises(ExceptionRAPDU):
+        client.pczt_sign_transparent(input_index=0)
+    _assert_still_answering(client)
+
+
 @pytest.mark.parametrize("account_count", [1, 4])
 def test_pczt_own_account_outputs_beside_the_shipped_transparent_input_bound(
     backend,
