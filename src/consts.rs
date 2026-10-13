@@ -73,7 +73,7 @@ pub const MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER: usize = 4;
 // bounded the same way. Six lets a wallet split its change across up to five notes beside one
 // recipient. It is measured rather than assumed: a recipient and five change notes beside the full
 // transparent input bound parse, review and sign on Nano X. A payload holding more than the heap
-// can is refused by the headroom guards and the review rehearsal, not by this count.
+// can is refused by the headroom guards, not by this count.
 pub const MAX_PCZT_SHIELDED_RETAINED_OUTPUTS_NUMBER: usize = 6;
 
 // Distinct other accounts of the seed one transaction may pay, across both shielded pools.

@@ -340,10 +340,10 @@ impl JacobianPoint {
         let x = self.x.mul(&zinv2)?;
         let y = self.y.mul(&zinv2)?.mul(&zinv)?;
 
-        Ok(Some(AffinePoint {
-            x_be: x.to_be_bytes(),
-            y_be: y.to_be_bytes(),
-        }))
+        Ok(Some(AffinePoint::from_trusted_coordinates(
+            x.to_be_bytes(),
+            y.to_be_bytes(),
+        )))
     }
 }
 

@@ -18,7 +18,7 @@ components.
   complete derivation path must match the first action's path, including on cache
   hits. FVK and viewing-key derivation are reused; randomized verification keys,
   spend ownership, nullifiers, and commitments are still checked per action.
-  Viewing keys are discarded before review, with IVK and OVK bytes zeroized.
+  Viewing keys are discarded before review, with FVK, IVK and OVK bytes zeroized.
 - The bundle command order is fixed:
   `PCZT_HEADER`, then `PCZT_TRANSPARENT_INPUT`, then
   `PCZT_TRANSPARENT_OUTPUT`, then `PCZT_ORCHARD_ACTION`, and for V6
@@ -64,12 +64,20 @@ components.
   against the retained bound: up to five beside one recipient. A transfer with no
   external recipient shows its change notes, so shielding or rebalancing into more
   than four notes is refused. At most one transparent change output is accepted,
-  and none beside a shielded change note.
-- The bounds above are each within what the device holds, but not all at once. A
+  and none beside a shielded change note (`IncorrectData`). The transparent outputs
+  are parsed before either shielded bundle, so it is the shielded change note that
+  is refused.
+- The bounds above are each within what the device holds, but not all at once:
+  shielding into four notes, for instance, fits beside a couple of dozen
+  transparent inputs but not beside 32. A
   payload combining them past what the heap can hold is refused with
   `NotEnoughMemorySpace` — at a shielded action count packet when the remaining
-  actions would not fit, or before the review when its screens would not — and
-  never by the application exiting.
+  actions would not fit, or before the review when its screens would not. Before
+  the review is built, the heap must hold every block it allocates as one free
+  block, which the first-fit allocator then serves in any order. A
+  few allocations made while parsing an action, such as encoding a shielded
+  output's address, stay infallible: the headroom required at the count packet,
+  measured against the bounds above, is what keeps them within the heap.
 - The **change note is bound to the account being spent**. A shielded output that
   decrypts under the internal viewing key, and a transparent output whose declared
   path the app recognises as its own, both record the account they return to, and
@@ -374,8 +382,17 @@ prepares the viewing-key cache without materializing the scalar: the first actio
 that spends derives it, and the real actions after that reuse it instead of
 repeating the normalization. A bundle that spends nothing never derives one.
 The retained scalar uses wipe-on-drop storage and redacted debug formatting; it
-is discarded before user review and on parser reset or error. Signing still
-derives its key through the original post-approval path.
+is discarded before user review and on parser reset or error. The account FVK
+follows the same lifetime and is zeroized when dropped. Both are held across the
+action APDUs of one bundle, a window that the account spending key the parser
+caches for signing already spans. A host that stops sending mid-bundle keeps them
+until the next parser reset. Signing still derives its key through the original
+post-approval path.
+
+The SpendAuthSig and BindingSig basepoints are held as fixed affine coordinates
+rather than decoded from their 32-byte encodings at each use. Each one is checked
+against its encoding by a unit test, so the signatures commit to the same
+basepoints.
 
 Computed randomized verification keys stay typed as compressed keys until their
 bytes are compared with the action's wire encoding. This does not add curve-point

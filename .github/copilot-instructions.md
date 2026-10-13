@@ -30,7 +30,8 @@ values, no clamping.
 1. `Comm` receives an APDU with CLA=0xe0, INS, P1, P2
 2. The `Instruction` enum in `src/main.rs` parses the header into strongly-typed commands, rejecting
    unsupported P1/P2 combinations there rather than in the handlers
-3. Handlers in `src/handlers/` process commands and return `Result<(), AppSW>`
+3. Handlers in `src/handlers/` process commands and return `Result<CommandResponse<'a>, AppSW>`;
+   the main loop sends the response, or the error status word
 4. `AppSW` maps errors to status words (e.g. `0x6985` = Deny, `0xB007` = BadState)
 
 **Two signing protocols share one `TxContext`**, and that sharing is the subtlest part of the codebase:
@@ -78,7 +79,7 @@ feature and a device target they compile away and the run reports success over a
 
 ## Key Patterns
 
-**Error Handling**: handlers return `Result<(), AppSW>`. Never use `unwrap()` or `expect()` outside
+**Error Handling**: handlers return `Result<CommandResponse<'a>, AppSW>`. Never use `unwrap()` or `expect()` outside
 `build.rs` and cases where failure is genuinely impossible and commented as such. Map SDK errors to specific
 `AppSW` variants.
 

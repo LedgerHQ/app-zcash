@@ -62,9 +62,9 @@ use crate::utils::{
     output_script_is_regular,
 };
 use crate::zip32::{
-    OrchardFvk, OrchardValidationKey, derive_orchard_ask_from_sk, derive_orchard_fvk,
-    derive_orchard_fvk_and_ask_from_sk, derive_orchard_fvk_from_sk, derive_orchard_sk_bytes,
-    orchard_network,
+    OrchardFvk, OrchardValidationKey, RetainedOrchardFvk, derive_orchard_ask_from_sk,
+    derive_orchard_fvk, derive_orchard_fvk_and_ask_from_sk, derive_orchard_fvk_from_sk,
+    derive_orchard_sk_bytes, orchard_network,
 };
 
 use super::reader::{ByteReader, ReadBytesExt};
@@ -612,8 +612,8 @@ pub struct PcztParser {
     // Derivation path the cached spending key belongs to, used to reject a
     // second Orchard action declaring a different path.
     orchard_spending_key_path: Option<Bip32Path>,
-    // Shared by both pools under orchard_spending_key_path; discarded before review.
-    orchard_fvk: Option<OrchardFvk>,
+    // Shared by both pools under orchard_spending_key_path; wiped before review or on reset.
+    orchard_fvk: Option<RetainedOrchardFvk>,
     // Normalized scalar under the same account path. Wiped before review or on reset.
     orchard_validation_key: Option<OrchardValidationKey>,
     is_v6_tx: bool,

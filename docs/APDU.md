@@ -30,7 +30,7 @@ stated again with the command that returns it.
 | `0x6986` | `ConditionsOfUseNotSatisfied` | The request contradicts what the user approved — chiefly a change output whose account is not the one being spent. |
 | `0xB007` | `BadState` | The command has no meaning in the current phase: a continuation opened before the review, or any round resuming a finished transaction. |
 | `0x6A80` | `IncorrectData` | Malformed payload, or a derivation path outside the shape the command accepts — including a malformed output extension block, and a shielded output declared for an account it does not decrypt under or for the account being spent. |
-| `0x6A84` | `NotEnoughMemorySpace` | An allocation the device refused: retained memo text past its per-transaction budget, an Orchard derivation past the per-run cap, more shielded outputs than the review may hold, outputs declared for more than four other accounts, or a transaction whose remaining parse or review the heap cannot hold. |
+| `0x6A84` | `NotEnoughMemorySpace` | An allocation the device refused: retained memo text past its per-transaction budget, a shielded action's ciphertext buffer the heap cannot hold, an Orchard derivation past the per-run cap, more shielded outputs than the review may hold, outputs declared for more than four other accounts, or a transaction whose remaining parse or review the heap cannot hold. |
 | `0x6B00` | `WrongP1P2` | The P1/P2 combination has no meaning for this command. |
 | `0x6F03` | `RngFailure` | The hardware random number generator reported a failure. No signature is produced. |
 | `0x6985` | `Deny` | The user rejected the review. |
@@ -56,8 +56,9 @@ When a PIN is configured and the device is locked, every APDU is answered `0x551
 `DeviceLocked` before it is decoded, whatever its class: Zcash instructions and the
 SDK's built-in commands (`CLA = 0xB0`: app name/version, quit, certificate load)
 alike, including those queued while a screen is displayed. The SDK applies the check
-to each received frame (`ledger_device_sdk` 1.38.0, `io_new`), as the
-legacy I/O path did.
+to each received frame before any decoding (`ledger_device_sdk` 1.41.0,
+`src/io_new/event.rs`), and its legacy I/O path applies the same check
+(`src/io_legacy.rs`). The app holds no lock check of its own.
 
 ## Accepted derivation paths
 

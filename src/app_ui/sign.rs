@@ -22,7 +22,7 @@ use crate::{
 
 use alloc::{string::String, vec::Vec};
 use ledger_device_sdk::io::Comm;
-use ledger_device_sdk::nbgl::{Field, NbglReview};
+use ledger_device_sdk::nbgl::{Field, NbglReview, nbgl_tag_value::TagValue};
 
 use crate::tx::{TransferType, TxOutput};
 use crate::utils::ensure_heap_headroom;
@@ -64,45 +64,32 @@ fn format_zec_amount(amount: u64) -> Result<String, AppSW> {
     try_format(format_args!("{}.{:08} {}", whole, fractional, ZCASH_TICKER))
 }
 
-/// A heap block the size of the C string `CString::new(text)` allocates: the text and its nul.
-fn c_string_block(text: &str) -> Result<Box<[u8]>, AppSW> {
-    let mut block = Vec::new();
-    block
-        .try_reserve_exact(text.len() + 1)
-        .map_err(|_| AppSW::NotEnoughMemorySpace)?;
-    block.resize(text.len() + 1, 0);
-    Ok(block.into_boxed_slice())
+/// A request rounded up to the allocator's 8-byte granularity.
+const fn heap_block(bytes: usize) -> usize {
+    bytes.next_multiple_of(8)
 }
 
-/// Make, fallibly and in the same order, the allocations `NbglReview::show` is about to make
-/// infallibly, then release them.
+/// Heap `NbglReview::show` takes to build the review of `fields`: the tag/value list it lifts the
+/// fields into, then the C copy of that list — a name and a value C string per field, the pair array
+/// and two per-pair index lists.
 ///
-/// The review copies every field into a pair of C strings gathered in one list, then grows a list of
-/// pointers to them one field at a time, and a failed allocation there exits the application. How
-/// much that takes depends on where the heap is fragmented, not only on the text, so no estimate
-/// bounds it. The heap is a first-fit list that merges what is freed: releasing the rehearsal
-/// restores it, and the same requests are then served the same way, so the rehearsal succeeding is
-/// what proves the review will.
-fn rehearse_review_allocations(fields: &[Field]) -> Result<(), AppSW> {
-    // The SDK's `CField`: a field's name and value as C strings, side by side.
-    type CFieldBlocks = (Box<[u8]>, Box<[u8]>);
+/// The build is infallible, and a request the heap cannot serve exits the application. The heap is a
+/// first-fit list with no block header, so one free block this large serves every request of the
+/// build whatever order they come in. The bound follows the blocks rather than their order, which is
+/// what changes between SDK releases.
+fn review_build_heap(fields: &[Field]) -> usize {
+    let count = fields.len();
+    let strings: usize = fields
+        .iter()
+        .map(|field| heap_block(field.name.len() + 1) + heap_block(field.value.len() + 1))
+        .sum();
 
-    let mut strings: Vec<CFieldBlocks> = Vec::new();
-    strings
-        .try_reserve_exact(fields.len())
-        .map_err(|_| AppSW::NotEnoughMemorySpace)?;
-    for field in fields {
-        strings.push((c_string_block(field.name)?, c_string_block(field.value)?));
-    }
-
-    let mut pairs: Vec<nbgl_contentTagValue_t> = Vec::new();
-    for _ in fields {
-        pairs
-            .try_reserve(1)
-            .map_err(|_| AppSW::NotEnoughMemorySpace)?;
-        pairs.push(nbgl_contentTagValue_t::default());
-    }
-    Ok(())
+    heap_block(count * size_of::<TagValue>())
+        // The SDK's `CField`: a field's name and value as C strings, side by side.
+        + heap_block(count * size_of::<(Box<[u8]>, Box<[u8]>)>())
+        + strings
+        + 2 * heap_block(count * size_of::<Option<usize>>())
+        + heap_block(count * size_of::<nbgl_contentTagValue_t>())
 }
 
 /// Display transaction outputs, fees and validity window for user confirmation.
@@ -123,8 +110,8 @@ pub fn ui_display_tx(
     locktime: u32,
     expiry_height: u32,
 ) -> Result<bool, AppSW> {
-    // Every allocation the review makes is fallible or rehearsed: the review is the last step before
-    // signing, and the host chooses how much it holds.
+    // Every allocation the review makes is fallible or bounded beforehand: the review is the last
+    // step before signing, and the host chooses how much it holds.
     let fees_str = format_zec_amount(fees)?;
     let locktime_str = try_format(format_args!("{locktime}"))?;
     let expiry_str = if expiry_height == 0 {
@@ -245,6 +232,6 @@ pub fn ui_display_tx(
         )
         .glyph(load_glyph());
 
-    rehearse_review_allocations(&my_fields)?;
+    ensure_heap_headroom(review_build_heap(&my_fields))?;
     Ok(review.show(comm, &my_fields))
 }

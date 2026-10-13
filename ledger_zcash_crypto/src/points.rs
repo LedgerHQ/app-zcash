@@ -4,11 +4,18 @@ use ledger_device_sdk::ecc::{CurvesId, CxError, math::EcPoint};
 /// Internal affine coordinates. Only known constants and hash-to-curve construct these.
 #[derive(Clone, Copy)]
 pub(crate) struct AffinePoint {
-    pub(crate) x_be: [u8; 32],
-    pub(crate) y_be: [u8; 32],
+    x_be: [u8; 32],
+    y_be: [u8; 32],
 }
 
 impl AffinePoint {
+    /// The caller vouches that `(x, y)` is a Pallas point other than the identity: a protocol
+    /// constant or a hash-to-curve output. [`Self::to_validated`] relies on it without checking,
+    /// so host-supplied bytes go through [`ValidatedPoint::from_external`] instead.
+    pub(crate) fn from_trusted_coordinates(x_be: [u8; 32], y_be: [u8; 32]) -> Self {
+        Self { x_be, y_be }
+    }
+
     pub(crate) fn to_sdk(self) -> Result<EcPoint, CxError> {
         let mut point = EcPoint::new(CurvesId::Pallas)?;
         point.init(&self.x_be, &self.y_be)?;
@@ -22,6 +29,7 @@ impl AffinePoint {
         encoded
     }
 
+    /// Valid by construction; see [`Self::from_trusted_coordinates`].
     pub(crate) fn to_validated(self) -> Result<ValidatedPoint, CxError> {
         Ok(ValidatedPoint(self.to_sdk()?))
     }

@@ -7,7 +7,7 @@ publish = false
 [workspace]
 
 [dependencies]
-ledger_device_sdk = { version = "1.38", features = ["sys", "unit_test"] }
+ledger_device_sdk = { version = "1.41", features = ["sys", "unit_test"] }
 ledger_zcash_crypto = { path = "../../ledger_zcash_crypto" }
 orchard = { path = "../../vendor/orchard", default-features = false, features = ["ledger"] }
 pasta_curves = { version = "0.6", default-features = false, features = ["alloc", "repr-c"] }
