@@ -9,6 +9,9 @@ allows once it refuses every APDU on a locked device.
 
 - Accept the NU7 consensus branch id; any branch id the protocol does not define is
   still rejected
+- Refuse to sign a transaction whose version its consensus branch cannot carry, such as a V5
+  transaction before NU5 or a V6 one before NU6.3, Sprout's `0` included. A trusted input still
+  accepts the branch id of the transaction it reads
 - Move to the `zcash_protocol` 0.11 crate set and re-base the vendored `orchard`,
   `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1; vendor `secp256k1` 0.33.1 and
   `secp256k1-sys` 0.14.1 in place of the `rust-secp256k1` tree, carrying the same build stub
