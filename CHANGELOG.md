@@ -15,11 +15,11 @@ allows once it refuses every APDU on a locked device.
 - Require each signing path to have the shape of the key it names: a five-component BIP-44
   path with a hardened account for a transparent signature, on `HASH_SIGN` and on a PCZT
   input, and a ZIP-32 account path for an Orchard or Ironwood spend authorization
-- Drop the viewing keys of a PCZT session on every refusal that ends it, including those made
-  before a packet is parsed
 - Refuse a swap reference address longer than its buffer instead of comparing a truncated copy
-- Wipe the incoming viewing key, shared secret and symmetric key of a compact note decryption,
-  and build the ChaCha20-Poly1305 cipher with its zeroizing drop
+- Wipe the secrets of a compact note decryption (incoming viewing key, shared secret,
+  symmetric key) and of an outgoing note recovery (outgoing cipher key, ephemeral secret key,
+  shared secret, symmetric key, plaintexts), and build the ChaCha20-Poly1305 cipher with its
+  zeroizing drop
 - Move to the `zcash_protocol` 0.11 crate set and re-base the vendored `orchard`,
   `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1; vendor `secp256k1` 0.33.1 and
   `secp256k1-sys` 0.14.1 in place of the `rust-secp256k1` tree, carrying the same build stub

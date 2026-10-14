@@ -20,11 +20,6 @@ fn are_pczt_signatures_done(ctx: &TxContext) -> bool {
 
 fn reset_pczt_parser_after_error(ctx: &mut TxContext) {
     ctx.pczt_parser.reset();
-    // The session's viewing keys end with it, whichever check refused the packet: the parser's
-    // own errors already drop them, a refusal made here before parsing would otherwise leave them
-    // in RAM until the next header. Both wipe on drop.
-    ctx.tx_info.orchard_decipher_keys = None;
-    ctx.tx_info.own_account_keys = alloc::vec::Vec::new();
     debug!("PCZT parser state reset after error");
 }
 
