@@ -1,16 +1,22 @@
 """Reference values for the testnet account 0 of the Speculos default seed.
 
-Produced on the host by a throwaway generator built on the crates the app links (the vendored
-`orchard` 0.16, `zcash_address` 0.14.0-pre.0, `zcash_transparent` 0.11.0-pre.0), from the
-64-byte BIP-39 seed of the Speculos default mnemonic, with coin type 1 (ZIP-32 path
-`m/32'/1'/0'`, BIP-44 path `m/44'/1'/0'`). The same generator run with coin type 133 reproduces
-the mainnet UFVK, unified address, spend recipient, nullifier, commitment, value commitment and
-randomized key committed in `tests/standalone`, which is what ties it to the device's derivation.
-None of these values was read back from the device.
+Printed by `tests/testnet-vectors`, a host tool built on the published crates the app's vendored
+ones are based on (`orchard` 0.16.0, `zcash_address` 0.14.0-pre.0, `zcash_transparent`
+0.11.0-pre.0), from the BIP-39 seed of the Speculos default mnemonic with coin type 1 (ZIP-32 path
+`m/32'/1'/0'`, BIP-44 path `m/44'/1'/0'`). Regenerate them from a directory outside the
+repository, whose `.cargo/config.toml` targets the device:
+
+    cargo run --manifest-path <repo>/tests/testnet-vectors/Cargo.toml --target <host triple>
+
+Run with the argument `133`, the same tool prints the mainnet UFVK, unified address, spend
+recipient, nullifier, commitment, value commitment and randomized key committed in
+`tests/standalone`, which is what ties it to the device's derivation. None of these values was read
+back from the device.
 
 The Orchard action mirrors the standalone single-spend fixture: one note of 300000 zats spent from
 the external address (rho `06..`, rseed `1a..`), one zero-value output to the internal address
-(rseed `2e..`, rho the spend nullifier, rcv `42..`), alpha 1.
+(rseed `2e..`, rho the spend nullifier, rcv `42..`), alpha 1. Its anchor is the standalone
+fixture's, reused as is: the device cannot relate an anchor to a note.
 """
 
 # pylint: disable=C0301
