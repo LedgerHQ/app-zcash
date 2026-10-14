@@ -9,6 +9,8 @@ here has a control that differs only in the path and is accepted.
 import pytest
 from application_client.pczt import (
     PcztGlobal,
+    PcztIronwoodAction,
+    PcztIronwoodBundle,
     PcztOrchardAction,
     PcztOrchardBundle,
     PcztTransparentInput,
@@ -19,6 +21,7 @@ from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 
 from .test_network_separation import _approve_without_comparing
+from .test_pczt_ironwood import PCZT_V6_GLOBAL
 
 HARDENED = 0x8000_0000
 PURPOSE_BIP44 = 44 | HARDENED
@@ -120,6 +123,57 @@ def test_pczt_orchard_action_path_shape(backend, signing_path, accepted):
     def send(index: int) -> None:
         p1 = client._pczt_chunk_p1(index, len(packets))
         backend.exchange(cla=CLA, ins=InsType.PCZT_ORCHARD_ACTION, p1=p1, data=packets[index])
+
+    # The action count, then the spend fields.
+    send(0)
+    send(1)
+
+    if accepted:
+        send(2)
+        return
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        send(2)
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert len(e.value.data) == 0
+
+
+@pytest.mark.parametrize(
+    "signing_path, accepted",
+    [
+        ("m/32'/133'/0'", True),
+        ("m/44'/133'/0'/0/0", False),
+    ],
+    ids=["zip32_account_path", "bip44"],
+)
+def test_pczt_ironwood_action_path_shape(backend, signing_path, accepted):
+    """The Ironwood twin of the Orchard case: same packet order, the path judged at the second."""
+    action = PcztIronwoodAction(
+        cv_net=bytes(32),
+        nullifier=bytes(32),
+        spend_recipient=bytes(43),
+        spend_rho=bytes(32),
+        spend_rseed=bytes(32),
+        rk=bytes(32),
+        alpha=bytes(32),
+        signing_path=signing_path,
+        cmx=bytes(32),
+        ephemeral_key=bytes(32),
+        enc_ciphertext=bytes(580),
+        out_ciphertext=bytes(80),
+        rcv=bytes(32),
+    )
+    bundle = PcztIronwoodBundle(actions=[action], flags=3, value_balance=0, anchor=bytes(32))
+    client = ZcashCommandSender(backend)
+    client._send_pczt_header(PCZT_V6_GLOBAL)
+    client._send_pczt_transparent_inputs([])
+    client._send_pczt_transparent_outputs_sync([])
+    client._send_pczt_orchard_actions_sync(PcztOrchardBundle(actions=[], flags=0, value_balance=0, anchor=bytes(32)))
+    packets = client._build_pczt_ironwood_action_packets(bundle)
+
+    def send(index: int) -> None:
+        p1 = client._pczt_chunk_p1(index, len(packets))
+        backend.exchange(cla=CLA, ins=InsType.PCZT_IRONWOOD_ACTION, p1=p1, data=packets[index])
 
     # The action count, then the spend fields.
     send(0)

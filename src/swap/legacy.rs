@@ -114,3 +114,32 @@ fn read_c_string<const N: usize>(ptr: *const i8) -> ([u8; N], usize) {
 
     (buffer, length)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::read_c_string;
+    use ledger_device_sdk::testing::TestType;
+
+    /// A string that fills its buffer exactly is read whole; one byte longer comes back empty, so
+    /// the address check it feeds compares nothing rather than a prefix.
+    #[test_case]
+    const READ_C_STRING_REFUSES_A_STRING_LONGER_THAN_ITS_BUFFER: TestType = TestType {
+        modname: module_path!(),
+        name: "read_c_string_refuses_a_string_longer_than_its_buffer",
+        f: || {
+            let fits = *b"t1abc\0";
+            let too_long = *b"t1abcd\0";
+
+            let (buffer, length) = read_c_string::<5>(fits.as_ptr() as *const i8);
+            if length != 5 || &buffer[..length] != b"t1abc" {
+                return Err(());
+            }
+
+            let (buffer, length) = read_c_string::<5>(too_long.as_ptr() as *const i8);
+            if length != 0 || buffer != [0u8; 5] {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+}
