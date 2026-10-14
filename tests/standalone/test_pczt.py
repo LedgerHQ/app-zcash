@@ -2516,15 +2516,31 @@ def test_pczt_orchard_v5_nu7_branch_id_signs(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """A V5 Orchard PCZT under the NU7 branch id signs with the unchanged contract."""
+    """A V5 Orchard PCZT under the NU7 branch id signs with the unchanged contract.
+
+    The signature verifies against the NU7 digest and not against the same transaction under NU5:
+    the branch id enters the digest through the ZIP 244 header, so this is what shows the device
+    signed for the branch it was given.
+    """
     client = ZcashCommandSender(backend)
+    pczt_global = PcztGlobal(consensus_branch_id=_NU7_BRANCH_ID)
+    bundle = _valid_orchard_bundle()
 
     with client.send_pczt(
-        pczt_global=PcztGlobal(consensus_branch_id=_NU7_BRANCH_ID),
+        pczt_global=pczt_global,
         transparent_inputs=[],
         transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
-        orchard_bundle=_valid_orchard_bundle(),
+        orchard_bundle=bundle,
     ):
         _review_approve(scenario_navigator, "test_pczt_orchard_v5_nu7_branch_id_signs")
 
-    assert len(client.pczt_sign_orchard(action_index=0).data) == 64
+    signature = client.pczt_sign_orchard(action_index=0).data
+    assert len(signature) == 64
+
+    def digest(global_fields: PcztGlobal) -> bytes:
+        tx_bytes = pczt_transaction_bytes(global_fields, [], [_TRANSPARENT_OUTPUT_299K], bundle)
+        return nu5_signature_digests(tx_bytes, [])["final_digest"]
+
+    rk = bundle.actions[0].rk
+    assert check_orchard_spendauth_signature_validity(rk, signature, digest(pczt_global))
+    assert not check_orchard_spendauth_signature_validity(rk, signature, digest(PcztGlobal()))
