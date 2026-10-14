@@ -13,6 +13,7 @@ permissions:
   contents: write
   actions: write
   pull-requests: write
+  packages: read
 
 on:
   workflow_dispatch:
