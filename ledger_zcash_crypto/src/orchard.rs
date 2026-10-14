@@ -349,7 +349,7 @@ fn try_compact_note_decryption_with_ivk(
     }
 
     let ivk = match pallas_base_from_repr(*ivk) {
-        Ok(ivk) if !bool::from(ivk.is_zero()) => ivk,
+        Ok(ivk) if !bool::from(ivk.is_zero()) => Zeroizing::new(ivk.to_repr()),
         _ => return Ok(None),
     };
 
@@ -357,8 +357,8 @@ fn try_compact_note_decryption_with_ivk(
         return Ok(None);
     };
 
-    let shared_secret = key_agreement_with_point(&ivk.to_repr(), ephemeral_point)?;
-    let k_enc = kdf_orchard(&shared_secret, &compact.ephemeral_key)?;
+    let shared_secret = Zeroizing::new(key_agreement_with_point(&ivk, ephemeral_point)?);
+    let k_enc = Zeroizing::new(kdf_orchard(&shared_secret, &compact.ephemeral_key)?);
 
     let mut note_plaintext_prefix = compact.enc_ciphertext_prefix;
     chacha20_decrypt_compact(&k_enc, &mut note_plaintext_prefix);
@@ -373,7 +373,7 @@ fn try_compact_note_decryption_with_ivk(
         Ok(g_d) => g_d,
         Err(_) => return Ok(None),
     };
-    let pk_d = crate::orchard_pk_d_from_base(&ivk.to_repr(), &g_d)?;
+    let pk_d = crate::orchard_pk_d_from_base(&ivk, &g_d)?;
 
     parse_and_validate_note_plaintext(
         compact,
