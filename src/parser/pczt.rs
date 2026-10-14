@@ -8,8 +8,8 @@ use core::fmt::Write as _;
 use core::{cmp, mem};
 
 use crate::consts::{
-    MAX_PCZT_OWN_ACCOUNTS, PCZT_OUTPUT_EXTENSION_ACCOUNT, UNHARDENED_MASK, V6_TX_VERSION,
-    V6_VERSION_GROUP_ID, ZCASH_NETWORK,
+    MAX_ACCOUNT_INDEX, MAX_PCZT_OWN_ACCOUNTS, PCZT_OUTPUT_EXTENSION_ACCOUNT, UNHARDENED_MASK,
+    V6_TX_VERSION, V6_VERSION_GROUP_ID, ZCASH_NETWORK,
 };
 use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use ::orchard::keys::Scope as OrchardScope;
@@ -295,6 +295,11 @@ fn parse_output_extensions(reader: &mut ByteReader<'_>) -> Result<Option<u32>, P
                 // describing some other path than the one this field names.
                 if index & !UNHARDENED_MASK != 0 {
                     return Err(ParserError::from_str("Hardened PCZT output account index"));
+                }
+                if index > MAX_ACCOUNT_INDEX {
+                    return Err(ParserError::from_str(
+                        "PCZT output account index out of range",
+                    ));
                 }
                 account = Some(index);
             }
@@ -1097,7 +1102,8 @@ impl PcztParser {
         ensure_heap_headroom(SHIELDED_ACTIONS_HEAP_HEADROOM).map_err(ParserError::from_sw)?;
 
         let keys = {
-            let fvk = derive_orchard_fvk(&path).map_err(ParserError::from_sw)?;
+            let fvk =
+                RetainedOrchardFvk::new(derive_orchard_fvk(&path).map_err(ParserError::from_sw)?);
             OwnAccountKeys::from_fvk(account, &fvk).map_err(ParserError::from_sw)?
         };
         tx_info.own_account_keys.push(keys);
@@ -1360,7 +1366,7 @@ mod tests {
         f: || {
             if extensions(&[])? != None
                 || extensions(&[0x01, 4, 7, 0, 0, 0])? != Some(7)
-                || extensions(&[0x01, 4, 0xff, 0xff, 0xff, 0x7f])? != Some(0x7fff_ffff)
+                || extensions(&[0x01, 4, 100, 0, 0, 0])? != Some(100)
             {
                 return Err(());
             }
@@ -1368,19 +1374,21 @@ mod tests {
         },
     };
 
-    /// Unknown, repeated, mis-sized, truncated and hardened entries are all refused.
+    /// Unknown, repeated, mis-sized, truncated, hardened and out-of-range entries are all refused.
     #[test_case]
     const OUTPUT_EXTENSIONS_REFUSE_MALFORMED_BLOCKS: TestType = TestType {
         modname: module_path!(),
         name: "output_extensions_refuse_malformed_blocks",
         f: || {
-            let malformed: [&[u8]; 7] = [
+            let malformed: [&[u8]; 9] = [
                 &[0x02, 4, 1, 0, 0, 0],
                 &[0x01, 4, 1, 0, 0, 0, 0x01, 4, 1, 0, 0, 0],
                 &[0x01, 3, 1, 0, 0],
                 &[0x01, 5, 1, 0, 0, 0, 0],
                 &[0x01, 4, 1, 0],
                 &[0x01, 4, 1, 0, 0, 0x80],
+                &[0x01, 4, 101, 0, 0, 0],
+                &[0x01, 4, 0xff, 0xff, 0xff, 0x7f],
                 &[0x01],
             ];
             if malformed.iter().any(|block| extensions(block).is_ok()) {
@@ -1391,12 +1399,16 @@ mod tests {
     };
 
     fn zip32_path(account: u32) -> Bip32Path {
+        zip32_path_for_coin(crate::consts::ZCASH_BIP44_COIN_TYPE, account)
+    }
+
+    fn zip32_path_for_coin(coin_type: u32, account: u32) -> Bip32Path {
         let mut encoded = [0u8; 12];
-        for (chunk, component) in encoded.chunks_exact_mut(4).zip([
-            0x8000_0020,
-            0x8000_0000 | crate::consts::ZCASH_BIP44_COIN_TYPE,
-            account,
-        ]) {
+        for (chunk, component) in
+            encoded
+                .chunks_exact_mut(4)
+                .zip([0x8000_0020, 0x8000_0000 | coin_type, account])
+        {
             chunk.copy_from_slice(&component.to_be_bytes());
         }
         Bip32Path::from_dpath(3, &encoded).unwrap_or_default()
@@ -1414,6 +1426,25 @@ mod tests {
                 || own_account_path(&source, 0).is_ok()
                 || own_account_path(&zip32_path(0x8000_0002), 2).is_ok()
             {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// A source path on the other network's coin type builds no destination: a mainnet build
+    /// never reaches a testnet account's keys, nor the reverse.
+    #[test_case]
+    const OWN_ACCOUNT_PATH_STAYS_ON_THE_BUILD_NETWORK: TestType = TestType {
+        modname: module_path!(),
+        name: "own_account_path_stays_on_the_build_network",
+        f: || {
+            let other_coin_type = if crate::consts::ZCASH_BIP44_COIN_TYPE == 133 {
+                1
+            } else {
+                133
+            };
+            if own_account_path(&zip32_path_for_coin(other_coin_type, 0x8000_0000), 1).is_ok() {
                 return Err(());
             }
             Ok(())

@@ -3,12 +3,13 @@ members = ["ledger_zcash_crypto"]
 default-members = ["."]
 
 [workspace.dependencies]
-# Floor at 1.38.0: `io_new` delivers APDUs to the app, BOLOS ones (CLA 0xB0) included, on a
-# locked device before 1.37.1; 1.37 is where it rejects a command arriving mid-review; and before
-# 1.38.0 it still runs BOLOS commands other than GET_VERSION, quit and certificate load among them,
-# while a review is displayed.
-# Expressed as a requirement rather than left to the lock file, which a regeneration could move.
-ledger_device_sdk = { version = "1.41.0", features = ["sys", "io_new"] }
+# Pinned exactly. The app's I/O and review behaviour is validated against one SDK release, and the
+# build updates this crate to the newest version the requirement allows, so a newer release comes in
+# only as a deliberate bump, re-validated. No release below 1.38.0 would do in any case: `io_new`
+# delivers APDUs to the app, BOLOS ones (CLA 0xB0) included, on a locked device before 1.37.1; 1.37
+# is where it rejects a command arriving mid-review; and before 1.38.0 it still runs BOLOS commands
+# other than GET_VERSION, quit and certificate load among them, while a review is displayed.
+ledger_device_sdk = { version = "=1.41.0", features = ["sys", "io_new"] }
 zeroize = { version = "1.6.0", default-features = false }
 
 [package]

@@ -783,8 +783,9 @@ def own_account_orchard_action(
     )
 
 
-# Malformed extension blocks, each refused while the output metadata is parsed. The account they
-# would name is 1, the vectors' destination, so only the malformation is under test.
+# Extension blocks refused while the output metadata is parsed. Each malformed one would name
+# account 1, the vectors' destination, so only the malformation is under test; the last two name an
+# account past the range the app accepts.
 MALFORMED_OUTPUT_EXTENSIONS = {
     "unknown_tag": output_account_extension(1, tag=0x02),
     "duplicate_tag": output_account_extension(1) + output_account_extension(1),
@@ -793,4 +794,6 @@ MALFORMED_OUTPUT_EXTENSIONS = {
     "truncated_value": bytes([0x01, 4]) + (1).to_bytes(2, byteorder="little"),
     "hardened_index": output_account_extension(0x8000_0001),
     "lone_byte": bytes([0x01]),
+    "index_past_the_account_range": output_account_extension(101),
+    "largest_unhardened_index": output_account_extension(0x7FFF_FFFF),
 }

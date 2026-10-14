@@ -64,7 +64,9 @@ allows once it refuses every APDU on a locked device.
   account's viewing keys and shows the output as `Account index <n>` with its amount and
   memo, only if it decrypts under them, whatever outgoing record the sender kept. A
   declaration the output does not prove, or naming the account being spent, is refused.
-  At most four distinct accounts per transaction, each costing one derivation
+  The declared index goes up to 100, the account range of a signing path. At most four
+  distinct accounts per transaction, each costing one derivation. A swap
+  refuses such an output, and any destination left empty
 
 ## 3.9.4
 

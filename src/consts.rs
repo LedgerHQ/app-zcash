@@ -17,6 +17,9 @@ pub const MAX_PCZT_SCRIPT_SIZE: usize = 252;
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
 pub const SIGHASH_ALL: u8 = 0x01;
 pub const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
+// Highest account index the app treats as one of the user's accounts, whether it names the account
+// of a BIP-44 signing path or the destination a PCZT output declares.
+pub const MAX_ACCOUNT_INDEX: u32 = 100;
 pub const ZIP32_PATH_LEN: usize = 3;
 pub const ZIP32_PURPOSE: u32 = 32;
 #[cfg(not(feature = "variant_testnet"))]

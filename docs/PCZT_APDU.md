@@ -113,7 +113,9 @@ Single packet:
 
 The app accepts a `consensus_branch_id` only if it is a consensus branch id defined by the protocol
 (Sprout's `0`, then Overwinter through NU7) and rejects any other value, ending the session with
-`SW_INVALID_TRANSACTION`.
+`SW_INVALID_TRANSACTION`. The transaction version must also be one that branch carries — V5 from
+NU5, V6 from NU6.3 — so a V6 transaction under NU5, or any version under Sprout's `0`, is refused the
+same way: the network could never mine it.
 
 The PCZT version field encodes the PCZT wire-format revision:
 
@@ -240,11 +242,12 @@ entries `tag u8 · len u8 · value[len]` running to the end of the packet. It
 lives in the PCZT metadata only; no extension enters any digest the device signs.
 A packet without the block is unchanged — 115 bytes for Orchard, 115 or 116 for
 Ironwood — so a host that never sends one is unaffected, and an app that predates
-the block refuses a longer packet rather than misreading it.
+the block refuses a longer packet rather than misreading it. The block is accepted
+from app version 3.9.5: a host sends it only to that version or a later one.
 
 | Tag | `len` | Value |
 | --- | --- | --- |
-| `0x01` | `4` | Destination account: the ZIP 32 account index the output pays, `u32` little-endian, unhardened (`< 2^31`). |
+| `0x01` | `4` | Destination account: the ZIP 32 account index the output pays, `u32` little-endian, from `0` to `100`. |
 
 The block follows `rcv` in an Orchard packet. In an Ironwood packet it follows
 the `notePlaintextVersion` byte, which is then mandatory: the version byte is
@@ -254,7 +257,7 @@ sent without the version byte, is refused.
 Refused with `IncorrectData`, ending the PCZT session: an unknown tag, a tag
 repeated within one block, a `len` other than the one its tag requires, a value
 cut short by the end of the packet, and an account index with the hardened bit
-set.
+set or above `100`, the highest account the app accepts on a signing path too.
 
 ### Transfers to another account of the seed
 
@@ -291,6 +294,18 @@ before it shows it:
 
 Undeclared outputs are handled exactly as before; an undeclared output the
 source account cannot recover is still refused.
+
+The proof runs while the action is parsed, before any review, so its status word
+is visible to the host whether or not the user ever sees the transaction. A host
+that has observed an Orchard or Ironwood receiver can therefore build a note to
+it, declare an account, and learn from `0x9000` or `IncorrectData` whether that
+receiver belongs to that account of the seed, then abort. Diversified addresses of
+one account are meant to be unlinkable, and this answer links them without the
+user's approval. The probe is bounded: only accounts `0` to `100` can be named,
+and each probe costs at least one of the 50 Orchard derivations the app
+allows per run, after which it answers `NotEnoughMemorySpace` until restarted.
+The host holding a viewing key of the account learns nothing it could not
+already compute.
 
 ## PCZT_IRONWOOD_ACTION
 

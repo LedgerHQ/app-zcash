@@ -46,9 +46,14 @@ for the original command to finish before retrying. The SDK's built-in commands
 GET_VERSION, which is answered so that a host can still identify the app.
 
 An APDU whose payload length differs from its declared length, in the short or the
-extended form, is refused by the SDK before it reaches the app (`0x6700` `BadLen`
-for a mismatched short `Lc`). A command with no data may use either the four-byte
-form or an explicit `Lc = 0x00`.
+extended form, is refused by the SDK before it reaches the app, with `0x6E03`
+`BadLen`, a word distinct from the app's own `0x6700` length error. A command with
+no data may use either the four-byte form or an explicit `Lc = 0x00`.
+
+Because such a frame never reaches the app, it leaves a signing session in progress
+untouched: a PCZT or legacy round keeps the state built by the frames before it, and
+the host may resend the frame correctly and continue. An error the app raises on a
+frame it has received still ends a PCZT session.
 
 ## Locked devices
 
@@ -99,6 +104,12 @@ Zcash deviations:
 
 - V4, V5 and V6 transaction versions are all accepted; `P2 = 0x05` selects the Sapling variant
   and `0x80` continues an in-progress hash.
+- The header's `consensus_branch_id` must be one the protocol defines — Sprout's `0`, then
+  Overwinter through NU7 — or the transaction is refused with `IncorrectData` (`0x6A80`). The
+  transaction being signed (`HASH_INPUT_START`) must moreover have a version its branch can
+  carry: a V5 transaction under a branch that predates NU5 is refused the same way. A previous
+  transaction given to `GET_TRUSTED_INPUT` keeps the branch id the host sends, which for V4 does
+  not even enter its txid.
 - Anchor streaming depends on the version: a V5 Orchard bundle commits to its anchor in the
   hashed preimage, whereas in a V6 transaction both shielded bundles moved the anchor to the
   authorizing digest (ZIP 229), which a trusted input never computes — so the host streams no

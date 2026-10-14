@@ -1,0 +1,21 @@
+[package]
+name = "ledger-sighash-vectors"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Kept out of the application workspace: this is a host tool, and it builds on the published
+# crates only, the vendored ones left aside, so the digests it prints owe nothing to the device code.
+[workspace]
+
+[dependencies]
+zcash_primitives = { version = "=0.31.0-pre.0", default-features = false, features = ["std"] }
+zcash_protocol = "=0.11.0-pre.0"
+transparent = { package = "zcash_transparent", version = "=0.11.0-pre.0" }
+sapling = { package = "sapling-crypto", version = "0.9", default-features = false }
+zcash_note_encryption = "*"
+orchard = { version = "=0.16.0", default-features = false, features = ["std"] }
+nonempty = "0.11"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
