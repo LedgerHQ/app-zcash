@@ -1141,7 +1141,7 @@ impl PcztParser {
                 .map_err(|_| ParserError::from_str("Bad PCZT ironwood zip32 derivation path"))?;
         let seed_fingerprint = &derivation[..ZIP32_SEED_FINGERPRINT_SIZE];
 
-        if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
+        if !check_bip44_compliance(&path, Bip44CheckMode::Zip32Only) {
             return Err(ParserError::from_str(
                 "PCZT ironwood signing path not compliant",
             ));

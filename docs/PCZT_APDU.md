@@ -12,6 +12,17 @@ PCZT `bip32_derivation` and `zip32_derivation` paths use the standard app
 `Bip32Path` encoding: `path_len u8` followed by that many big-endian `u32`
 components.
 
+Each path has the shape of the key it names, and any other shape refuses the
+packet with `IncorrectData`, ending the PCZT session:
+
+- a transparent input's `bip32_derivation`: a five-component BIP-44 path with
+  purpose, coin type and account hardened; change and address index are the
+  host's;
+- a transparent change output's `bip32_derivation`: the same, with change `1`,
+  an account of at most `100` and an address index of at most `50000`;
+- an Orchard or Ironwood action's `zip32_derivation`: a ZIP-32 account path,
+  `m/32'/<coin_type>'/<account>'`, every component hardened.
+
 ## Common rules
 
 - Both shielded pools share a transaction-scoped account-key cache. Each action's
@@ -257,7 +268,7 @@ sent without the version byte, is refused.
 Refused with `IncorrectData`, ending the PCZT session: an unknown tag, a tag
 repeated within one block, a `len` other than the one its tag requires, a value
 cut short by the end of the packet, and an account index with the hardened bit
-set or above `100`, the highest account the app accepts on a signing path too.
+set or above `100`, the highest account the app accepts for a change output too.
 
 ### Transfers to another account of the seed
 

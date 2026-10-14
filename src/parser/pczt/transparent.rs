@@ -407,7 +407,7 @@ impl PcztParser {
         let _seed_fingerprint =
             &derivation[COMPRESSED_PUBKEY_SIZE..ZIP32_DERIVATION_PATH_COUNT_OFFSET];
 
-        if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
+        if !check_bip44_compliance(&path, Bip44CheckMode::TransparentSigning) {
             return Err(ParserError::from_str(
                 "PCZT transparent signing path not compliant",
             ));

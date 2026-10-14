@@ -123,6 +123,10 @@ Zcash deviations:
   transaction but refuses to sign it, with `ConditionsOfUseNotSatisfied` (`0x6986`) on the
   `0x48` that asks for the signature. Change is filtered out of the review, so an output
   returning to another account would otherwise be paid without ever being displayed.
+- The path of the `0x48` that asks for the signature must be a five-component BIP-44 path with
+  purpose, coin type and account hardened; change and address index are the host's. Any other
+  shape, a ZIP-32 account path included, is refused with `ConditionsOfUseNotSatisfied`
+  (`0x6986`).
 - **The review runs on the first `HASH_SIGN`, not at the end of `HASH_INPUT_FINALIZE_FULL`.**
   `locktime` and `expiry_height` only reach the device with the eleven-byte header that
   `HASH_SIGN` carries, so reviewing earlier would ask the user to approve a transaction whose
