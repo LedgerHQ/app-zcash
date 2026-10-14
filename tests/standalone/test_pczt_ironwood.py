@@ -23,7 +23,11 @@ from application_client.zcash_command_sender import (
 )
 from application_client.zcash_transaction import split_tx_v5_for_hash_input
 from application_client.zcash_utils import ripemd160, write_varint
+from application_client.zcash_response_unpacker import unpack_get_public_key_response
 from application_client.zcash_verify_sign import check_orchard_spendauth_signature_validity
+from ecdsa import SECP256k1, VerifyingKey
+from ecdsa.keys import BadSignatureError
+from ecdsa.util import sigdecode_der
 from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
@@ -849,6 +853,8 @@ def test_pczt_nu7_transparent_only_signs(
 ):
     """A transparent-only V6 PCZT under the NU7 branch id is reviewed and signed."""
     client = ZcashCommandSender(backend)
+    # Read before the transaction: the status screen the last signature brings up refuses commands.
+    public_key, _, _ = unpack_get_public_key_response(client.get_public_key(path=_TRANSPARENT_INPUT_PATH).data)
 
     nu7_global = PcztGlobal(
         tx_version=_V6_TX_VERSION,
@@ -874,8 +880,70 @@ def test_pczt_nu7_transparent_only_signs(
         _review_approve(scenario_navigator, "test_pczt_nu7_transparent_only_signs")
 
     response = client.pczt_sign_transparent(input_index=0).data
-    assert len(response) > 1
     assert response[-1] == 0x01  # SIGHASH_ALL, as in the V5 transparent signing tests
+    assert _ecdsa_signature_is_valid(public_key, response[:-1], _NU7_TRANSPARENT_ONLY_SIGHASH)
+    assert not _ecdsa_signature_is_valid(public_key, response[:-1], _NU6_3_TRANSPARENT_ONLY_SIGHASH)
+
+
+# Signature digests computed by tests/sighash-vectors with the published zcash_primitives, from the
+# fields `export_fixtures.py` exports: `_ironwood_bundle_with_external_recipient()` alone, and the
+# transparent-only transaction of `test_pczt_nu7_transparent_only_signs`.
+_NU7_IRONWOOD_PAYMENT_SIGHASH = bytes.fromhex("453e146d4ebe8317491faa8cab286fbdeaa8388af35c1bde784577c0a727e6da")
+_NU6_3_IRONWOOD_PAYMENT_SIGHASH = bytes.fromhex("fa9992a4f6d6e0f05967b48fc4d97a9969bbd13c278a541b0b5cb155900d2d8c")
+_NU7_TRANSPARENT_ONLY_SIGHASH = bytes.fromhex("171b5d729963183df435f2c7aed7a5d02ac35c9944c511eecd3f581e4f5062f8")
+_NU6_3_TRANSPARENT_ONLY_SIGHASH = bytes.fromhex("a212a2e77ea2980f85a57ac2c820284349f1f39a602ad8170321c2be2ccab86a")
+
+
+def _ecdsa_signature_is_valid(public_key: bytes, signature: bytes, digest: bytes) -> bool:
+    """Whether a transparent signature, DER with the parity bit the device sets, signs `digest`."""
+    der = bytes([signature[0] & 0xFE]) + signature[1:]
+    try:
+        return VerifyingKey.from_string(public_key, curve=SECP256k1).verify_digest(
+            der, digest, sigdecode=sigdecode_der
+        )
+    except BadSignatureError:
+        return False
+
+
+@pytest.mark.parametrize(
+    ("branch_id", "digest", "other_digest"),
+    [
+        (_NU7_BRANCH_ID, _NU7_IRONWOOD_PAYMENT_SIGHASH, _NU6_3_IRONWOOD_PAYMENT_SIGHASH),
+        (_NU6_3_BRANCH_ID, _NU6_3_IRONWOOD_PAYMENT_SIGHASH, _NU7_IRONWOOD_PAYMENT_SIGHASH),
+    ],
+    ids=["nu7", "nu6_3"],
+)
+def test_pczt_ironwood_spend_authorization_commits_to_the_branch(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    branch_id: int,
+    digest: bytes,
+    other_digest: bytes,
+):
+    """The spend authorization verifies against the digest the reference implementation computes for
+    the transaction's branch, and not against the other branch's: the branch id is what it signs.
+
+    Under NU6.3 the same check also ties the reference digests to what the device signs.
+    """
+    client = ZcashCommandSender(backend)
+    bundle = _ironwood_bundle_with_external_recipient()
+    pczt_global = PcztGlobal(
+        tx_version=_V6_TX_VERSION,
+        version_group_id=_V6_VERSION_GROUP_ID,
+        consensus_branch_id=branch_id,
+    )
+
+    with client.send_pczt(
+        pczt_global=pczt_global,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    ):
+        _walk_review(scenario_navigator, approve=True)
+
+    signature = client.pczt_sign_ironwood(action_index=0).data
+    assert check_orchard_spendauth_signature_validity(bundle.actions[0].rk, signature, digest)
+    assert not check_orchard_spendauth_signature_validity(bundle.actions[0].rk, signature, other_digest)
 
 
 def test_pczt_ironwood_undefined_adjacent_branch_id_rejected(
@@ -900,6 +968,41 @@ def test_pczt_ironwood_undefined_adjacent_branch_id_rejected(
             pytest.fail("Device accepted a PCZT with an undefined branch ID")
 
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+_SPROUT_BRANCH_ID = 0
+_NU5_BRANCH_ID = 0xC2D6D0B4
+_CANOPY_BRANCH_ID = 0xE9FF75A6
+
+
+@pytest.mark.parametrize(
+    ("tx_version", "version_group_id", "branch_id"),
+    [
+        (_V6_TX_VERSION, _V6_VERSION_GROUP_ID, _NU5_BRANCH_ID),
+        (_V6_TX_VERSION, _V6_VERSION_GROUP_ID, _SPROUT_BRANCH_ID),
+        (5, 0x26A7270A, _SPROUT_BRANCH_ID),
+        (5, 0x26A7270A, _CANOPY_BRANCH_ID),
+    ],
+    ids=["v6_under_nu5", "v6_under_sprout", "v5_under_sprout", "v5_under_canopy"],
+)
+def test_pczt_version_not_valid_in_its_branch_rejected(backend, tx_version, version_group_id, branch_id):
+    """A transaction version its consensus branch cannot carry is refused at the header.
+
+    The network could never mine it, so it never reaches the review.
+    """
+    client = ZcashCommandSender(backend)
+    pczt_global = PcztGlobal(
+        tx_version=tx_version,
+        version_group_id=version_group_id,
+        consensus_branch_id=branch_id,
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(pczt_global=pczt_global, transparent_inputs=[], transparent_outputs=[]):
+            pass
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert client.get_version().status == 0x9000
 
 
 def test_pczt_orchard_path_unaffected(

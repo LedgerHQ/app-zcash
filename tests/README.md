@@ -22,6 +22,12 @@ cache reuse, and recovery with a fresh valid transaction. Orchard signatures are
 checked with the independent Python verifier. See `key-reuse/README.md` for the
 separate on-device key-vector harness covering both normalization signs.
 
+The NU7 PCZT tests check each signature against a digest the device had no part in:
+`sighash-vectors/` rebuilds the fixture transactions with the published `zcash_primitives`
+and prints their NU7 and NU6.3 signature digests, and each signature must verify under its
+own branch and fail under the other. `sighash-vectors/export_fixtures.py` writes the fixture
+fields it reads; the run command is in `sighash-vectors/src/main.rs`.
+
 `test_usb_reply.py` pauses emulator ticker events to verify immediate USB HID
 replies and sends overlapping commands during review to check that approval and
 rejection still apply to the original transaction. The ticker test is
