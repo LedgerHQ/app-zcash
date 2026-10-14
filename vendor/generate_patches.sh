@@ -49,7 +49,7 @@ default_header() {
 }
 
 for entry in "${VENDORED_DEPS[@]}"; do
-    IFS='|' read -r name kind coord <<< "$entry"
+    IFS='|' read -r name kind coord sha256 <<< "$entry"
 
     vendored="$VENDOR_DIR/$name"
     patch_file="$SCRIPT_DIR/patches/${name}_dep.patch"
@@ -63,7 +63,7 @@ for entry in "${VENDORED_DEPS[@]}"; do
     base="$WORK_DIR/$name/a"
     mirror="$WORK_DIR/$name/b"
     mkdir -p "$WORK_DIR/$name"
-    materialize_base "$name" "$kind" "$coord" "$base"
+    materialize_base "$name" "$kind" "$coord" "$sha256" "$base"
 
     # Diffed as sibling directories named a and b so the patch carries the a/ and
     # b/ prefixes that `patch -p1` and `git apply` both expect.
@@ -98,7 +98,7 @@ for entry in "${VENDORED_DEPS[@]}"; do
 
     # Reapply to a fresh base and require the result to match the vendored tree.
     check="$WORK_DIR/$name/check"
-    materialize_base "$name" "$kind" "$coord" "$check"
+    materialize_base "$name" "$kind" "$coord" "$sha256" "$check"
     apply_dep_patch "$kind" "$check" "$candidate"
 
     if ! diff -r "${DIFF_EXCLUDE_ARGS[@]}" "$check" "$vendored" > "$WORK_DIR/$name.verify" 2>&1; then

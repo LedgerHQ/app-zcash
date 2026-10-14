@@ -19,24 +19,26 @@ use alloc::borrow::Cow;
 use alloc::format;
 use alloc::string::String;
 
+use ledger_device_sdk::io::Comm;
 use ledger_device_sdk::nbgl::{Field, NbglAddressReview};
 
 use crate::{AppSW, app_ui::load_glyph};
 
-fn display_address(review_title: &str, addr: &str) -> Result<bool, AppSW> {
+fn display_address(comm: &mut Comm, review_title: &str, addr: &str) -> Result<bool, AppSW> {
     // Display the address confirmation screen.
     Ok(NbglAddressReview::new()
         .glyph(load_glyph())
         .review_title(review_title)
-        .show(addr))
+        .show(comm, addr))
 }
 
-pub fn ui_display_pk(addr: &str) -> Result<bool, AppSW> {
+pub fn ui_display_pk(comm: &mut Comm, addr: &str) -> Result<bool, AppSW> {
     // Display the address confirmation screen.
-    display_address("Verify address", addr)
+    display_address(comm, "Verify address", addr)
 }
 
 pub fn ui_display_shielded_address(
+    comm: &mut Comm,
     shielded_addr: &str,
     transparent_addr: &str,
 ) -> Result<bool, AppSW> {
@@ -50,7 +52,7 @@ pub fn ui_display_shielded_address(
         .review_title("Verify Zcash addresses")
         .review_subtitle("Private address")
         .set_tag_value_list(&public_address)
-        .show(shielded_addr))
+        .show(comm, shielded_addr))
 }
 
 // Viewing keys can be long, shorten them for better display.
@@ -82,7 +84,12 @@ fn shorten_fvk_to_display<'s>(
 /// of what varies — validation pins the purpose and the coin type, both trees put the account at
 /// the same depth, and the two paths of a unified key must agree on it — so naming it states the
 /// full scope of the export.
-fn ui_display_fvk(review_title: &str, fvk: &str, account: u32) -> Result<bool, AppSW> {
+fn ui_display_fvk(
+    comm: &mut Comm,
+    review_title: &str,
+    fvk: &str,
+    account: u32,
+) -> Result<bool, AppSW> {
     let viewing_key = if cfg!(any(target_os = "nanosplus", target_os = "nanox")) {
         const ELLIPSIS: &str = "\n ... \n";
         const ROW_LEN: usize = 18;
@@ -116,15 +123,20 @@ fn ui_display_fvk(review_title: &str, fvk: &str, account: u32) -> Result<bool, A
         review = review.review_subtitle("This lets the connected wallet access your accounts info");
     }
 
-    Ok(review.show(viewing_key.as_ref()))
+    Ok(review.show(comm, viewing_key.as_ref()))
 }
 
-pub fn ui_display_ufvk(ufvk: &str, account: u32) -> Result<bool, AppSW> {
-    ui_display_fvk("Share Zcash Unified Full Viewing Key?", ufvk, account)
+pub fn ui_display_ufvk(comm: &mut Comm, ufvk: &str, account: u32) -> Result<bool, AppSW> {
+    ui_display_fvk(comm, "Share Zcash Unified Full Viewing Key?", ufvk, account)
 }
 
-pub fn ui_display_orchard_fvk(orchard_fvk: &str, account: u32) -> Result<bool, AppSW> {
+pub fn ui_display_orchard_fvk(
+    comm: &mut Comm,
+    orchard_fvk: &str,
+    account: u32,
+) -> Result<bool, AppSW> {
     ui_display_fvk(
+        comm,
         "Share Zcash Orchard Full Viewing Key?",
         orchard_fvk,
         account,

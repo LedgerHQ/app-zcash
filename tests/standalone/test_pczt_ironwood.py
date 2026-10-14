@@ -11,6 +11,7 @@ from application_client.pczt import (
     PcztOrchardBundle,
     PcztTransparentInput,
     PcztTransparentOutput,
+    output_account_extension,
 )
 from application_client.zcash_command_sender import (
     CLA,
@@ -22,14 +23,36 @@ from application_client.zcash_command_sender import (
 )
 from application_client.zcash_transaction import split_tx_v5_for_hash_input
 from application_client.zcash_utils import ripemd160, write_varint
+from application_client.zcash_response_unpacker import unpack_get_public_key_response
+from application_client.zcash_verify_sign import check_orchard_spendauth_signature_validity
+from ecdsa import SECP256k1, VerifyingKey
+from ecdsa.keys import BadSignatureError
+from ecdsa.util import sigdecode_der
 from ragger.error import ExceptionRAPDU
-from ragger.navigator import NavigateWithScenario
+from ragger.navigator import NavInsID, NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
+
+from .own_account_vectors import (
+    IRONWOOD_ACCOUNT_1_EXTERNAL_EXTERNAL_OVK,
+    IRONWOOD_ACCOUNT_1_EXTERNAL_INTERNAL_OVK,
+    IRONWOOD_ACCOUNT_1_EXTERNAL_NO_OVK,
+    IRONWOOD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK,
+    IRONWOOD_ACCOUNT_1_INTERNAL_INTERNAL_OVK,
+    IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK,
+    IRONWOOD_ACCOUNT_1_MEMO,
+    MALFORMED_OUTPUT_EXTENSIONS,
+    own_account_ironwood_action,
+)
 
 # NU6.3 (Ironwood) network identifiers
 _V6_TX_VERSION = 6
 _V6_VERSION_GROUP_ID = 0xD884B698
 _NU6_3_BRANCH_ID = 0x37A5165B  # BranchId::Nu6_3
+
+# NU7 identifiers: the branch id zcash_protocol defines for BranchId::Nu7, and the neighbouring value
+# that is not a defined branch id.
+_NU7_BRANCH_ID = 0x77190AD9
+_UNDEFINED_ADJACENT_BRANCH_ID = 0x77190AD8
 
 PCZT_V6_GLOBAL = PcztGlobal(
     tx_version=_V6_TX_VERSION,
@@ -799,6 +822,189 @@ def test_pczt_ironwood_unknown_branch_id_rejected(
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
+def test_pczt_ironwood_nu7_branch_id_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A V6 PCZT under the NU7 branch id with a shielded Ironwood bundle is reviewed and signed."""
+    client = ZcashCommandSender(backend)
+
+    nu7_global = PcztGlobal(
+        tx_version=_V6_TX_VERSION,
+        version_group_id=_V6_VERSION_GROUP_ID,
+        consensus_branch_id=_NU7_BRANCH_ID,
+    )
+
+    with client.send_pczt(
+        pczt_global=nu7_global,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=_valid_ironwood_bundle(),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_nu7_branch_id_signs")
+
+    auth_sig = client.pczt_sign_ironwood(action_index=0).data
+    assert len(auth_sig) == 64
+
+
+def test_pczt_nu7_transparent_only_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A transparent-only V6 PCZT under the NU7 branch id is reviewed and signed."""
+    client = ZcashCommandSender(backend)
+    # Read before the transaction: the status screen the last signature brings up refuses commands.
+    public_key, _, _ = unpack_get_public_key_response(client.get_public_key(path=_TRANSPARENT_INPUT_PATH).data)
+
+    nu7_global = PcztGlobal(
+        tx_version=_V6_TX_VERSION,
+        version_group_id=_V6_VERSION_GROUP_ID,
+        consensus_branch_id=_NU7_BRANCH_ID,
+    )
+    transparent_input = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=300000,
+        script_pubkey=_TRANSPARENT_INPUT_SCRIPT,
+        sequence=bytes.fromhex("00000000"),
+        signing_path=_TRANSPARENT_INPUT_PATH,
+    )
+
+    # A V6 transaction always carries the Ironwood section; with no shielded action it is empty.
+    with client.send_pczt(
+        pczt_global=nu7_global,
+        transparent_inputs=[transparent_input],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        ironwood_bundle=PcztIronwoodBundle(actions=[], flags=0, value_balance=0, anchor=bytes(32)),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_nu7_transparent_only_signs")
+
+    response = client.pczt_sign_transparent(input_index=0).data
+    assert response[-1] == 0x01  # SIGHASH_ALL, as in the V5 transparent signing tests
+    assert _ecdsa_signature_is_valid(public_key, response[:-1], _NU7_TRANSPARENT_ONLY_SIGHASH)
+    assert not _ecdsa_signature_is_valid(public_key, response[:-1], _NU6_3_TRANSPARENT_ONLY_SIGHASH)
+
+
+# Signature digests computed by tests/sighash-vectors with the published zcash_primitives, from the
+# fields `export_fixtures.py` exports: `_ironwood_bundle_with_external_recipient()` alone, and the
+# transparent-only transaction of `test_pczt_nu7_transparent_only_signs`.
+_NU7_IRONWOOD_PAYMENT_SIGHASH = bytes.fromhex("453e146d4ebe8317491faa8cab286fbdeaa8388af35c1bde784577c0a727e6da")
+_NU6_3_IRONWOOD_PAYMENT_SIGHASH = bytes.fromhex("fa9992a4f6d6e0f05967b48fc4d97a9969bbd13c278a541b0b5cb155900d2d8c")
+_NU7_TRANSPARENT_ONLY_SIGHASH = bytes.fromhex("171b5d729963183df435f2c7aed7a5d02ac35c9944c511eecd3f581e4f5062f8")
+_NU6_3_TRANSPARENT_ONLY_SIGHASH = bytes.fromhex("a212a2e77ea2980f85a57ac2c820284349f1f39a602ad8170321c2be2ccab86a")
+
+
+def _ecdsa_signature_is_valid(public_key: bytes, signature: bytes, digest: bytes) -> bool:
+    """Whether a transparent signature, DER with the parity bit the device sets, signs `digest`."""
+    der = bytes([signature[0] & 0xFE]) + signature[1:]
+    try:
+        return VerifyingKey.from_string(public_key, curve=SECP256k1).verify_digest(
+            der, digest, sigdecode=sigdecode_der
+        )
+    except BadSignatureError:
+        return False
+
+
+@pytest.mark.parametrize(
+    ("branch_id", "digest", "other_digest"),
+    [
+        (_NU7_BRANCH_ID, _NU7_IRONWOOD_PAYMENT_SIGHASH, _NU6_3_IRONWOOD_PAYMENT_SIGHASH),
+        (_NU6_3_BRANCH_ID, _NU6_3_IRONWOOD_PAYMENT_SIGHASH, _NU7_IRONWOOD_PAYMENT_SIGHASH),
+    ],
+    ids=["nu7", "nu6_3"],
+)
+def test_pczt_ironwood_spend_authorization_commits_to_the_branch(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    branch_id: int,
+    digest: bytes,
+    other_digest: bytes,
+):
+    """The spend authorization verifies against the digest the reference implementation computes for
+    the transaction's branch, and not against the other branch's: the branch id is what it signs.
+
+    Under NU6.3 the same check also ties the reference digests to what the device signs.
+    """
+    client = ZcashCommandSender(backend)
+    bundle = _ironwood_bundle_with_external_recipient()
+    pczt_global = PcztGlobal(
+        tx_version=_V6_TX_VERSION,
+        version_group_id=_V6_VERSION_GROUP_ID,
+        consensus_branch_id=branch_id,
+    )
+
+    with client.send_pczt(
+        pczt_global=pczt_global,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    ):
+        _walk_review(scenario_navigator, approve=True)
+
+    signature = client.pczt_sign_ironwood(action_index=0).data
+    assert check_orchard_spendauth_signature_validity(bundle.actions[0].rk, signature, digest)
+    assert not check_orchard_spendauth_signature_validity(bundle.actions[0].rk, signature, other_digest)
+
+
+def test_pczt_ironwood_undefined_adjacent_branch_id_rejected(
+    backend,
+):
+    """A branch id next to the NU7 one, but not defined by the protocol, is still rejected."""
+    client = ZcashCommandSender(backend)
+
+    bad_global = PcztGlobal(
+        tx_version=_V6_TX_VERSION,
+        version_group_id=_V6_VERSION_GROUP_ID,
+        consensus_branch_id=_UNDEFINED_ADJACENT_BRANCH_ID,
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=bad_global,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            ironwood_bundle=_valid_ironwood_bundle(),
+        ):
+            pytest.fail("Device accepted a PCZT with an undefined branch ID")
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+_SPROUT_BRANCH_ID = 0
+_NU5_BRANCH_ID = 0xC2D6D0B4
+_CANOPY_BRANCH_ID = 0xE9FF75A6
+
+
+@pytest.mark.parametrize(
+    ("tx_version", "version_group_id", "branch_id"),
+    [
+        (_V6_TX_VERSION, _V6_VERSION_GROUP_ID, _NU5_BRANCH_ID),
+        (_V6_TX_VERSION, _V6_VERSION_GROUP_ID, _SPROUT_BRANCH_ID),
+        (5, 0x26A7270A, _SPROUT_BRANCH_ID),
+        (5, 0x26A7270A, _CANOPY_BRANCH_ID),
+    ],
+    ids=["v6_under_nu5", "v6_under_sprout", "v5_under_sprout", "v5_under_canopy"],
+)
+def test_pczt_version_not_valid_in_its_branch_rejected(backend, tx_version, version_group_id, branch_id):
+    """A transaction version its consensus branch cannot carry is refused at the header.
+
+    The network could never mine it, so it never reaches the review.
+    """
+    client = ZcashCommandSender(backend)
+    pczt_global = PcztGlobal(
+        tx_version=tx_version,
+        version_group_id=version_group_id,
+        consensus_branch_id=branch_id,
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(pczt_global=pczt_global, transparent_inputs=[], transparent_outputs=[]):
+            pass
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert client.get_version().status == 0x9000
+
+
 def test_pczt_orchard_path_unaffected(
     backend,
     scenario_navigator: NavigateWithScenario,
@@ -937,16 +1143,23 @@ def test_pczt_v5_finished_marker_regression(
     assert len(auth_sig) == 64
 
 
-# Expected Orchard spendAuthSig for a V6 migration PCZT on a freshly started Speculos
-# session (deterministic RNG starting point, Speculos default seed).  The value is
-# constant regardless of the Orchard anchor because NU6.3 excludes the anchor from the
-# sighash — only the authorising-data digest includes it, not the sighash.
-# The bundle carries both pools, so the Ironwood action fields enter the V6 sighash too:
-# regenerating the Ironwood vectors changes this signature as well.
+# Retained signature vector and independently computed ZIP 244/229 digest for the
+# V6 migration fixture. Both pools' action fields enter the digest; anchors do not.
 _EXPECTED_V6_ORCHARD_SIG = bytes.fromhex(
     "d8135f4f857948ed5b3bffe37cdf2df87d7be666dbdff5deebc806596383668d"
     "dbc2c635a7e9f004387cd11bcaa5f71801786916fcbc50d809f12b24bf25d23b"
 )
+_EXPECTED_V6_ORCHARD_SIGHASH = bytes.fromhex(
+    "df5bc59246e4cd6a0b2023fd3db85547b663b5517330bf168cb97c9005736e59"
+)
+
+
+def _assert_v6_spendauth_signature(signature: bytes, expected: bytes, digest: bytes) -> None:
+    """Check the signed message without depending on Speculos's nonce sequence."""
+    changed_digest = bytes([digest[0] ^ 1]) + digest[1:]
+    for candidate in (expected, signature):
+        assert check_orchard_spendauth_signature_validity(_RK_ALPHA_1, candidate, digest)
+        assert not check_orchard_spendauth_signature_validity(_RK_ALPHA_1, candidate, changed_digest)
 
 # Second anchor: first byte flipped so the Orchard anchor bytes differ in every bit
 # that the first byte carries, giving an easy regression signal.
@@ -967,13 +1180,7 @@ def test_pczt_v6_orchard_anchor_exclusion_regression(
     anchor: bytes,
     test_name: str,
 ):
-    """V6: the Orchard anchor is excluded from the sighash — changing its value must not alter the signature.
-
-    Each parametrised invocation runs in its own Speculos session (fresh deterministic RNG
-    start state).  If the Orchard anchor were included in the V6 sighash the signature
-    would differ from _EXPECTED_V6_ORCHARD_SIG; if it is correctly excluded both anchors
-    produce the same signature.
-    """
+    """Both Orchard anchors must produce signatures for the same known V6 digest."""
     client = ZcashCommandSender(backend)
     with client.send_pczt(
         pczt_global=PCZT_V6_GLOBAL,
@@ -984,12 +1191,8 @@ def test_pczt_v6_orchard_anchor_exclusion_regression(
     ):
         _review_approve(scenario_navigator, test_name)
     orchard_sig = client.pczt_sign_orchard(action_index=0).data
-    assert orchard_sig == _EXPECTED_V6_ORCHARD_SIG, (
-        "Orchard spendAuthSig changed when Orchard anchor changed — "
-        f"Orchard anchor incorrectly excluded from V6 sighash.\n"
-        f"anchor={anchor.hex()}\n"
-        f"got:  {orchard_sig.hex()}\n"
-        f"want: {_EXPECTED_V6_ORCHARD_SIG.hex()}"
+    _assert_v6_spendauth_signature(
+        orchard_sig, _EXPECTED_V6_ORCHARD_SIG, _EXPECTED_V6_ORCHARD_SIGHASH
     )
 
 
@@ -1048,15 +1251,14 @@ def test_pczt_ironwood_sign_replay_in_session_rejected(
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
-# Expected Ironwood spendAuthSig for a V6 Ironwood-only PCZT on a freshly started Speculos
-# session (deterministic RNG starting point, Speculos default seed).  Constant regardless of
-# the Ironwood anchor because NU6.3 excludes the anchor from the sighash — only the
-# authorising-data digest includes it, not the sighash.
-# The empty Orchard component uses the V6 personalization b"ZTxIdOrchardH_v6" (ZIP 229),
-# not the V5 b"ZTxIdOrchardHash".
+# Retained signature vector and independently computed ZIP 244/229 digest for the
+# Ironwood-only fixture. The empty Orchard component uses b"ZTxIdOrchardH_v6".
 _EXPECTED_V6_IRONWOOD_SIG = bytes.fromhex(
     "824a4cf72c60ec42e5269a8b725449f53938ea2dabbe6875296857c234cffebe"
     "526f19bc1c102aadad8970c5e11fbfeb9ed0032563d071e6b2ccada7c4c4431c"
+)
+_EXPECTED_V6_IRONWOOD_SIGHASH = bytes.fromhex(
+    "7488ce0205f20cb5b780b4a37f0f967e3e6cc550ef93082baa07231e90567298"
 )
 
 
@@ -1074,12 +1276,7 @@ def test_pczt_v6_ironwood_anchor_exclusion_regression(
     anchor: bytes,
     test_name: str,
 ):
-    """V6: Ironwood anchor excluded from sighash — changing it must not alter the signature.
-
-    Each parametrised invocation runs in its own Speculos session (fresh deterministic RNG).
-    If the Ironwood anchor were included in the V6 sighash the signature would differ from
-    _EXPECTED_V6_IRONWOOD_SIG; if correctly excluded both anchors produce the same signature.
-    """
+    """Both Ironwood anchors must produce signatures for the same known V6 digest."""
     client = ZcashCommandSender(backend)
     with client.send_pczt(
         pczt_global=PCZT_V6_GLOBAL,
@@ -1089,12 +1286,8 @@ def test_pczt_v6_ironwood_anchor_exclusion_regression(
     ):
         _review_approve(scenario_navigator, test_name)
     ironwood_sig = client.pczt_sign_ironwood(action_index=0).data
-    assert ironwood_sig == _EXPECTED_V6_IRONWOOD_SIG, (
-        "Ironwood spendAuthSig changed when Ironwood anchor changed — "
-        f"Ironwood anchor incorrectly included in V6 sighash.\n"
-        f"anchor={anchor.hex()}\n"
-        f"got:  {ironwood_sig.hex()}\n"
-        f"want: {_EXPECTED_V6_IRONWOOD_SIG.hex()}"
+    _assert_v6_spendauth_signature(
+        ironwood_sig, _EXPECTED_V6_IRONWOOD_SIG, _EXPECTED_V6_IRONWOOD_SIGHASH
     )
 
 
@@ -1944,3 +2137,518 @@ def test_pczt_v1_metadata_backward_compat_in_v2_bundle(
 
     auth_sig = client.pczt_sign_ironwood(action_index=0).data
     assert len(auth_sig) == 64
+
+
+
+def test_pczt_ironwood_dummy_before_real_reuses_account_keys(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A dummy can populate the account cache before a real spend needs its ASK."""
+    client = ZcashCommandSender(backend)
+    bundle = _ironwood_bundle_with_external_recipient()
+    bundle.actions.reverse()
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    ):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_ironwood_display_private_transfer_with_change",
+        )
+    assert len(client.pczt_sign_ironwood(action_index=1).data) == 64
+
+
+@pytest.mark.parametrize("field", [
+    "signing_path", "rk", "nullifier", "spend_recipient", "cv_net", "ephemeral_key", "cmx",
+])
+def test_pczt_ironwood_cached_keys_preserve_action_checks(backend, field):
+    """A valid first action must not let a malformed second action reuse validation."""
+    client = ZcashCommandSender(backend)
+    bundle = _ironwood_bundle_with_external_recipient()
+    bundle.actions.reverse()
+    action = bundle.actions[1]
+    if field == "signing_path":
+        action.signing_path = "m/32'/133'/1'"
+        expected = Errors.SW_BAD_STATE
+    else:
+        original = getattr(action, field)
+        setattr(action, field, original[:-1] + bytes([original[-1] ^ 1]))
+        expected = Errors.SW_INVALID_TRANSACTION
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[],
+            ironwood_bundle=bundle,
+        ):
+            pytest.fail(f"Device accepted a cached-account action with invalid {field}")
+    assert error.value.status == expected
+    assert not error.value.data
+
+
+def test_pczt_v6_cached_account_path_is_checked_between_pools(backend):
+    """A cache populated by Orchard cannot authorize a different Ironwood account."""
+    client = ZcashCommandSender(backend)
+    ironwood = _valid_ironwood_bundle()
+    ironwood.actions[0].signing_path = "m/32'/133'/1'"
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[_TRANSPARENT_OUTPUT_599K],
+            orchard_bundle=_valid_orchard_bundle(),
+            ironwood_bundle=ironwood,
+        ):
+            pytest.fail("Device reused account keys for a different pool's account")
+    assert error.value.status == Errors.SW_BAD_STATE
+    assert not error.value.data
+
+
+@pytest.mark.parametrize("pool", ["orchard", "ironwood"])
+@pytest.mark.parametrize("change", ["identity_key", "noncanonical_key", "diversifier", "spend_rho", "spend_rseed"])
+def test_pczt_recipient_reuse_preserves_note_checks(backend, pool, change):
+    """Tamper one field of a valid real spend before its ownership/nullifier checks."""
+    client = ZcashCommandSender(backend)
+    bundle = _valid_orchard_bundle() if pool == "orchard" else _valid_ironwood_bundle()
+    action = bundle.actions[0]
+    diversifier_len = 11
+    point_len = 32
+    if change in ("identity_key", "noncanonical_key"):
+        encoded = bytes(point_len) if change == "identity_key" else bytes([0xff]) * point_len
+        action.spend_recipient = action.spend_recipient[:diversifier_len] + encoded
+    else:
+        field = "spend_recipient" if change == "diversifier" else change
+        original = getattr(action, field)
+        setattr(action, field, bytes([original[0] ^ 1]) + original[1:])
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[],
+            transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+            **{f"{pool}_bundle": bundle},
+        ):
+            pytest.fail("Device accepted a tampered spend")
+    assert error.value.status == Errors.SW_INVALID_TRANSACTION
+    assert not error.value.data
+
+
+# Own-account transparent change, under the account the Ironwood change notes return to.
+_OWN_CHANGE_PATH = "m/44'/133'/0'/1/0"
+
+
+def _split_change_bundle(change_notes: int, with_recipient: bool = True) -> PcztIronwoodBundle:
+    """An Ironwood bundle whose change is split across `change_notes` notes of account 0.
+
+    Every change note is the same dummy-spend action paying the internal IVK: the device keeps no
+    record of the notes it has seen, so repeating it keeps the note count the only variable.
+    """
+    recipient = [_external_recipient_ironwood_action()] if with_recipient else []
+    actions = recipient + [_dummy_ironwood_action() for _ in range(change_notes)]
+    return PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(a.spend_value - a.value for a in actions),
+        flags=3,
+        anchor=bytes(32),
+    )
+
+
+def _walk_review(scenario_navigator: NavigateWithScenario, approve: bool) -> None:
+    scenario = NavigationScenarioData(
+        scenario_navigator.device,
+        scenario_navigator.backend,
+        UseCase.TX_REVIEW,
+        approve,
+    )
+    if approve and scenario_navigator.device.touchable:
+        scenario.validation = scenario.validation[:-1]
+    scenario_navigator.navigator.navigate_until_text(
+        navigate_instruction=scenario.navigation,
+        validation_instructions=scenario.validation,
+        text=scenario.pattern,
+        screen_change_after_last_instruction=False,
+    )
+
+
+@pytest.mark.parametrize("change_notes", [2, 3, 4, 5])
+def test_pczt_ironwood_change_split_across_notes_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    change_notes: int,
+):
+    """Change split across several notes stays off the review, and the transaction signs.
+
+    Five change notes beside one recipient fill the retained-output budget. The review is compared
+    against goldens, so a change note leaking onto the screen fails here. The transparent input
+    covers the change notes and the fee.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_100K],
+        transparent_outputs=[],
+        ironwood_bundle=_split_change_bundle(change_notes),
+    ):
+        _review_approve(
+            scenario_navigator,
+            f"test_pczt_ironwood_change_split_across_notes_signs_{change_notes}",
+        )
+
+    assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+    assert len(client.pczt_sign_transparent(input_index=0).data) >= 70
+
+
+def test_pczt_ironwood_change_notes_count_against_the_output_budget(backend):
+    """A sixth change note beside one recipient is a seventh retained shielded output: refused."""
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_11K],
+            transparent_outputs=[],
+            ironwood_bundle=_split_change_bundle(6),
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    assert not error.value.data
+
+
+def test_pczt_ironwood_shield_into_split_notes_shows_each_note(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Shielding into four notes of one's own account shows all four, and signs.
+
+    With no external recipient the transfer is revealed as a self-transfer, so the change notes
+    are what the user reviews: four fill the display budget and must all reach the screen.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_100K],
+        transparent_outputs=[],
+        ironwood_bundle=_split_change_bundle(4, with_recipient=False),
+    ):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_shield_into_split_notes_shows_each_note")
+
+    assert len(client.pczt_sign_transparent(input_index=0).data) >= 70
+
+
+def test_pczt_ironwood_split_change_in_another_account_yields_no_signature(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Every hidden change note stays bound to the account being spent.
+
+    The notes return to account 0 while the transparent input signed here belongs to account 1.
+    """
+    foreign_account_input = PcztTransparentInput(
+        prevout_txid=_TRANSPARENT_INPUT_11K.prevout_txid,
+        prevout_index=_TRANSPARENT_INPUT_11K.prevout_index,
+        value=_TRANSPARENT_INPUT_11K.value,
+        script_pubkey=_TRANSPARENT_INPUT_11K.script_pubkey,
+        sequence=_TRANSPARENT_INPUT_11K.sequence,
+        signing_path="m/44'/133'/1'/0/0",
+    )
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[foreign_account_input],
+        transparent_outputs=[],
+        ironwood_bundle=_split_change_bundle(3),
+    ):
+        _walk_review(scenario_navigator, approve=True)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        client.pczt_sign_transparent(input_index=0)
+
+    assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+    assert not error.value.data
+
+
+def test_pczt_ironwood_transparent_and_shielded_change_refused(backend):
+    """A transparent change output rules out a shielded change note beside it."""
+    client = ZcashCommandSender(backend)
+    pubkey = client._compressed_pubkey_from_path(_OWN_CHANGE_PATH)  # pylint: disable=W0212
+    own_change = PcztTransparentOutput(
+        value=1000,
+        script_pubkey=bytes.fromhex("76a914") + ripemd160(hashlib.sha256(pubkey).digest()) + bytes.fromhex("88ac"),
+        signing_path=_OWN_CHANGE_PATH,
+    )
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_100K],
+            transparent_outputs=[own_change],
+            ironwood_bundle=_split_change_bundle(1),
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_INVALID_TRANSACTION
+    assert not error.value.data
+
+
+def test_pczt_ironwood_shield_into_too_many_notes_refused(backend):
+    """A fifth revealed note would put a fifth shielded output on the review: refused."""
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_100K],
+            transparent_outputs=[],
+            ironwood_bundle=_split_change_bundle(5, with_recipient=False),
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    assert not error.value.data
+
+
+def test_pczt_ironwood_four_recipients_and_a_change_note_sign(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Four recipients beside one change note still fit: the display budget plus one change note.
+
+    The recipient action is repeated, so the four displayed outputs are the same payment.
+    """
+    actions = [_external_recipient_ironwood_action() for _ in range(4)] + [_dummy_ironwood_action()]
+    bundle = PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(a.spend_value - a.value for a in actions),
+        flags=3,
+        anchor=bytes(32),
+    )
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    ):
+        _walk_review(scenario_navigator, approve=True)
+
+    assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+
+
+# ── Transfers to another account of the same seed ──────────────────────────────
+#
+# The host may declare, in an output's metadata, the ZIP 32 account the output pays. The device then
+# derives that account's viewing keys and accepts the output only if it decrypts under one of its
+# IVKs, whatever outgoing record the sender kept. The vectors live in own_account_vectors.py.
+
+_OWN_ACCOUNT_TRANSFER_VECTORS = {
+    "internal_address_external_ovk": IRONWOOD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK,
+    "internal_address_internal_ovk": IRONWOOD_ACCOUNT_1_INTERNAL_INTERNAL_OVK,
+    "internal_address_no_ovk": IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK,
+    "external_address_external_ovk": IRONWOOD_ACCOUNT_1_EXTERNAL_EXTERNAL_OVK,
+    "external_address_internal_ovk": IRONWOOD_ACCOUNT_1_EXTERNAL_INTERNAL_OVK,
+    "external_address_no_ovk": IRONWOOD_ACCOUNT_1_EXTERNAL_NO_OVK,
+}
+
+
+def _own_account_ironwood_bundle(*own_actions: PcztIronwoodAction, change: bool = False) -> PcztIronwoodBundle:
+    """Account 0 spends 300 000 zatoshis and pays the given actions; the rest is the fee.
+
+    With `change`, a 10 000-zatoshi change note of account 0 sits beside them.
+    """
+    actions = [_valid_ironwood_action(), *own_actions]
+    if change:
+        actions.append(_dummy_ironwood_action())
+    return PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(action.spend_value - action.value for action in actions),
+        flags=3,
+        anchor=bytes(32),
+    )
+
+
+def _send_own_account_ironwood(client: ZcashCommandSender, bundle: PcztIronwoodBundle):
+    return client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[],
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    )
+
+
+def _assert_own_account_ironwood_refused(
+    client: ZcashCommandSender,
+    bundle: PcztIronwoodBundle,
+    status: Errors = Errors.SW_INVALID_TRANSACTION,
+) -> None:
+    """The bundle is refused while it is parsed, the session ends, and the app keeps answering."""
+    with pytest.raises(ExceptionRAPDU) as error:
+        with _send_own_account_ironwood(client, bundle):
+            pass
+    assert error.value.status == status
+
+    with pytest.raises(ExceptionRAPDU):
+        client.pczt_sign_ironwood(action_index=0)
+    assert client.get_version().status == 0x9000
+
+
+@pytest.mark.parametrize("vector", _OWN_ACCOUNT_TRANSFER_VECTORS.values(), ids=_OWN_ACCOUNT_TRANSFER_VECTORS.keys())
+def test_pczt_ironwood_own_account_transfer_signs(backend, scenario_navigator: NavigateWithScenario, vector):
+    """A declared transfer to account 1 signs and shows `Account index 1`, whatever the OVK policy.
+
+    Every case draws the same screens — amount and account, no address — so all of them compare
+    against one golden set: the recognition does not depend on which address of the destination
+    account is paid, nor on the outgoing record the sender kept.
+    """
+    client = ZcashCommandSender(backend)
+
+    with _send_own_account_ironwood(client, _own_account_ironwood_bundle(own_account_ironwood_action(vector))):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_own_account_transfer")
+
+    assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+
+
+def test_pczt_ironwood_own_account_transfer_shows_its_memo(backend, scenario_navigator: NavigateWithScenario):
+    """The memo of a transfer to another account is shown, after the account it goes to."""
+    client = ZcashCommandSender(backend)
+
+    with _send_own_account_ironwood(client, _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_MEMO))):
+        _review_approve(scenario_navigator, "test_pczt_ironwood_own_account_transfer_shows_its_memo")
+
+    assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+
+
+def test_pczt_ironwood_own_account_transfer_beside_change_keeps_change_hidden(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """Beside a transfer to account 1, the change note of account 0 stays off the review.
+
+    The transfer counts as an external output, so nothing triggers the self-transfer reveal: the
+    review shows the transfer, its memo and the fee, and no change note.
+    """
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_MEMO), change=True)
+
+    with _send_own_account_ironwood(client, bundle):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_ironwood_own_account_transfer_beside_change_keeps_change_hidden",
+        )
+
+    assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+
+
+def _review_reject_up_to_the_choice(scenario_navigator: NavigateWithScenario, snapshot_test_name: str) -> None:
+    """Reject a review, comparing every screen up to the rejection choice.
+
+    On a touch device the app answers `Deny` as soon as the rejection is confirmed, and the reply
+    races the status screen: whether the navigation still sees that screen before the reply ends it
+    depends on timing. So the screens are compared up to the choice, which comes before any reply,
+    and the rejection is then confirmed without comparing what follows.
+    """
+    if not scenario_navigator.device.touchable:
+        scenario_navigator.review_reject(test_name=snapshot_test_name)
+        return
+
+    scenario = NavigationScenarioData(
+        scenario_navigator.device, scenario_navigator.backend, UseCase.TX_REVIEW, False
+    )
+    scenario_navigator.navigator.navigate_until_text_and_compare(
+        navigate_instruction=scenario.navigation,
+        validation_instructions=[NavInsID.USE_CASE_REVIEW_REJECT],
+        text=scenario.pattern,
+        path=scenario_navigator.screenshot_path,
+        test_case_name=snapshot_test_name,
+    )
+    scenario_navigator.navigator.navigate(
+        [NavInsID.USE_CASE_CHOICE_CONFIRM],
+        screen_change_before_first_instruction=False,
+        screen_change_after_last_instruction=False,
+    )
+
+
+def test_pczt_ironwood_own_account_transfer_rejected_by_user(backend, scenario_navigator: NavigateWithScenario):
+    """Rejecting the review of a transfer to another account releases no signature."""
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK))
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with _send_own_account_ironwood(client, bundle):
+            _review_reject_up_to_the_choice(scenario_navigator, "test_pczt_ironwood_own_account_transfer_rejected_by_user")
+    assert error.value.status == Errors.SW_DENY
+
+    with pytest.raises(ExceptionRAPDU):
+        client.pczt_sign_ironwood(action_index=0)
+
+
+@pytest.mark.parametrize(
+    "vector",
+    [IRONWOOD_ACCOUNT_1_INTERNAL_INTERNAL_OVK, IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK],
+    ids=["internal_ovk", "no_ovk"],
+)
+def test_pczt_ironwood_own_account_output_undeclared_is_refused(backend, vector):
+    """Without a declaration, an output account 0 cannot recover is refused, as it always was."""
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(vector, declared=None))
+
+    _assert_own_account_ironwood_refused(client, bundle)
+
+
+def test_pczt_ironwood_own_account_declared_for_a_recipient_outside_the_seed_is_refused(backend):
+    """A payment to a recipient outside the seed, declared for account 1, is refused.
+
+    Account 0's external OVK recovers it as an ordinary payment, which a failed declaration must not
+    fall back to.
+    """
+    action = _external_recipient_ironwood_action()
+    action.output_extensions = output_account_extension(1)
+    action.note_plaintext_version = 0x03
+
+    _assert_own_account_ironwood_refused(ZcashCommandSender(backend), _own_account_ironwood_bundle(action))
+
+
+def test_pczt_ironwood_own_account_declared_for_another_account_is_refused(backend):
+    """An output to account 1 declared for account 2 does not decrypt under account 2: refused.
+
+    The external OVK record would let account 0 recover the output as an ordinary payment, which is
+    precisely what a failed declaration must not fall back to.
+    """
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK, declared=2))
+
+    _assert_own_account_ironwood_refused(client, bundle)
+
+
+def test_pczt_ironwood_own_account_declaring_the_source_account_is_refused(backend):
+    """Declaring account 0, the account being spent, is refused before any derivation."""
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, declared=0))
+
+    _assert_own_account_ironwood_refused(client, bundle)
+
+
+@pytest.mark.parametrize("extensions", MALFORMED_OUTPUT_EXTENSIONS.values(), ids=MALFORMED_OUTPUT_EXTENSIONS.keys())
+def test_pczt_ironwood_own_account_malformed_extension_is_refused(backend, extensions: bytes):
+    """Every malformed extension block is refused, and the session with it."""
+    client = ZcashCommandSender(backend)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, extensions=extensions))
+
+    _assert_own_account_ironwood_refused(client, bundle)
+
+
+def test_pczt_ironwood_own_account_extension_without_version_byte_is_refused(backend):
+    """An Ironwood extension block must follow the notePlaintextVersion byte.
+
+    Sent without it, the tag lands where the version byte belongs and is refused as a version.
+    """
+    client = ZcashCommandSender(backend)
+    action = own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, note_plaintext_version=None)
+
+    _assert_own_account_ironwood_refused(client, _own_account_ironwood_bundle(action))

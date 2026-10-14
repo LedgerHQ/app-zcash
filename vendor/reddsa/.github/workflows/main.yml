@@ -2,48 +2,45 @@ name: CI
 
 on: [push]
 
+permissions:
+  contents: read
+
 jobs:
   test_msrv:
-    name: test on MSRV
+    name: build on MSRV
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3.5.3
-    - uses: actions-rs/toolchain@v1.0.7
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
-        # When toolchain is not specified, it uses rust-toolchain, which is the MSRV
-        override: true
-    - uses: actions-rs/cargo@v1.0.3
+        persist-credentials: false
+    - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
       with:
-        command: test
-        args: --all-features
+        toolchain: 1.88.0
+    # Don't run tests because some dev-dependencies have higher MSRVs.
+    - run: cargo build
   test_nightly:
     name: test on nightly
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3.5.3
-    # Because we use nightly features for building docs,
-    # using --all-features will fail without nightly toolchain.
-    - uses: actions-rs/toolchain@v1.0.7
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
       with:
         toolchain: nightly
-        override: true
-    - uses: actions-rs/cargo@v1.0.3
-      with:
-        command: test
-        args: --all-features
+    # Update dependencies since we commit the lockfile
+    - run: cargo update --verbose
+    - run: cargo test --all-features
   build_no_std:
     name: build with no_std
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3.5.3
-    - uses: actions-rs/toolchain@v1.0.7
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
       with:
         toolchain: stable
-        override: true
-        # This does not support std, so we use to test if no_std works
-        target: thumbv6m-none-eabi
-    - uses: actions-rs/cargo@v1.0.3
-      with:
-        command: build
-        # Disables std feature
-        args: --no-default-features --target thumbv6m-none-eabi
+        targets: thumbv6m-none-eabi
+    - run: cargo build --no-default-features --target thumbv6m-none-eabi
+    - run: cargo build --no-default-features --features serde --target thumbv6m-none-eabi

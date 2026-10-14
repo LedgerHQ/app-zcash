@@ -1,5 +1,4 @@
 use orchard::keys::SpendingKey as OrchardSk;
-use zcash_protocol::consensus::NetworkType;
 
 use ledger_device_sdk::ecc::Pallas;
 use ledger_device_sdk::ecc::Secret;
@@ -9,7 +8,37 @@ use crate::utils::extended_public_key::ExtendedPublicKey;
 use crate::{AppSW, utils::bip32_path::Bip32Path};
 
 pub use orchard::keys::FullViewingKey as OrchardFvk;
+pub use orchard::keys::LedgerValidationKey as OrchardValidationKey;
 pub use orchard::keys::SpendAuthorizingKey as OrchardAsk;
+
+/// An Orchard FVK held across APDUs. Its `nk` and `rivk` are viewing-key secrets, wiped on drop
+/// like the IVK and OVK derived from them.
+pub struct RetainedOrchardFvk(OrchardFvk);
+
+// `zeroize_flat_type` below requires a value with no drop glue of its own.
+const _: () = assert!(!core::mem::needs_drop::<OrchardFvk>());
+
+impl RetainedOrchardFvk {
+    pub fn new(fvk: OrchardFvk) -> Self {
+        Self(fvk)
+    }
+}
+
+impl core::ops::Deref for RetainedOrchardFvk {
+    type Target = OrchardFvk;
+
+    fn deref(&self) -> &OrchardFvk {
+        &self.0
+    }
+}
+
+impl Drop for RetainedOrchardFvk {
+    fn drop(&mut self) {
+        // SAFETY: the FVK owns only fixed-size field elements and byte arrays (no pointer, no
+        // `Drop`), for which all-zero bytes are a valid value, and it is not read again.
+        unsafe { zeroize::zeroize_flat_type(&mut self.0) }
+    }
+}
 
 pub fn map_ledger_crypto_error(err: ledger_zcash_crypto::Error) -> AppSW {
     match err {
@@ -17,16 +46,6 @@ pub fn map_ledger_crypto_error(err: ledger_zcash_crypto::Error) -> AppSW {
         ledger_zcash_crypto::Error::OutOfMemory => AppSW::NotEnoughMemorySpace,
         _ => AppSW::TechnicalProblem,
     }
-}
-
-pub fn orchard_network(path: &Bip32Path) -> NetworkType {
-    // m_Orchard / 32' / 1' / account'
-    if let Some(coin_type) = path.as_slice().get(1)
-        && *coin_type == 1 + 0x8000_0000
-    {
-        return NetworkType::Test;
-    }
-    NetworkType::Main
 }
 
 // Derives the Orchard FullViewingKey bytes for the given coin type and account.
@@ -112,6 +131,14 @@ fn consume_orchard_derivation_budget() -> Result<(), AppSW> {
     Ok(())
 }
 
+/// Orchard derivations this run of the app has requested, for measurement builds only.
+#[cfg(feature = "heap_probe")]
+pub fn orchard_derivations_spent() -> u32 {
+    // SAFETY: the app is single-threaded; this reads the counter `consume_orchard_derivation_budget`
+    // alone writes.
+    unsafe { ORCHARD_DERIVATIONS }
+}
+
 // Builds an `OrchardSk` from already-derived key bytes, WITHOUT invoking
 // `zip32_orchard_derive`. Used with a key cached by the PCZT parser.
 fn orchard_sk_from_bytes(sk_bytes: &Secret<32>) -> Result<OrchardSk, AppSW> {
@@ -126,11 +153,12 @@ pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
     Ok(orchard_fvk)
 }
 
-// FVK derivation from a cached spending key (no `zip32_orchard_derive`).
+// FVK derivation from a cached spending key (no `zip32_orchard_derive`). Kept
+// alongside the combined form because an action that spends nothing needs the
+// viewing key without materializing an authorizing key.
 pub fn derive_orchard_fvk_from_sk(sk_bytes: &Secret<32>) -> Result<OrchardFvk, AppSW> {
     let sk = orchard_sk_from_bytes(sk_bytes)?;
-    let fvk = OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
-    Ok(fvk)
+    OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)
 }
 
 // FVK + ASK derivation from a cached spending key (no `zip32_orchard_derive`).
@@ -138,9 +166,7 @@ pub fn derive_orchard_fvk_and_ask_from_sk(
     sk_bytes: &Secret<32>,
 ) -> Result<(OrchardFvk, OrchardAsk), AppSW> {
     let sk = orchard_sk_from_bytes(sk_bytes)?;
-    let fvk = OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
-    let ask = OrchardAsk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)?;
-    Ok((fvk, ask))
+    OrchardFvk::ledger_try_from_with_ask(&sk).map_err(map_ledger_crypto_error)
 }
 
 // ASK derivation from a cached spending key (no `zip32_orchard_derive`).

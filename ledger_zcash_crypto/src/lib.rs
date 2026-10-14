@@ -10,6 +10,7 @@ mod bytes;
 mod hashtocurve;
 mod montgomery;
 pub mod orchard;
+mod points;
 mod poseidon;
 mod poseidon_fp;
 pub mod redpallas;
@@ -17,7 +18,7 @@ mod sinsemilla;
 pub mod transparent_address;
 pub mod transparent_script;
 
-pub use crate::hashtocurve::diversify_hash_ledger;
+pub use crate::hashtocurve::{DiversifiedBase, diversify_hash_ledger};
 use crate::sinsemilla::sinsemilla_short_commit;
 use ff::{Field, PrimeField};
 use ledger_device_sdk::{
@@ -34,6 +35,7 @@ use ledger_device_sdk::{
 };
 use montgomery::{PALLAS_BYTES, byte_to_fp, byte_to_fq, repr_to_montgomery_u64x4};
 use pasta_curves::pallas;
+use points::Basepoint;
 use zeroize::Zeroizing;
 
 // Orchard key material is derived via PrfExpand with the fixed
@@ -59,14 +61,6 @@ const ORCHARD_PSI_DOMAIN_SEPARATOR: u8 = 0x09;
 pub(crate) const NOTE_VERSION_IRONWOOD: u8 = 0x03;
 const ORCHARD_QR_RCM_DOMAIN_SEPARATOR: u8 = 0x0B;
 const PRF_EXPAND_BYTES: usize = 64;
-const ORCHARD_VALUE_COMMITMENT_VALUE_BASEPOINT_BYTES: [u8; 32] = [
-    0x67, 0x43, 0xf9, 0x3a, 0x6e, 0xbd, 0xa7, 0x2a, 0x8c, 0x7c, 0x5a, 0x2b, 0x7f, 0xa3, 0x04, 0xfe,
-    0x32, 0xb2, 0x9b, 0x4f, 0x70, 0x6a, 0xa8, 0xf7, 0x42, 0x0f, 0x3d, 0x8e, 0x7a, 0x59, 0x70, 0x2f,
-];
-const ORCHARD_VALUE_COMMITMENT_RANDOMNESS_BASEPOINT_BYTES: [u8; 32] = [
-    0x91, 0x5a, 0x3c, 0x88, 0x68, 0xc6, 0xc3, 0x0e, 0x2f, 0x80, 0x90, 0xee, 0x45, 0xd7, 0x6e, 0x40,
-    0x48, 0x20, 0x8d, 0xea, 0x5b, 0x23, 0x66, 0x4f, 0xbb, 0x09, 0xa4, 0x0f, 0x55, 0x44, 0xf4, 0x07,
-];
 
 pub fn _debug_print(str: &str) {
     debug!("{}", str);
@@ -188,15 +182,30 @@ pub fn orchard_dk_ovk(
 /// The returned bytes are the canonical compressed point encoding of `pk_d`,
 /// matching `DiversifiedTransmissionKey::to_bytes()`.
 pub fn orchard_pk_d(ivk: &[u8; 32], g_d: &[u8; 32]) -> Result<[u8; 32], Error> {
+    let scalar = incoming_scalar_bytes_be(ivk)?;
+    orchard_pk_d_with_point(&scalar, pallas_point_from_bytes(g_d)?)
+}
+
+/// Derives a transmission key from a locally derived base without decompressing it.
+/// The incoming viewing key undergoes the same canonical and nonzero checks as
+/// [`orchard_pk_d`]; the base can only be constructed by [`DiversifiedBase::derive`].
+pub fn orchard_pk_d_from_base(ivk: &[u8; 32], base: &DiversifiedBase) -> Result<[u8; 32], Error> {
+    let scalar = incoming_scalar_bytes_be(ivk)?;
+    orchard_pk_d_with_point(&scalar, base.to_sdk()?)
+}
+
+fn incoming_scalar_bytes_be(ivk: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>, Error> {
     let ivk = pallas_base_from_repr(*ivk)?;
     if bool::from(ivk.is_zero()) {
         return Err(Error::InvalidKeyDiscarded);
     }
 
-    let mut pk_d = pallas_point_from_bytes(g_d)?;
     let ivk_bytes = Zeroizing::new(ivk.to_repr());
-    let ivk_bytes_be = canonical_scalar_bytes_be(&ivk_bytes)?;
-    pk_d.rnd_scalarmul(&ivk_bytes_be[..])?;
+    canonical_scalar_bytes_be(&ivk_bytes)
+}
+
+fn orchard_pk_d_with_point(scalar: &[u8; 32], mut pk_d: EcPoint) -> Result<[u8; 32], Error> {
+    pk_d.rnd_scalarmul(scalar)?;
     pallas_point_to_bytes(&pk_d)
 }
 
@@ -210,10 +219,7 @@ pub fn orchard_value_commitment_bytes(value: i64, rcv: &[u8; 32]) -> Result<[u8;
 
     if *rcv != [0; 32] {
         let rcv_be = canonical_scalar_bytes_be(rcv)?;
-        let rcv_term = pallas_basepoint_mul(
-            &ORCHARD_VALUE_COMMITMENT_RANDOMNESS_BASEPOINT_BYTES,
-            &rcv_be,
-        )?;
+        let rcv_term = pallas_basepoint_mul(Basepoint::Randomness, &rcv_be)?;
         sum = match sum {
             Some(value_term) => Some(pallas_point_add(&value_term, &rcv_term)?),
             None => Some(rcv_term),
@@ -539,22 +545,19 @@ fn value_commitment_value_term(value: i64) -> Result<Option<EcPoint>, Error> {
 
     let mut scalar_be = [0u8; 32];
     scalar_be[24..].copy_from_slice(&value.unsigned_abs().to_be_bytes());
-    let term = pallas_basepoint_mul(&ORCHARD_VALUE_COMMITMENT_VALUE_BASEPOINT_BYTES, &scalar_be)?;
+    let mut term = pallas_basepoint_mul(Basepoint::Value, &scalar_be)?;
 
     if value.is_negative() {
-        let mut negated = pallas_point_to_bytes(&term)?;
-        negated[31] ^= 0x80;
-        Ok(Some(pallas_point_from_bytes(&negated)?))
-    } else {
-        Ok(Some(term))
+        term.neg()?;
     }
+    Ok(Some(term))
 }
 
 fn pallas_basepoint_mul(
-    basepoint_bytes: &[u8; 32],
+    basepoint: Basepoint,
     scalar_bytes_be: &[u8; 32],
 ) -> Result<EcPoint, Error> {
-    let mut point = pallas_point_from_bytes(basepoint_bytes)?;
+    let mut point = basepoint.to_sdk()?;
     point.rnd_scalarmul(scalar_bytes_be)?;
     Ok(point)
 }

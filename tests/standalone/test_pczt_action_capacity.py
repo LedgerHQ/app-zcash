@@ -30,6 +30,7 @@ from typing import NamedTuple
 import pytest
 from application_client.pczt import (
     PcztGlobal,
+    PcztIronwoodBundle,
     PcztOrchardAction,
     PcztOrchardBundle,
     PcztTransparentInput,
@@ -37,8 +38,10 @@ from application_client.pczt import (
     pczt_transaction_bytes,
 )
 from application_client.zcash_command_sender import (
+    CLA,
     MAX_PCZT_TRANSPARENT_INPUTS,
     Errors,
+    InsType,
     ZcashCommandSender,
 )
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
@@ -49,8 +52,31 @@ from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
+from .own_account_vectors import (
+    IRONWOOD_ACCOUNT_1_EXTERNAL_NO_OVK,
+    IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK,
+    IRONWOOD_ACCOUNT_2,
+    IRONWOOD_ACCOUNT_3,
+    IRONWOOD_ACCOUNT_4,
+    OwnAccountVector,
+    own_account_ironwood_action,
+)
+from .test_pczt_ironwood import (
+    _TRANSPARENT_INPUT_100K,
+    PCZT_V6_GLOBAL,
+    _dummy_ironwood_action,
+    _valid_ironwood_action,
+    _external_recipient_ironwood_action,
+    _ironwood_bundle_with_external_recipient,
+    _split_change_bundle,
+)
+
 # Mirrors MAX_PCZT_ORCHARD_ACTIONS_NUMBER in src/consts.rs, the bound a released build carries.
 _SHIPPED_MAX_ORCHARD_ACTIONS = 32
+# Mirrors MAX_PCZT_IRONWOOD_ACTIONS_NUMBER in src/consts.rs.
+_SHIPPED_MAX_IRONWOOD_ACTIONS = 32
+# What the transparent payment leaves for the fee, so that a transaction stays within the review's limits.
+_FEE = 1000
 
 # Mirrors MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER: shielded outputs one transaction may show.
 _MAX_SHIELDED_DISPLAYED_OUTPUTS = 4
@@ -266,7 +292,8 @@ def _z_to_z_bundle(action_count: int) -> PcztOrchardBundle:
     """A z→z bundle of `action_count` actions carrying `action_count - 1` real spends.
 
     One action pays the recipient, one carries the change note, and the rest spend a note against a
-    dummy output. Only one change output is allowed, so the shape holds at every count.
+    dummy output. The change stays in one note, as the shipped wallet builds it, so the shape holds at
+    every count.
     """
     if action_count < 2:
         raise ValueError("a z→z bundle needs a recipient action and a change action")
@@ -323,6 +350,8 @@ class HeapProbe(NamedTuple):
     max_orchard_actions: int
     max_ironwood_actions: int
     max_transparent_inputs: int
+    # Orchard derivations the run has requested so far.
+    orchard_derivations: int
 
 
 def _heap_probe(client: ZcashCommandSender) -> HeapProbe | None:
@@ -338,12 +367,13 @@ def _heap_probe(client: ZcashCommandSender) -> HeapProbe | None:
             return None
         raise
 
-    assert len(response.data) == 10
+    assert len(response.data) == 14
     return HeapProbe(
         largest_free_block=int.from_bytes(response.data[0:4], byteorder="big"),
         max_orchard_actions=int.from_bytes(response.data[4:6], byteorder="big"),
         max_ironwood_actions=int.from_bytes(response.data[6:8], byteorder="big"),
         max_transparent_inputs=int.from_bytes(response.data[8:10], byteorder="big"),
+        orchard_derivations=int.from_bytes(response.data[10:14], byteorder="big"),
     )
 
 
@@ -441,6 +471,8 @@ class Shape(StrEnum):
     CONSOLIDATION = "consolidation"
     # One recipient, one hidden change note, the rest spends: what a z→z send builds.
     Z_TO_Z = "z-to-z"
+    # Transfers to other accounts of the seed, one derivation per distinct account.
+    OWN_ACCOUNTS = "own-accounts"
     # Transparent inputs carrying the script a Ledger-derived UTXO really has.
     TRANSPARENT_P2PKH = "transparent-p2pkh"
 
@@ -726,6 +758,191 @@ def test_pczt_transparent_input_script_must_be_p2pkh(backend, script: bytes):
     assert not error.value.data
 
 
+def _assert_still_answering(client: ZcashCommandSender) -> None:
+    """The refusal left the application running: it answers the next command."""
+    assert client.get_version().status == 0x9000
+
+
+def test_pczt_full_transparent_inputs_and_shielded_actions_refuse_with_a_status_word(backend):
+    """Both bounds at once are more than the heap holds, and the device must say so, not exit.
+
+    Every transparent input stays retained while each of the 32 actions is parsed. Without a check,
+    an infallible allocation on the first action's key or decryption path exits the application;
+    the count packet now refuses first, while the refusal is still a status word.
+    """
+    client = ZcashCommandSender(backend)
+    transparent_inputs = [_transparent_input(_P2PKH_SCRIPT)] * _SHIPPED_MAX_TRANSPARENT_INPUTS
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=transparent_inputs,
+            transparent_outputs=[],
+            orchard_bundle=_z_to_z_bundle(_SHIPPED_MAX_ORCHARD_ACTIONS),
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    _assert_still_answering(client)
+
+
+def test_pczt_full_transparent_inputs_and_ironwood_actions_refuse_at_the_count_packet(backend):
+    """The Ironwood count packet applies the same headroom check as the Orchard one.
+
+    The refusal is required at the count packet itself, before any action field is sent: past it,
+    a later allocation would refuse too, so only the packet it comes on tells the check apart. Every
+    action is a real spend with no change note and one transparent output takes all but the fee, so
+    with fewer inputs the same transaction reaches the review.
+    """
+    client = ZcashCommandSender(backend)
+    transparent_inputs = [_transparent_input(_P2PKH_SCRIPT)] * _SHIPPED_MAX_TRANSPARENT_INPUTS
+    actions = [_valid_ironwood_action() for _ in range(_SHIPPED_MAX_IRONWOOD_ACTIONS)]
+    total_in = sum(i.value for i in transparent_inputs) + sum(a.spend_value - a.value for a in actions)
+    payment = PcztTransparentOutput(value=total_in - _FEE, script_pubkey=_P2PKH_SCRIPT)
+    bundle = PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(a.spend_value - a.value for a in actions),
+        flags=_FLAGS,
+        anchor=bytes(32),
+    )
+    # pylint: disable=protected-access
+    client._send_pczt_header(PCZT_V6_GLOBAL)
+    client._send_pczt_transparent_inputs(transparent_inputs)
+    client._send_pczt_transparent_outputs_sync([payment])
+    client._send_pczt_orchard_actions_sync(PcztOrchardBundle(actions=[], flags=0, value_balance=0, anchor=bytes(32)))
+    packets = client._build_pczt_ironwood_action_packets(bundle)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        backend.exchange(
+            cla=CLA,
+            ins=InsType.PCZT_IRONWOOD_ACTION,
+            p1=client._pczt_chunk_p1(0, len(packets)),
+            p2=client._pczt_chunk_p2(0, len(packets), pczt_finished=True),
+            data=packets[0],
+        )
+    # pylint: enable=protected-access
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    _assert_still_answering(client)
+
+
+def test_pczt_review_too_large_for_the_heap_refuses_before_it_is_shown(backend):
+    """A review the heap cannot build is refused before any screen, not partway through it.
+
+    Four recipients and a change note fit the output budgets, but beside the full count of
+    transparent inputs the review's own allocations no longer fit. Without a check, the application
+    exits while drawing the review.
+    """
+    actions = [_external_recipient_ironwood_action() for _ in range(_MAX_SHIELDED_DISPLAYED_OUTPUTS)]
+    actions.append(_dummy_ironwood_action())
+    bundle = PcztIronwoodBundle(
+        actions=actions,
+        value_balance=sum(a.spend_value - a.value for a in actions),
+        flags=3,
+        anchor=bytes(32),
+    )
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_100K] * _SHIPPED_MAX_TRANSPARENT_INPUTS,
+            transparent_outputs=[],
+            ironwood_bundle=bundle,
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    _assert_still_answering(client)
+
+
+# Transparent inputs beside a shielding into four notes. That review shows the most shielded
+# outputs, so it is the one the heap bounds first: 27 inputs fit on Flex and Nano S Plus and 28 do
+# not. This stays below that edge, which moves with what the SDK allocates for a review.
+_SHIELD_INTO_FOUR_NOTES_INPUTS = 24
+
+
+@pytest.mark.parametrize(
+    ("change_notes", "with_recipient", "inputs"),
+    [(5, True, _SHIPPED_MAX_TRANSPARENT_INPUTS), (4, False, _SHIELD_INTO_FOUR_NOTES_INPUTS)],
+    ids=["recipient_and_five_change_notes", "shield_into_four_notes"],
+)
+def test_pczt_split_change_beside_transparent_inputs_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    change_notes: int,
+    with_recipient: bool,
+    inputs: int,
+):
+    """The largest split change each review allows still signs beside many transparent inputs.
+
+    One recipient and five change notes is the most the output budgets accept, and signs beside every
+    transparent input; shielding into four notes puts the most shielded outputs on the review. Both
+    leave the heap at its tightest when the review is built. The fee this shape implies is not
+    realistic; only the shape is under test.
+    """
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=[_TRANSPARENT_INPUT_100K] * inputs,
+        transparent_outputs=[],
+        ironwood_bundle=_split_change_bundle(change_notes, with_recipient=with_recipient),
+    ):
+        _approve_review(scenario_navigator)
+
+    for input_index in range(inputs):
+        signature = client.pczt_sign_transparent(input_index=input_index).data
+        assert len(signature) > 0, f"input {input_index} of {inputs}"
+    if with_recipient:
+        assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
+
+
+def test_pczt_shield_into_four_notes_beside_every_transparent_input_is_refused(backend):
+    """Past what the heap holds for its review, the transaction is refused, not the app exited."""
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=[_TRANSPARENT_INPUT_100K] * _SHIPPED_MAX_TRANSPARENT_INPUTS,
+            transparent_outputs=[],
+            ironwood_bundle=_split_change_bundle(4, with_recipient=False),
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    _assert_still_answering(client)
+
+
+def test_pczt_t_to_z_carries_the_shipped_transparent_input_bound(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A t→z with the shipped bound of transparent inputs parses, reviews and signs.
+
+    The transparent tests above drive t→t, which leaves the shielded parser idle. Here every input
+    stays retained on the heap while the Ironwood actions are validated, which is where the heap is
+    tightest: each action's `enc_ciphertext` is buffered then trial-decrypted with all of them
+    still held. The fee this shape implies is not realistic; only the shape is under test.
+    """
+    client = ZcashCommandSender(backend)
+    transparent_inputs = [_TRANSPARENT_INPUT_100K] * _SHIPPED_MAX_TRANSPARENT_INPUTS
+
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=transparent_inputs,
+        transparent_outputs=[],
+        ironwood_bundle=_ironwood_bundle_with_external_recipient(),
+    ):
+        _approve_review(scenario_navigator)
+
+    for input_index in range(_SHIPPED_MAX_TRANSPARENT_INPUTS):
+        signature = client.pczt_sign_transparent(input_index=input_index).data
+        assert len(signature) > 0, f"input {input_index} of {_SHIPPED_MAX_TRANSPARENT_INPUTS}"
+    assert len(client.pczt_sign_ironwood(action_index=0).data) > 0
+
+
 def test_pczt_transparent_inputs_at_the_shipped_bound(
     backend,
     scenario_navigator: NavigateWithScenario,
@@ -771,3 +988,155 @@ def test_pczt_transparent_inputs_at_the_shipped_bound(
             input_index=input_index,
             input_amounts=input_amounts,
         ), f"input {input_index} of {_SHIPPED_MAX_TRANSPARENT_INPUTS}"
+
+
+# ── Transfers to other accounts of the seed ────────────────────────────────────
+#
+# Each distinct account an output declares costs one Orchard derivation and two retained viewing
+# keys, on top of the source account's. These drive the shapes that maximize that cost.
+
+
+def _own_account_shield(
+    vectors: list[OwnAccountVector],
+    input_count: int = 1,
+) -> tuple[list[PcztTransparentInput], PcztIronwoodBundle]:
+    """t→z paying each vector's account from transparent inputs; the excess is the fee."""
+    actions = [own_account_ironwood_action(vector) for vector in vectors]
+    paid = sum(vector.value for vector in vectors)
+    per_input = paid // input_count + 10_000
+    inputs = [
+        PcztTransparentInput(
+            prevout_txid=bytes.fromhex("4242424242424242424242424242424242424242424242424242424242424242"),
+            prevout_index=index,
+            value=per_input,
+            script_pubkey=_P2PKH_SCRIPT,
+            sequence=bytes.fromhex("ffffffff"),
+            signing_path="m/44'/133'/0'/0/0",
+        )
+        for index in range(input_count)
+    ]
+    bundle = PcztIronwoodBundle(actions=actions, value_balance=-paid, flags=3, anchor=bytes(32))
+    return inputs, bundle
+
+
+def _review_own_account_shield(
+    backend,
+    scenario_navigator,
+    vectors,
+    input_count: int = 1,
+) -> tuple[ZcashCommandSender, HeapProbe | None]:
+    """Parse and approve the transfer, then sample the heap while the session still holds it all.
+
+    Sampled before signing for the reason `_drive_bundle` gives, and because the status screen the
+    last signature brings up refuses the probe on some devices.
+    """
+    client = ZcashCommandSender(backend)
+    inputs, bundle = _own_account_shield(vectors, input_count)
+    with client.send_pczt(
+        pczt_global=PCZT_V6_GLOBAL,
+        transparent_inputs=inputs,
+        transparent_outputs=[],
+        ironwood_bundle=bundle,
+    ):
+        _approve_review(scenario_navigator)
+    return client, _heap_probe(client)
+
+
+def _sign_transparent_inputs(client: ZcashCommandSender, input_count: int) -> None:
+    for input_index in range(input_count):
+        assert len(client.pczt_sign_transparent(input_index=input_index).data) > 0
+
+
+def test_pczt_own_account_outputs_to_one_account_cost_one_derivation(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    record_property,
+):
+    """Two outputs to account 1 derive its keys once; a new PCZT header derives them again.
+
+    The source account costs one derivation and account 1 one more, however many outputs name it.
+    The second session starts with a new header, which empties the key cache, so it pays both again.
+    """
+    before = _heap_probe(ZcashCommandSender(backend))
+    if before is None:
+        pytest.skip("application built without the heap_probe feature")
+    vectors = [IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, IRONWOOD_ACCOUNT_1_EXTERNAL_NO_OVK]
+
+    _, first = _review_own_account_shield(backend, scenario_navigator, vectors)
+    assert first is not None
+    assert first.orchard_derivations - before.orchard_derivations == 2
+    _report(record_property, len(vectors), Shape.OWN_ACCOUNTS, first)
+
+    client, second = _review_own_account_shield(backend, scenario_navigator, vectors)
+    assert second is not None
+    assert second.orchard_derivations - first.orchard_derivations == 2
+    _sign_transparent_inputs(client, 1)
+
+
+def test_pczt_own_account_outputs_to_four_accounts_sign(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    record_property,
+):
+    """Outputs to four distinct accounts, the most the review shows, parse, review and sign."""
+    vectors = [IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, IRONWOOD_ACCOUNT_2, IRONWOOD_ACCOUNT_3, IRONWOOD_ACCOUNT_4]
+
+    client, probe = _review_own_account_shield(backend, scenario_navigator, vectors)
+    _report(record_property, len(vectors), Shape.OWN_ACCOUNTS, probe)
+    _sign_transparent_inputs(client, 1)
+
+
+def test_pczt_own_account_outputs_to_a_fifth_account_are_refused(backend):
+    """A fifth distinct account is refused at its declaration, before its keys are derived.
+
+    Its output carries account 4's note declared as account 5. Past the bound it would fail to
+    decrypt under account 5 and be refused with IncorrectData instead, so the status word tells which
+    check refused it.
+    """
+    four = [IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, IRONWOOD_ACCOUNT_2, IRONWOOD_ACCOUNT_3, IRONWOOD_ACCOUNT_4]
+    inputs, bundle = _own_account_shield([*four, IRONWOOD_ACCOUNT_4])
+    bundle.actions[-1] = own_account_ironwood_action(IRONWOOD_ACCOUNT_4, declared=5)
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=inputs,
+            transparent_outputs=[],
+            ironwood_bundle=bundle,
+        ):
+            pass
+
+    assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+    assert not error.value.data
+    with pytest.raises(ExceptionRAPDU):
+        client.pczt_sign_transparent(input_index=0)
+    _assert_still_answering(client)
+
+
+@pytest.mark.parametrize("account_count", [1, 4])
+def test_pczt_own_account_outputs_beside_the_shipped_transparent_input_bound(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    record_property,
+    account_count: int,
+):
+    """Beside every transparent input, transfers to other accounts sign or refuse with a status word.
+
+    The derivations land while every input is retained, the heap at its tightest. Either outcome is
+    acceptable; an application exit is not, and is what `_assert_still_answering` catches.
+    """
+    vectors = [IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, IRONWOOD_ACCOUNT_2, IRONWOOD_ACCOUNT_3, IRONWOOD_ACCOUNT_4][:account_count]
+    try:
+        client, probe = _review_own_account_shield(backend, scenario_navigator, vectors, _SHIPPED_MAX_TRANSPARENT_INPUTS)
+    except ExceptionRAPDU as error:
+        assert error.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
+        _assert_still_answering(ZcashCommandSender(backend))
+        record_property("outcome", "refused")
+        print(f"\n[capacity] own accounts={account_count} beside {_SHIPPED_MAX_TRANSPARENT_INPUTS} inputs: refused")
+        return
+
+    record_property("outcome", "signed")
+    print(f"\n[capacity] own accounts={account_count} beside {_SHIPPED_MAX_TRANSPARENT_INPUTS} inputs: signed")
+    _report(record_property, account_count, Shape.OWN_ACCOUNTS, probe)
+    _sign_transparent_inputs(client, _SHIPPED_MAX_TRANSPARENT_INPUTS)

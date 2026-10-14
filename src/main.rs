@@ -50,7 +50,6 @@ mod tx;
 mod utils;
 mod zip32;
 
-use alloc::boxed::Box;
 use core::mem::{self, MaybeUninit};
 
 use app_ui::menu::ui_menu_main;
@@ -62,7 +61,7 @@ use ledger_device_sdk::log::{debug, error};
 use ledger_device_sdk::nbgl::StatusType;
 use ledger_device_sdk::{io::StatusWords, libcall::swap::CreateTxParams};
 use ledger_device_sdk::{
-    io::{ApduHeader, Comm, Reply},
+    io::{ApduHeader, Comm, CommError, Command, CommandResponse, Reply},
     nbgl::init_comm,
 };
 use tx::TxContext;
@@ -109,6 +108,7 @@ extern crate alloc;
 
 #[cfg(not(test))]
 ledger_device_sdk::set_panic!(panic_handler);
+ledger_device_sdk::define_comm!(COMM);
 
 // Reports a panicking test instead of exiting the app, so the run continues to the next case.
 #[cfg(test)]
@@ -167,6 +167,12 @@ pub enum AppSW {
 impl From<AppSW> for Reply {
     fn from(sw: AppSW) -> Reply {
         Reply(sw as u16)
+    }
+}
+
+impl From<CommError> for AppSW {
+    fn from(_: CommError) -> Self {
+        Self::TechnicalProblem
     }
 }
 
@@ -379,7 +385,25 @@ impl TryFrom<ApduHeader> for Instruction {
     }
 }
 
-fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, status: &AppSW) {
+/// The outcome of a command once its reply has been attempted. A reply the transport did not
+/// deliver fails the command, so the transaction state it reached is reset like on any error and
+/// a swap ends refused.
+fn delivered_status(sent: Result<(), CommError>, status: AppSW) -> AppSW {
+    match sent {
+        Ok(()) => status,
+        Err(err) => {
+            error!("APDU reply not delivered");
+            err.into()
+        }
+    }
+}
+
+fn show_status_and_home_if_needed(
+    comm: &mut Comm,
+    ins: &Instruction,
+    tx_ctx: &mut TxContext,
+    status: &AppSW,
+) {
     if tx_ctx.swap_params.is_some() {
         return;
     }
@@ -429,7 +453,7 @@ fn show_status_and_home_if_needed(ins: &Instruction, tx_ctx: &mut TxContext, sta
             let success = *status == AppSW::Ok;
             NbglReviewStatus::new()
                 .status_type(status_type)
-                .show(success);
+                .show(comm, success);
         }
 
         // call home.show_and_return() to show home and setting screen
@@ -491,8 +515,15 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
     // Create the communication manager, and configure it to accept only APDU from the 0xe0 class.
     // If any APDU with a wrong class value is received, comm will respond automatically with
     // BadCla status word.
-    let mut comm = Box::new(Comm::new().set_expected_cla(ZCASH_CLA));
-    init_comm(&mut comm);
+    let comm_ptr: *mut Comm = init_comm(&COMM);
+    if swap_params.is_some() {
+        // SAFETY: `comm_ptr` is the static Comm, which outlives the swap call.
+        unsafe { swap::panic_handler::set_swap_comm(comm_ptr) };
+    }
+    // SAFETY: the swap panic handler reborrows from this same pointer, and only from a panic,
+    // after which this borrow is never used again.
+    let comm = unsafe { &mut *comm_ptr };
+    comm.set_expected_cla(ZCASH_CLA);
 
     init_trusted_input_key_storage();
 
@@ -513,26 +544,33 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
     debug!("TxContext size {} bytes", mem::size_of::<TxContext>());
 
     if swap_params.is_none() {
-        tx_ctx.home = ui_menu_main(&mut comm);
+        tx_ctx.home = ui_menu_main(comm);
         tx_ctx.home.show_and_return();
     }
 
     loop {
-        let ins: Instruction = comm.next_command();
+        // A locked device never gets here: the SDK answers DeviceLocked to every frame first.
+        let command = comm.next_command();
+        let ins = match command.decode::<Instruction>() {
+            Ok(ins) => ins,
+            Err(sw) => {
+                // Decode failures must not reach a transaction handler. No state was touched,
+                // so a reply the transport loses leaves nothing to undo.
+                if command.reply(&[], sw).is_err() {
+                    error!("APDU reply not delivered");
+                }
+                continue;
+            }
+        };
 
         debug!("Received APDU {:?}", ins);
 
-        let status = match handle_apdu(&mut comm, &ins, tx_ctx) {
-            Ok(()) => {
-                comm.reply_ok();
-                AppSW::Ok
-            }
-            Err(sw) => {
-                comm.reply(sw);
-                sw
-            }
+        let status = match handle_apdu(command, &ins, tx_ctx) {
+            Ok(response) => delivered_status(response.send(AppSW::Ok).map(|_| ()), AppSW::Ok),
+            // Not `Comm::send`: it unwraps the transport result inside the SDK.
+            Err(sw) => delivered_status(comm.begin_response().send(sw).map(|_| ()), sw),
         };
-        show_status_and_home_if_needed(&ins, tx_ctx, &status);
+        show_status_and_home_if_needed(comm, &ins, tx_ctx, &status);
 
         let is_error = status != AppSW::Ok;
         let is_finished = tx_ctx.is_finished();
@@ -571,60 +609,64 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
     }
 }
 
-fn handle_apdu(comm: &mut Comm, ins: &Instruction, ctx: &mut TxContext) -> Result<(), AppSW> {
+fn handle_apdu<'a>(
+    command: Command<'a>,
+    ins: &Instruction,
+    ctx: &mut TxContext,
+) -> Result<CommandResponse<'a>, AppSW> {
     match ins {
-        Instruction::GetVersion => handler_get_version(comm),
-        Instruction::GetPubkey { display } => handler_get_public_key(comm, *display),
+        Instruction::GetVersion => handler_get_version(command),
+        Instruction::GetPubkey { display } => handler_get_public_key(command, *display),
         Instruction::GetVk {
             mode,
             continue_response,
-        } => handler_get_vk(comm, ctx, *mode, *continue_response),
+        } => handler_get_vk(command, ctx, *mode, *continue_response),
         Instruction::GetShieldedAddr { mode, display } => {
-            handler_get_shielded_addr(comm, *mode, *display)
+            handler_get_shielded_addr(command, *mode, *display)
         }
         Instruction::GetTrustedInput { first, next } => {
-            handler_get_trusted_input(comm, ctx, *first, *next)
+            handler_get_trusted_input(command, ctx, *first, *next)
         }
         Instruction::HashInputStart {
             first,
             continue_hashing,
-        } => handler_hash_input_start(comm, ctx, *first, *continue_hashing),
+        } => handler_hash_input_start(command, ctx, *first, *continue_hashing),
         Instruction::HashFinalizeFull { is_change } => {
-            handler_hash_input_finalize_full(comm, ctx, *is_change)
+            handler_hash_input_finalize_full(command, ctx, *is_change)
         }
-        Instruction::HashSign => handler_hash_sign(comm, ctx),
-        Instruction::PcztHeader => handler_pczt_header(comm, ctx),
+        Instruction::HashSign => handler_hash_sign(command, ctx),
+        Instruction::PcztHeader => handler_pczt_header(command, ctx),
         Instruction::PcztTransparentInput { first, last } => {
-            handler_pczt_transparent_input(comm, ctx, *first, *last)
+            handler_pczt_transparent_input(command, ctx, *first, *last)
         }
         Instruction::PcztTransparentOutput { first, last } => {
-            handler_pczt_transparent_output(comm, ctx, *first, *last)
+            handler_pczt_transparent_output(command, ctx, *first, *last)
         }
         Instruction::PcztOrchardAction {
             first,
             last,
             finished,
-        } => handler_pczt_orchard_action(comm, ctx, *first, *last, *finished),
+        } => handler_pczt_orchard_action(command, ctx, *first, *last, *finished),
         Instruction::PcztSignTransparent { input_index } => {
-            handler_pczt_sign_transparent(comm, ctx, *input_index)
+            handler_pczt_sign_transparent(command, ctx, *input_index)
         }
         Instruction::PcztSignOrchard { action_index } => {
-            handler_pczt_sign_orchard(comm, ctx, *action_index)
+            handler_pczt_sign_orchard(command, ctx, *action_index)
         }
         Instruction::PcztIronwoodAction {
             first,
             last,
             finished,
-        } => handler_pczt_ironwood_action(comm, ctx, *first, *last, *finished),
+        } => handler_pczt_ironwood_action(command, ctx, *first, *last, *finished),
         Instruction::PcztSignIronwood { action_index } => {
-            handler_pczt_sign_ironwood(comm, ctx, *action_index)
+            handler_pczt_sign_ironwood(command, ctx, *action_index)
         }
         Instruction::PcztInvalid { sw } => {
             ctx.pczt_parser.reset();
             Err(*sw)
         }
         #[cfg(feature = "heap_probe")]
-        Instruction::HeapProbe => handler_heap_probe(comm),
+        Instruction::HeapProbe => handler_heap_probe(command),
     }
 }
 
@@ -641,4 +683,40 @@ pub fn panic_handler(info: &PanicInfo) -> ! {
 
     error!("Panicking: {:?}\n", info);
     ledger_device_sdk::exiting_panic(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppSW, delivered_status};
+    use ledger_device_sdk::io::CommError;
+    use ledger_device_sdk::testing::TestType;
+
+    #[test_case]
+    const DELIVERED_REPLY_KEEPS_ITS_STATUS: TestType = TestType {
+        modname: module_path!(),
+        name: "delivered_reply_keeps_its_status",
+        f: || {
+            if delivered_status(Ok(()), AppSW::Ok) != AppSW::Ok
+                || delivered_status(Ok(()), AppSW::Deny) != AppSW::Deny
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// A signature the host never received must not leave the command counted as a success.
+    #[test_case]
+    const UNDELIVERED_REPLY_FAILS_THE_COMMAND: TestType = TestType {
+        modname: module_path!(),
+        name: "undelivered_reply_fails_the_command",
+        f: || {
+            for err in [CommError::IoError, CommError::Overflow] {
+                if delivered_status(Err(err), AppSW::Ok) == AppSW::Ok {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
 }

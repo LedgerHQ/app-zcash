@@ -6,10 +6,11 @@ use core::fmt;
 use blake2b_simd::{Hash, Params};
 use group::ff::PrimeField;
 use zcash_note_encryption::{
-    BatchDomain, Domain, EphemeralKeyBytes, NotePlaintextBytes, OutPlaintextBytes,
-    OutgoingCipherKey, ShieldedOutput, COMPACT_NOTE_SIZE, ENC_CIPHERTEXT_SIZE, NOTE_PLAINTEXT_SIZE,
-    OUT_PLAINTEXT_SIZE,
+    BatchDomain, Domain, EphemeralKeyBytes, OutPlaintextBytes, OutgoingCipherKey, ShieldedOutput,
+    AEAD_TAG_SIZE, OUT_PLAINTEXT_SIZE,
 };
+
+pub use zcash_note_encryption::note_bytes::NoteBytesData;
 
 use crate::{
     action::Action,
@@ -21,6 +22,28 @@ use crate::{
     value::{NoteValue, ValueCommitment},
     Address, Note,
 };
+
+/// The size of the compact part of an Orchard note plaintext.
+///
+/// This is the prefix of the note plaintext that light clients receive, and
+/// covers every field except the memo.
+pub const COMPACT_NOTE_SIZE: usize = 1 + // version lead byte
+    11 + // diversifier
+    8 +  // value
+    32; // rseed
+/// The size of a full Orchard note plaintext.
+pub const NOTE_PLAINTEXT_SIZE: usize = COMPACT_NOTE_SIZE + 512; // memo
+/// The size of an encrypted Orchard note plaintext.
+pub const ENC_CIPHERTEXT_SIZE: usize = NOTE_PLAINTEXT_SIZE + AEAD_TAG_SIZE;
+
+/// The byte encoding of an Orchard note plaintext.
+pub type NotePlaintextBytes = NoteBytesData<NOTE_PLAINTEXT_SIZE>;
+/// The byte encoding of an encrypted Orchard note plaintext.
+pub type NoteCiphertextBytes = NoteBytesData<ENC_CIPHERTEXT_SIZE>;
+/// The byte encoding of the compact part of an Orchard note plaintext.
+pub type CompactNotePlaintextBytes = NoteBytesData<COMPACT_NOTE_SIZE>;
+/// The byte encoding of the compact part of an encrypted Orchard note plaintext.
+pub type CompactNoteCiphertextBytes = NoteBytesData<COMPACT_NOTE_SIZE>;
 
 const PRF_OCK_ORCHARD_PERSONALIZATION: &[u8; 16] = b"Zcash_Orchardock";
 
@@ -230,6 +253,11 @@ impl<P: DomainPolicy> Domain for NoteEncryptionDomain<P> {
     type ExtractedCommitmentBytes = [u8; 32];
     type Memo = [u8; 512]; // TODO use a more interesting type
 
+    type NotePlaintextBytes = NotePlaintextBytes;
+    type NoteCiphertextBytes = NoteCiphertextBytes;
+    type CompactNotePlaintextBytes = CompactNotePlaintextBytes;
+    type CompactNoteCiphertextBytes = CompactNoteCiphertextBytes;
+
     fn derive_esk(note: &Self::Note) -> Option<Self::EphemeralSecretKey> {
         Some(note.esk())
     }
@@ -267,14 +295,14 @@ impl<P: DomainPolicy> Domain for NoteEncryptionDomain<P> {
         secret.kdf_orchard(ephemeral_key)
     }
 
-    fn note_plaintext_bytes(note: &Self::Note, memo: &Self::Memo) -> NotePlaintextBytes {
+    fn note_plaintext_bytes(note: &Self::Note, memo: &Self::Memo) -> Self::NotePlaintextBytes {
         let mut np = [0; NOTE_PLAINTEXT_SIZE];
         np[0] = note.version().lead_byte();
         np[1..12].copy_from_slice(note.recipient().diversifier().as_array());
         np[12..20].copy_from_slice(&note.value().to_bytes());
         np[20..52].copy_from_slice(note.rseed().as_bytes());
         np[52..].copy_from_slice(memo);
-        NotePlaintextBytes(np)
+        NoteBytesData(np)
     }
 
     fn derive_ock(
@@ -311,10 +339,10 @@ impl<P: DomainPolicy> Domain for NoteEncryptionDomain<P> {
     fn parse_note_plaintext_without_memo_ivk(
         &self,
         ivk: &Self::IncomingViewingKey,
-        plaintext: &[u8],
+        plaintext: &Self::CompactNotePlaintextBytes,
     ) -> Option<(Self::Note, Self::Recipient)> {
-        let note_version = self.policy.note_version(plaintext)?;
-        parse_note_plaintext_without_memo(self.rho, plaintext, note_version, |diversifier| {
+        let note_version = self.policy.note_version(&plaintext.0)?;
+        parse_note_plaintext_without_memo(self.rho, &plaintext.0, note_version, |diversifier| {
             DiversifiedTransmissionKey::derive(ivk, diversifier)
         })
     }
@@ -322,16 +350,21 @@ impl<P: DomainPolicy> Domain for NoteEncryptionDomain<P> {
     fn parse_note_plaintext_without_memo_ovk(
         &self,
         pk_d: &Self::DiversifiedTransmissionKey,
-        plaintext: &NotePlaintextBytes,
+        plaintext: &Self::CompactNotePlaintextBytes,
     ) -> Option<(Self::Note, Self::Recipient)> {
         let note_version = self.policy.note_version(&plaintext.0)?;
         parse_note_plaintext_without_memo(self.rho, &plaintext.0, note_version, |_| *pk_d)
     }
 
-    fn extract_memo(&self, plaintext: &NotePlaintextBytes) -> Self::Memo {
-        plaintext.0[COMPACT_NOTE_SIZE..NOTE_PLAINTEXT_SIZE]
-            .try_into()
-            .unwrap()
+    fn split_plaintext_at_memo(
+        &self,
+        plaintext: &Self::NotePlaintextBytes,
+    ) -> Option<(Self::CompactNotePlaintextBytes, Self::Memo)> {
+        let (compact, memo) = plaintext.0.split_at(COMPACT_NOTE_SIZE);
+        Some((
+            NoteBytesData(compact.try_into().ok()?),
+            memo.try_into().ok()?,
+        ))
     }
 
     fn extract_pk_d(out_plaintext: &OutPlaintextBytes) -> Option<Self::DiversifiedTransmissionKey> {
@@ -396,49 +429,78 @@ fn batch_kdf<'a>(
         .collect()
 }
 
-impl<P: DomainPolicy, T> ShieldedOutput<NoteEncryptionDomain<P>, ENC_CIPHERTEXT_SIZE>
-    for Action<T>
-{
+/// Truncates a full note ciphertext to the compact part that light clients receive.
+fn compact_ciphertext(enc_ciphertext: &NoteCiphertextBytes) -> CompactNoteCiphertextBytes {
+    NoteBytesData(
+        enc_ciphertext.0[..COMPACT_NOTE_SIZE]
+            .try_into()
+            .expect("COMPACT_NOTE_SIZE <= ENC_CIPHERTEXT_SIZE"),
+    )
+}
+
+impl<P: DomainPolicy, T> ShieldedOutput<NoteEncryptionDomain<P>> for Action<T> {
     fn ephemeral_key(&self) -> EphemeralKeyBytes {
         EphemeralKeyBytes(self.encrypted_note().epk_bytes)
+    }
+
+    fn cmstar(&self) -> &ExtractedNoteCommitment {
+        self.cmx()
     }
 
     fn cmstar_bytes(&self) -> [u8; 32] {
         self.cmx().to_bytes()
     }
 
-    fn enc_ciphertext(&self) -> &[u8; ENC_CIPHERTEXT_SIZE] {
-        &self.encrypted_note().enc_ciphertext
+    fn enc_ciphertext(&self) -> Option<&NoteCiphertextBytes> {
+        Some(&self.encrypted_note().enc_ciphertext)
+    }
+
+    fn enc_ciphertext_compact(&self) -> CompactNoteCiphertextBytes {
+        compact_ciphertext(&self.encrypted_note().enc_ciphertext)
     }
 }
 
-impl<P: DomainPolicy> ShieldedOutput<NoteEncryptionDomain<P>, ENC_CIPHERTEXT_SIZE>
-    for crate::pczt::Action
-{
+impl<P: DomainPolicy> ShieldedOutput<NoteEncryptionDomain<P>> for crate::pczt::Action {
     fn ephemeral_key(&self) -> EphemeralKeyBytes {
         EphemeralKeyBytes(self.output().encrypted_note().epk_bytes)
+    }
+
+    fn cmstar(&self) -> &ExtractedNoteCommitment {
+        self.output().cmx()
     }
 
     fn cmstar_bytes(&self) -> [u8; 32] {
         self.output().cmx().to_bytes()
     }
 
-    fn enc_ciphertext(&self) -> &[u8; ENC_CIPHERTEXT_SIZE] {
-        &self.output().encrypted_note().enc_ciphertext
+    fn enc_ciphertext(&self) -> Option<&NoteCiphertextBytes> {
+        Some(&self.output().encrypted_note().enc_ciphertext)
+    }
+
+    fn enc_ciphertext_compact(&self) -> CompactNoteCiphertextBytes {
+        compact_ciphertext(&self.output().encrypted_note().enc_ciphertext)
     }
 }
 
-impl<P: DomainPolicy> ShieldedOutput<NoteEncryptionDomain<P>, COMPACT_NOTE_SIZE> for CompactAction {
+impl<P: DomainPolicy> ShieldedOutput<NoteEncryptionDomain<P>> for CompactAction {
     fn ephemeral_key(&self) -> EphemeralKeyBytes {
         EphemeralKeyBytes(self.ephemeral_key.0)
+    }
+
+    fn cmstar(&self) -> &ExtractedNoteCommitment {
+        &self.cmx
     }
 
     fn cmstar_bytes(&self) -> [u8; 32] {
         self.cmx.to_bytes()
     }
 
-    fn enc_ciphertext(&self) -> &[u8; COMPACT_NOTE_SIZE] {
-        &self.enc_ciphertext
+    fn enc_ciphertext(&self) -> Option<&NoteCiphertextBytes> {
+        None
+    }
+
+    fn enc_ciphertext_compact(&self) -> CompactNoteCiphertextBytes {
+        NoteBytesData(self.enc_ciphertext)
     }
 }
 
@@ -484,7 +546,7 @@ impl<T> From<&Action<T>> for CompactAction {
             nullifier: *action.nullifier(),
             cmx: *action.cmx(),
             ephemeral_key: EphemeralKeyBytes(action.encrypted_note().epk_bytes),
-            enc_ciphertext: action.encrypted_note().enc_ciphertext[..52]
+            enc_ciphertext: action.encrypted_note().enc_ciphertext.0[..COMPACT_NOTE_SIZE]
                 .try_into()
                 .unwrap(),
         }
@@ -526,7 +588,7 @@ impl CompactAction {
 /// Utilities for constructing test data.
 #[cfg(feature = "test-dependencies")]
 pub mod testing {
-    use rand::RngCore;
+    use rand::Rng;
     use zcash_note_encryption::Domain;
 
     use crate::{
@@ -541,7 +603,7 @@ pub mod testing {
     /// Creates a fake `CompactAction` paying the given recipient the specified value.
     ///
     /// Returns the `CompactAction` and the new note.
-    pub fn fake_compact_action<R: RngCore>(
+    pub fn fake_compact_action<R: Rng>(
         rng: &mut R,
         nf_old: Nullifier,
         recipient: Address,
@@ -582,7 +644,7 @@ mod tests {
     use alloc::string::String;
     use alloc::vec::Vec;
 
-    use rand::rngs::OsRng;
+    use rand::{rand_core::UnwrapErr, rngs::SysRng};
     use std::println;
     use zcash_note_encryption::{
         batch, try_compact_note_decryption, try_note_decryption, try_output_recovery_with_ovk,
@@ -591,7 +653,7 @@ mod tests {
 
     use super::{
         prf_ock_orchard, CompactAction, DomainVersion, IronwoodDomain, IronwoodNoteEncryption,
-        IronwoodVersion, NoteEncryptionDomain, OrchardDomain, OrchardNoteEncryption,
+        IronwoodVersion, NoteBytesData, NoteEncryptionDomain, OrchardDomain, OrchardNoteEncryption,
         OrchardVersion,
     };
     use crate::{
@@ -616,7 +678,7 @@ mod tests {
         Address,
         [u8; 512],
     ) {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let sk = SpendingKey::random(&mut rng);
         let fvk = crate::keys::FullViewingKey::from(&sk);
         let incoming_viewing_key = fvk.to_ivk(Scope::External);
@@ -709,7 +771,7 @@ mod tests {
                 cmx,
                 TransmittedNoteCiphertext {
                     epk_bytes: ephemeral_key.0,
-                    enc_ciphertext: tv.c_enc,
+                    enc_ciphertext: NoteBytesData(tv.c_enc),
                     out_ciphertext: tv.c_out,
                 },
                 cv_net.clone(),
@@ -758,7 +820,7 @@ mod tests {
 
             assert_eq!(ne.encrypt_note_plaintext().as_ref(), &tv.c_enc[..]);
             assert_eq!(
-                &ne.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut OsRng)[..],
+                &ne.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut UnwrapErr(SysRng))[..],
                 &tv.c_out[..]
             );
         }
@@ -766,7 +828,7 @@ mod tests {
 
     #[test]
     fn domains_accept_only_their_note_plaintext_versions() {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let sk = crate::keys::SpendingKey::random(&mut rng);
         let fvk = crate::keys::FullViewingKey::from(&sk);
         let recipient = fvk.address_at(0u32, crate::keys::Scope::External);
@@ -790,8 +852,14 @@ mod tests {
         let orchard_domain = OrchardDomain::from_rho(rho);
         let ironwood_domain = IronwoodDomain::from_rho(rho);
 
-        let np_v2 = OrchardDomain::note_plaintext_bytes(&note_v2, &memo);
-        let np_v3 = IronwoodDomain::note_plaintext_bytes(&note_v3, &memo);
+        let np_v2 = orchard_domain
+            .split_plaintext_at_memo(&OrchardDomain::note_plaintext_bytes(&note_v2, &memo))
+            .expect("a well-formed note plaintext splits at the memo")
+            .0;
+        let np_v3 = ironwood_domain
+            .split_plaintext_at_memo(&IronwoodDomain::note_plaintext_bytes(&note_v3, &memo))
+            .expect("a well-formed note plaintext splits at the memo")
+            .0;
         let pk_d = recipient.pk_d();
 
         assert_eq!(
@@ -848,7 +916,7 @@ mod tests {
     /// Encrypts a compact output of the domain's note plaintext version to
     /// `recipient`, using a fresh ephemeral key.
     fn encrypted_compact_action<V: DomainVersion>(
-        rng: &mut OsRng,
+        rng: &mut UnwrapErr<SysRng>,
         recipient: Address,
     ) -> CompactAction {
         let nf_old = Nullifier::dummy(rng);
@@ -876,7 +944,7 @@ mod tests {
     /// results, over hits on multiple viewing keys, misses, and an
     /// undecodable ephemeral key.
     fn check_batched_compact_decryption_matches_per_item<V: DomainVersion>() {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
 
         // Two accounts with external and internal scope each — the wallet
         // shape batched trial decryption runs with — plus a foreign account
@@ -956,7 +1024,7 @@ mod tests {
     /// alike.
     #[test]
     fn batched_agreement_matches_per_item() {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
 
         let our_fvk = FullViewingKey::from(&SpendingKey::random(&mut rng));
         let foreign_fvk = FullViewingKey::from(&SpendingKey::random(&mut rng));
@@ -1304,7 +1372,7 @@ mod gen_v3_ext_vectors {
     //! ```
 
     use alloc::{string::String, vec::Vec};
-    use rand::rngs::OsRng;
+    use rand::{rand_core::UnwrapErr, rngs::SysRng};
     use std::println;
     use zcash_note_encryption::Domain;
 
@@ -1493,7 +1561,8 @@ mod gen_v3_ext_vectors {
         let value_net = NoteValue::from_raw(200_000) - NoteValue::from_raw(180_000);
         let ext_cv_net = ValueCommitment::derive(value_net, ext_rcv);
 
-        let out_ct = encryptor.encrypt_outgoing_plaintext(&ext_cv_net, &ext_cmx, &mut OsRng);
+        let out_ct =
+            encryptor.encrypt_outgoing_plaintext(&ext_cv_net, &ext_cmx, &mut UnwrapErr(SysRng));
         println!(
             "_EXT_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
             hex_lines(out_ct.as_ref())
@@ -1609,7 +1678,7 @@ mod gen_v3_ext_vectors {
             hex_str(&cv_net.to_bytes())
         );
 
-        let out_ct = encryptor.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut OsRng);
+        let out_ct = encryptor.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut UnwrapErr(SysRng));
         println!(
             "_MEMO_OUT_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
             hex_lines(out_ct.as_ref())
@@ -1652,6 +1721,698 @@ mod gen_v3_ext_vectors {
         println!(
             "_MEMO_LINE_BREAK_ENC_CIPHERTEXT = bytes.fromhex(\n    \"{}\"\n)",
             hex_lines(encryptor.encrypt_note_plaintext().as_ref())
+        );
+    }
+
+    // _INTERNAL_RECIPIENT — the account's internal-scope (change) address.
+    const INTERNAL_RECIPIENT: [u8; 43] = hex_decode_43(
+        b"ede3d2ce08c11d8c5c7bfe6814cedafd96c160c3d879cb270946f1ab6fdf442a15648d7c0b3c9fd052e20a",
+    );
+    const INTERNAL_SPEND_VALUE: u64 = 20_000;
+    const INTERNAL_SPEND_RHO: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x09;
+        b
+    };
+    const INTERNAL_SPEND_RSEED: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x1d;
+        b
+    };
+    const INTERNAL_OUTPUT_RSEED: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x31;
+        b
+    };
+    const INTERNAL_RCV: [u8; 32] = {
+        let mut b = [0u8; 32];
+        b[0] = 0x45;
+        b
+    };
+
+    /// The spend nullifier of a note paying `spend_recipient`, and the cmx of the
+    /// zero-valued output to `output_recipient` that the same action creates.
+    fn spend_nullifier_and_dummy_cmx(
+        fvk: &FullViewingKey,
+        spend_recipient: Address,
+        spend_value: u64,
+        spend_rho: [u8; 32],
+        spend_rseed: [u8; 32],
+        output_recipient: Address,
+        output_rseed: [u8; 32],
+        version: NoteVersion,
+    ) -> ([u8; 32], [u8; 32]) {
+        let spend_rho = Rho::from_bytes(&spend_rho)
+            .into_option()
+            .expect("spend rho must be valid");
+        let spend_rseed = Option::from(RandomSeed::from_bytes(spend_rseed, &spend_rho))
+            .expect("spend rseed must be valid for rho");
+        let spend_note: Note = Option::from(Note::from_parts(
+            spend_recipient,
+            NoteValue::from_raw(spend_value),
+            spend_rho,
+            spend_rseed,
+            version,
+        ))
+        .expect("spend note must be valid");
+        let nullifier = spend_note.nullifier(fvk).to_bytes();
+
+        let output_rho = Rho::from_bytes(&nullifier)
+            .into_option()
+            .expect("the nullifier must be a valid field element");
+        let output_rseed = Option::from(RandomSeed::from_bytes(output_rseed, &output_rho))
+            .expect("output rseed must be valid for rho");
+        let output_note: Note = Option::from(Note::from_parts(
+            output_recipient,
+            NoteValue::from_raw(0),
+            output_rho,
+            output_rseed,
+            version,
+        ))
+        .expect("output note must be valid");
+        (
+            nullifier,
+            ExtractedNoteCommitment::from(output_note.commitment()).to_bytes(),
+        )
+    }
+
+    fn address(raw: &[u8; 43]) -> Address {
+        Address::from_parts(
+            Diversifier::from_bytes(raw[..11].try_into().unwrap()),
+            DiversifiedTransmissionKey::from_bytes(raw[11..].try_into().unwrap())
+                .expect("pk_d must be valid"),
+        )
+    }
+
+    fn cv_net(spend_value: u64, rcv: [u8; 32]) -> [u8; 32] {
+        let rcv = ValueCommitTrapdoor::from_bytes(rcv)
+            .into_option()
+            .expect("rcv must be a valid scalar");
+        ValueCommitment::derive(
+            NoteValue::from_raw(spend_value) - NoteValue::from_raw(0),
+            rcv,
+        )
+        .to_bytes()
+    }
+
+    fn byte_tagged(tag: u8) -> [u8; 32] {
+        let mut b = [0u8; 32];
+        b[0] = tag;
+        b
+    }
+
+    /// Generate the vectors of a real spend of an internal-scope note, for
+    /// test_pczt_key_reuse.py.
+    ///
+    /// The note pays the account's change address, so the device recognizes it
+    /// through the internal IVK only. Its zero-valued output also goes to that
+    /// address and carries no ciphertext: the device then accepts it on the
+    /// recomputed cmx alone. Printed for both pools, which commit notes with
+    /// different versions. The same derivation first reproduces the committed
+    /// vectors of `_valid_orchard_action` and `_valid_ironwood_action`, which
+    /// the device already accepts.
+    ///
+    /// ```sh
+    /// HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    /// cd /tmp && cargo test --manifest-path <worktree>/vendor/orchard/Cargo.toml \
+    ///   --target "$HOST" --target-dir /tmp/orchard-host \
+    ///   --no-default-features --features std \
+    ///   -- gen_internal_spend_vectors --nocapture
+    /// ```
+    #[test]
+    fn gen_internal_spend_vectors() {
+        let fvk = FullViewingKey::from_bytes(&FVK_BYTES).expect("Speculos Orchard FVK must decode");
+        let internal = address(&INTERNAL_RECIPIENT);
+        assert_eq!(fvk.scope_for_address(&internal), Some(Scope::Internal));
+
+        // _valid_orchard_action / _valid_ironwood_action: an external-scope note.
+        let external_spend = |version| {
+            spend_nullifier_and_dummy_cmx(
+                &fvk,
+                address(&SPEND_RECIPIENT),
+                300_000,
+                byte_tagged(0x06),
+                byte_tagged(0x1a),
+                internal,
+                byte_tagged(0x2e),
+                version,
+            )
+        };
+        assert_eq!(
+            hex_str(&cv_net(300_000, byte_tagged(0x42))),
+            "00b3324110776396d31646041679fd6530d57c353c6be0a93a0cd55b30aa6d8b"
+        );
+        let (nf, cmx) = external_spend(NoteVersion::V2);
+        assert_eq!(
+            hex_str(&nf),
+            "08f337fd695cb5ca2ad7ced8ec14afed06d2f8a0e5e3d8b58dffbc69e4f81b2f"
+        );
+        assert_eq!(
+            hex_str(&cmx),
+            "825f806345d7c2ae67fe186120cc5b8a370c2cedb55ccf76527e9efa43c94d30"
+        );
+        let (nf, cmx) = external_spend(NoteVersion::V3);
+        assert_eq!(
+            hex_str(&nf),
+            "ed37cc733c228dc3dda2cf088ba646f9d204adc9d8d6f95ec36126eb742c3a10"
+        );
+        assert_eq!(
+            hex_str(&cmx),
+            "704b2bfa354eb974b10efe385d7ec56a12abbb906a3a95500bf9d6bbfcb7b73e"
+        );
+
+        println!("\n# ---- internal-scope spend (gen_internal_spend_vectors) ----");
+        println!(
+            "_INTERNAL_SPEND_CV_NET = bytes.fromhex(\"{}\")",
+            hex_str(&cv_net(INTERNAL_SPEND_VALUE, INTERNAL_RCV))
+        );
+        for (pool, version) in [("ORCHARD", NoteVersion::V2), ("IRONWOOD", NoteVersion::V3)] {
+            let (nullifier, cmx) = spend_nullifier_and_dummy_cmx(
+                &fvk,
+                internal,
+                INTERNAL_SPEND_VALUE,
+                INTERNAL_SPEND_RHO,
+                INTERNAL_SPEND_RSEED,
+                internal,
+                INTERNAL_OUTPUT_RSEED,
+                version,
+            );
+            println!(
+                "_{}_INTERNAL_SPEND_NULLIFIER = bytes.fromhex(\"{}\")",
+                pool,
+                hex_str(&nullifier)
+            );
+            println!(
+                "_{}_INTERNAL_SPEND_CMX = bytes.fromhex(\"{}\")",
+                pool,
+                hex_str(&cmx)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod gen_own_account_vectors {
+    //! Generates the vectors of shielded outputs paying another account of the Speculos seed,
+    //! for the own-account tests of test_pczt.py, test_pczt_ironwood.py and
+    //! test_pczt_action_capacity.py, and for the unit tests of `decipher_value_with_ivk` in
+    //! `ledger_zcash_crypto`.
+    //!
+    //! The destination keys are the Orchard full viewing keys the device returns for
+    //! `m/32'/133'/<account>'` (`INS_GET_VK`, Orchard FVK mode) under Speculos with its default
+    //! seed. Account 1's external address is cross-checked against the raw Orchard address the
+    //! device returns for the same path (`INS_GET_SHIELD_ADDR`, raw mode), so a key copied wrong
+    //! fails here rather than as a refusal on the device.
+    //!
+    //! Every output is sent by account 0 and spends nothing (a dummy padding spend), so its
+    //! `cv_net` commits to `-value`. The sender records it under account 0's external OVK, its
+    //! internal OVK, or none at all (random `ock`): the three policies a wallet may choose.
+    //!
+    //! Run from a directory outside the repository (see `gen_v3_ext_vectors`):
+    //! ```sh
+    //! HOST=$(rustc -vV | awk '/^host:/ {print $2}')
+    //! cd /tmp && cargo test --manifest-path <worktree>/vendor/orchard/Cargo.toml \
+    //!   --target "$HOST" --target-dir /tmp/orchard-host \
+    //!   --no-default-features --features std \
+    //!   -- gen_own_account --nocapture --test-threads 1
+    //! ```
+
+    use alloc::{string::String, vec::Vec};
+    use rand::{rand_core::UnwrapErr, rngs::SysRng};
+    use std::println;
+
+    use crate::{
+        keys::{FullViewingKey, OutgoingViewingKey, Scope},
+        note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
+        note_encryption::{
+            IronwoodDomain, IronwoodNoteEncryption, OrchardDomain, OrchardNoteEncryption,
+        },
+        value::{NoteValue, ValueCommitTrapdoor, ValueCommitment},
+        Note, NoteVersion,
+    };
+    use zcash_note_encryption::Domain;
+
+    /// Orchard FVKs (ak ‖ nk ‖ rivk) returned by `INS_GET_VK` for accounts 0 to 4.
+    const ACCOUNT_FVKS: [&str; 5] = [
+        "e129bb7d06ed69a5ac01a664482ec9987fd19c40940bf76d98eb8b952974852949b0128d5072f9f92c7f7e8eb49a5434d2c04b67a30a55946d8322df3e484426f6151235e5897d34196943cb8f968312f1c8fba9ed82830b59f801b6de5da835",
+        "60efdc2aee5ec6fc6632655b5fef524275f11e2486fbb757253772b95e95b0259ca56bd0928f774c00663ef101075663eef4643346bc9171c0800c23c2e8c809880c97b34333ac38e48af5f0ee64c721c9a1847138a874d42b5ee72b41ab6e1e",
+        "b5ee3bb4e0043d6b7c0ef2028091849e353698e5b74c46d65ed24ee4f699903b98dead1c53f9e55060a739f6451ae76cfcc4a77e2b09838fb00ede8e791eab0c9a016d8160fa2b99e89cf1829b2c8c31031b3e4f6e9a97b5f12a6ef26de5f519",
+        "7126b8abd71c0cafedb7f09cd96c662351f27e0e35f108547f4fe2ac0baea813207aa4b5b2ce87c2c4a9daf4769aec4c91496c4f104c0cd3c8b3d95b6dcb6227de705c2ffbbd47e794c36415e24b155bdfa4a55f495c655d5a29fdcfe12c2013",
+        "0fb8f3f931928b67ef3f97991489761d84ac3a459877a747c8b2963ee5684f27341836c91a8167ab7f6349f7a4cbb16b31bbfb7408b699f9a71ebba19331ff2cf1d89eac4564323517e6907ba7903f5975300c731714801be2ca5598ac6f1002",
+    ];
+
+    /// Raw Orchard addresses returned by `INS_GET_SHIELD_ADDR` for accounts 1 to 4.
+    const ACCOUNT_EXTERNAL_ADDRESSES: [&str; 4] = [
+        "cbe41c85c42eb0d78831b01da5822dfb185550af3ad0436670f4e3b1a634b8b468c6867162c2db1bba96a2",
+        "97ef01e2bbda661abda8fd70bb301548b164b1be6963ee6dfee0f88d23f7c01fa8f3c714547880ce537605",
+        "6b4861b59d0c3ee1f4e710b300d0f6f94a2a608010fbb0ba51ab817bdab69868e165df4b8810db0c5c9d9b",
+        "60d9b32aa43dc1c5608855c8136ae3e4f46b91389590503c5e0e49c607e2a2908546b48f85f45d30ca973a",
+    ];
+
+    #[derive(Clone, Copy)]
+    enum SenderRecord {
+        ExternalOvk,
+        InternalOvk,
+        Discarded,
+    }
+
+    #[derive(Clone, Copy)]
+    enum Pool {
+        Orchard,
+        Ironwood,
+    }
+
+    struct Vector {
+        name: &'static str,
+        pool: Pool,
+        account: usize,
+        scope: Scope,
+        sender: SenderRecord,
+        value: u64,
+        memo: &'static [u8],
+        // Lead bytes of the action nullifier, the output rseed and rcv: distinct per vector so
+        // that no two vectors share a note.
+        seed: u8,
+    }
+
+    fn hex_decode(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn hex_str(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    fn hex_lines(bytes: &[u8]) -> String {
+        bytes
+            .chunks(32)
+            .map(|c| format!("    \"{}\"", hex_str(c)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn fvk(account: usize) -> FullViewingKey {
+        let bytes: [u8; 96] = hex_decode(ACCOUNT_FVKS[account]).try_into().unwrap();
+        FullViewingKey::from_bytes(&bytes).expect("device FVK must decode")
+    }
+
+    fn lead_byte(byte: u8) -> [u8; 32] {
+        let mut b = [0u8; 32];
+        b[0] = byte;
+        b
+    }
+
+    fn memo_field(content: &[u8]) -> [u8; 512] {
+        let mut memo = [0u8; 512];
+        if content.is_empty() {
+            memo[0] = 0xF6;
+        } else {
+            memo[..content.len()].copy_from_slice(content);
+        }
+        memo
+    }
+
+    /// The device's external address is diversifier index 0 of the external scope; its
+    /// internal address is index 0 of the internal scope.
+    #[test]
+    fn gen_own_account_addresses_match_the_device() {
+        for (index, expected) in ACCOUNT_EXTERNAL_ADDRESSES.iter().enumerate() {
+            let address = fvk(index + 1).address_at(0u32, Scope::External);
+            assert_eq!(
+                hex_str(&address.to_raw_address_bytes()),
+                *expected,
+                "account {} external address differs from INS_GET_SHIELD_ADDR",
+                index + 1
+            );
+        }
+    }
+
+    fn note_for(vector: &Vector) -> Note {
+        let recipient = fvk(vector.account).address_at(0u32, vector.scope);
+        let nf_old = Nullifier::from_bytes(&lead_byte(vector.seed)).unwrap();
+        let rho = Rho::from_nf_old(nf_old);
+        let rseed = Option::from(RandomSeed::from_bytes(lead_byte(vector.seed), &rho))
+            .expect("rseed must be valid for rho; pick another seed byte");
+        let version = match vector.pool {
+            Pool::Orchard => NoteVersion::V2,
+            Pool::Ironwood => NoteVersion::V3,
+        };
+        Option::from(Note::from_parts(
+            recipient,
+            NoteValue::from_raw(vector.value),
+            rho,
+            rseed,
+            version,
+        ))
+        .expect("note must be valid")
+    }
+
+    fn sender_ovk(sender: SenderRecord) -> Option<OutgoingViewingKey> {
+        match sender {
+            SenderRecord::ExternalOvk => Some(fvk(0).to_ovk(Scope::External)),
+            SenderRecord::InternalOvk => Some(fvk(0).to_ovk(Scope::Internal)),
+            SenderRecord::Discarded => None,
+        }
+    }
+
+    /// Ciphertexts of one action; `esk_from` lets a vector encrypt under another note's
+    /// ephemeral key.
+    fn encrypt(
+        vector: &Vector,
+        esk_from: Option<&Note>,
+    ) -> (Note, [u8; 32], Vec<u8>, Vec<u8>, ValueCommitment) {
+        let note = note_for(vector);
+        let esk = esk_from.unwrap_or(&note).esk();
+        let ovk = sender_ovk(vector.sender);
+        let cmx = ExtractedNoteCommitment::from(note.commitment());
+        let rcv = ValueCommitTrapdoor::from_bytes(lead_byte(vector.seed))
+            .into_option()
+            .expect("rcv must be a valid scalar");
+        let cv_net = ValueCommitment::derive(
+            NoteValue::from_raw(0) - NoteValue::from_raw(vector.value),
+            rcv,
+        );
+        let memo = memo_field(vector.memo);
+        let (epk, enc, out) = match vector.pool {
+            Pool::Orchard => {
+                let encryptor = OrchardNoteEncryption::new_with_esk(esk, ovk, note, memo);
+                (
+                    OrchardDomain::epk_bytes(encryptor.epk()).0,
+                    encryptor.encrypt_note_plaintext().as_ref().to_vec(),
+                    encryptor
+                        .encrypt_outgoing_plaintext(&cv_net, &cmx, &mut UnwrapErr(SysRng))
+                        .as_ref()
+                        .to_vec(),
+                )
+            }
+            Pool::Ironwood => {
+                let encryptor = IronwoodNoteEncryption::new_with_esk(esk, ovk, note, memo);
+                (
+                    IronwoodDomain::epk_bytes(encryptor.epk()).0,
+                    encryptor.encrypt_note_plaintext().as_ref().to_vec(),
+                    encryptor
+                        .encrypt_outgoing_plaintext(&cv_net, &cmx, &mut UnwrapErr(SysRng))
+                        .as_ref()
+                        .to_vec(),
+                )
+            }
+        };
+        (note, epk, enc, out, cv_net)
+    }
+
+    fn print_python_vector(vector: &Vector) {
+        let (note, epk, enc, out, cv_net) = encrypt(vector, None);
+        let cmx = ExtractedNoteCommitment::from(note.commitment()).to_bytes();
+        println!("{} = OwnAccountVector(", vector.name);
+        println!("    account={},", vector.account);
+        println!("    value={},", vector.value);
+        println!(
+            "    recipient=bytes.fromhex(\"{}\"),",
+            hex_str(&note.recipient().to_raw_address_bytes())
+        );
+        println!(
+            "    nullifier=bytes.fromhex(\"{}\"),",
+            hex_str(&lead_byte(vector.seed))
+        );
+        println!(
+            "    rseed=bytes.fromhex(\"{}\"),",
+            hex_str(&lead_byte(vector.seed))
+        );
+        println!(
+            "    rcv=bytes.fromhex(\"{}\"),",
+            hex_str(&lead_byte(vector.seed))
+        );
+        println!(
+            "    cv_net=bytes.fromhex(\"{}\"),",
+            hex_str(&cv_net.to_bytes())
+        );
+        println!("    cmx=bytes.fromhex(\"{}\"),", hex_str(&cmx));
+        println!("    ephemeral_key=bytes.fromhex(\"{}\"),", hex_str(&epk));
+        println!(
+            "    enc_ciphertext=bytes.fromhex(\n{}\n    ),",
+            hex_lines(&enc)
+        );
+        println!(
+            "    out_ciphertext=bytes.fromhex(\n{}\n    ),",
+            hex_lines(&out)
+        );
+        println!(")");
+    }
+
+    const TRANSFER_VALUE: u64 = 290_000;
+    const MEMO_TRANSFER_VALUE: u64 = 280_000;
+    const MEMO: &[u8] = b"Savings top-up";
+
+    /// Python vectors of the own-account Ragger tests.
+    #[test]
+    fn gen_own_account_ragger_vectors() {
+        use Pool::{Ironwood, Orchard};
+        use Scope::{External, Internal};
+        use SenderRecord::{Discarded, ExternalOvk, InternalOvk};
+
+        let vectors = [
+            (
+                "IRONWOOD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK",
+                Ironwood,
+                1,
+                Internal,
+                ExternalOvk,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x51,
+            ),
+            (
+                "IRONWOOD_ACCOUNT_1_INTERNAL_INTERNAL_OVK",
+                Ironwood,
+                1,
+                Internal,
+                InternalOvk,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x52,
+            ),
+            (
+                "IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK",
+                Ironwood,
+                1,
+                Internal,
+                Discarded,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x53,
+            ),
+            (
+                "IRONWOOD_ACCOUNT_1_EXTERNAL_EXTERNAL_OVK",
+                Ironwood,
+                1,
+                External,
+                ExternalOvk,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x54,
+            ),
+            (
+                "IRONWOOD_ACCOUNT_1_EXTERNAL_INTERNAL_OVK",
+                Ironwood,
+                1,
+                External,
+                InternalOvk,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x55,
+            ),
+            (
+                "IRONWOOD_ACCOUNT_1_EXTERNAL_NO_OVK",
+                Ironwood,
+                1,
+                External,
+                Discarded,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x56,
+            ),
+            (
+                "IRONWOOD_ACCOUNT_1_MEMO",
+                Ironwood,
+                1,
+                Internal,
+                Discarded,
+                MEMO_TRANSFER_VALUE,
+                MEMO,
+                0x57,
+            ),
+            (
+                "IRONWOOD_ACCOUNT_2",
+                Ironwood,
+                2,
+                External,
+                Discarded,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x58,
+            ),
+            (
+                "IRONWOOD_ACCOUNT_3",
+                Ironwood,
+                3,
+                External,
+                Discarded,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x59,
+            ),
+            (
+                "IRONWOOD_ACCOUNT_4",
+                Ironwood,
+                4,
+                External,
+                Discarded,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x5a,
+            ),
+            (
+                "ORCHARD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK",
+                Orchard,
+                1,
+                Internal,
+                ExternalOvk,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x61,
+            ),
+            (
+                "ORCHARD_ACCOUNT_1_INTERNAL_INTERNAL_OVK",
+                Orchard,
+                1,
+                Internal,
+                InternalOvk,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x62,
+            ),
+            (
+                "ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK",
+                Orchard,
+                1,
+                Internal,
+                Discarded,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x63,
+            ),
+            (
+                "ORCHARD_ACCOUNT_1_EXTERNAL_EXTERNAL_OVK",
+                Orchard,
+                1,
+                External,
+                ExternalOvk,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x64,
+            ),
+            (
+                "ORCHARD_ACCOUNT_1_EXTERNAL_INTERNAL_OVK",
+                Orchard,
+                1,
+                External,
+                InternalOvk,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x65,
+            ),
+            (
+                "ORCHARD_ACCOUNT_1_EXTERNAL_NO_OVK",
+                Orchard,
+                1,
+                External,
+                Discarded,
+                TRANSFER_VALUE,
+                &b""[..],
+                0x66,
+            ),
+            (
+                "ORCHARD_ACCOUNT_1_MEMO",
+                Orchard,
+                1,
+                Internal,
+                Discarded,
+                MEMO_TRANSFER_VALUE,
+                MEMO,
+                0x67,
+            ),
+        ];
+
+        println!("\n# ---- own-account vectors (gen_own_account_ragger_vectors) ----");
+        for (name, pool, account, scope, sender, value, memo, seed) in vectors {
+            print_python_vector(&Vector {
+                name,
+                pool,
+                account,
+                scope,
+                sender,
+                value,
+                memo,
+                seed,
+            });
+        }
+    }
+
+    /// Rust constants of the `decipher_value_with_ivk` unit tests: one Ironwood note to account
+    /// 1's internal address carrying a memo, the account's two IVKs, and the same note encrypted
+    /// under another note's ephemeral key (it decrypts, but its `epk` is not `[esk]·g_d`).
+    #[test]
+    fn gen_own_account_unit_vectors() {
+        let vector = Vector {
+            name: "",
+            pool: Pool::Ironwood,
+            account: 1,
+            scope: Scope::Internal,
+            sender: SenderRecord::Discarded,
+            value: MEMO_TRANSFER_VALUE,
+            memo: MEMO,
+            seed: 0x57,
+        };
+        let other = note_for(&Vector {
+            seed: 0x58,
+            ..vector
+        });
+        let (note, epk, enc, _, _) = encrypt(&vector, None);
+        let (_, foreign_epk, foreign_enc, _, _) = encrypt(&vector, Some(&other));
+        let cmx = ExtractedNoteCommitment::from(note.commitment()).to_bytes();
+        let ivk = |scope| hex_str(&fvk(1).to_ivk(scope).to_bytes()[32..]);
+
+        println!("\n// ---- decipher_value_with_ivk vectors (gen_own_account_unit_vectors) ----");
+        println!(
+            "const ACCOUNT_1_INTERNAL_IVK: &str = \"{}\";",
+            ivk(Scope::Internal)
+        );
+        println!(
+            "const ACCOUNT_1_EXTERNAL_IVK: &str = \"{}\";",
+            ivk(Scope::External)
+        );
+        println!(
+            "const RECIPIENT: &str = \"{}\";",
+            hex_str(&note.recipient().to_raw_address_bytes())
+        );
+        println!("const VALUE: u64 = {};", vector.value);
+        println!(
+            "const NULLIFIER: &str = \"{}\";",
+            hex_str(&lead_byte(vector.seed))
+        );
+        println!("const CMX: &str = \"{}\";", hex_str(&cmx));
+        println!("const EPK: &str = \"{}\";", hex_str(&epk));
+        println!("const ENC_CIPHERTEXT: &str = \"{}\";", hex_str(&enc));
+        println!(
+            "const FOREIGN_ESK_EPK: &str = \"{}\";",
+            hex_str(&foreign_epk)
+        );
+        println!(
+            "const FOREIGN_ESK_ENC_CIPHERTEXT: &str = \"{}\";",
+            hex_str(&foreign_enc)
         );
     }
 }

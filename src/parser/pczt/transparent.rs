@@ -231,6 +231,9 @@ impl PcztParser {
         );
 
         self.script_bytes.clear();
+        self.script_bytes
+            .try_reserve_exact(script_size)
+            .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
         self.script_bytes.resize(script_size, 0);
 
         if script_size == 0 {
@@ -749,6 +752,10 @@ impl PcztParser {
                     return Err(ParserError::from_str("Multiple change outputs detected"));
                 }
 
+                ctx.tx_info
+                    .outputs
+                    .try_reserve(1)
+                    .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
                 let address =
                     ok!(Base58Address::from_output_script(&self.script_bytes)).to_string();
                 debug!("PCZT transparent output address: {}", &address);
@@ -759,6 +766,7 @@ impl PcztParser {
                     is_change,
                     memo: None,
                     pool: TxPool::Transparent,
+                    own_account: None,
                 });
 
                 if is_change {

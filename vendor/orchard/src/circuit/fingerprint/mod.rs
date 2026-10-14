@@ -33,8 +33,7 @@ use halo2_proofs::plonk::fingerprint::{capture_proof_fingerprint, ChallengeRecor
 use halo2_proofs::transcript::Challenge255;
 use incrementalmerkletree::Hashable;
 use pasta_curves::vesta;
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
+use rand::{rngs::ChaCha20Rng, SeedableRng};
 
 use super::{OrchardCircuitVersion, ProvingKey, VerifyingKey, K};
 use crate::{
@@ -107,15 +106,16 @@ fn assert_pinned_verifying_key(vk: &VerifyingKey) {
 
 fn capture_fixture(seed: u8, num_actions: u8, namespace: &str, output_var: &str) {
     let mut rng = fixture_rng(seed);
-    let pk = ProvingKey::build(OrchardCircuitVersion::PostNu6_3);
-    let vk = VerifyingKey::build(OrchardCircuitVersion::PostNu6_3);
+    let keys = crate::cached_test_keys(OrchardCircuitVersion::PostNu6_3);
+    let pk = keys.proving_key();
+    let vk = keys.verifying_key();
     assert!(vk.supports_cross_address_restriction());
-    assert_pinned_verifying_key(&vk);
+    assert_pinned_verifying_key(vk);
 
-    let bundle = build_fixture_bundle(&mut rng, &pk, num_actions);
+    let bundle = build_fixture_bundle(&mut rng, pk, num_actions);
     let instances = bundle.to_instances();
     let proof = bundle.authorization().proof().clone();
-    assert!(bundle.verify_proof(&vk).is_ok());
+    assert!(bundle.verify_proof(vk).is_ok());
 
     let raw_instances = raw_instances(&instances);
     let raw_instance_refs = raw_instance_refs(&raw_instances);

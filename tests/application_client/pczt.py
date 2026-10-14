@@ -68,6 +68,8 @@ class PcztOrchardAction:  # pylint: disable=too-many-instance-attributes
     spend_value: int = 0
     value: int = 0
     recipient: bytes = bytes(ORCHARD_RAW_ADDRESS_SIZE)
+    # Extension block appended to the output metadata packet, after `rcv`.
+    output_extensions: bytes = b""
 
 
 @dataclass
@@ -98,6 +100,8 @@ class PcztIronwoodAction:  # pylint: disable=too-many-instance-attributes
     value: int = 0
     recipient: bytes = bytes(ORCHARD_RAW_ADDRESS_SIZE)
     note_plaintext_version: int | None = None
+    # Extension block appended to the output metadata packet, after `note_plaintext_version`.
+    output_extensions: bytes = b""
 
 
 @dataclass
@@ -324,3 +328,15 @@ def _read_bytes(raw_transaction: bytes, index: int, size: int) -> tuple[bytes, i
         raise ValueError("Invalid raw Orchard action ciphertext sizes")
 
     return value, end
+
+
+PCZT_OUTPUT_EXTENSION_ACCOUNT: int = 0x01
+
+
+def output_account_extension(account: int, tag: int = PCZT_OUTPUT_EXTENSION_ACCOUNT, length: int = 4) -> bytes:
+    """One output-metadata extension declaring the ZIP 32 account an output pays.
+
+    `tag` and `length` default to the well-formed values; tests pass others to build malformed
+    blocks. The value is the unhardened account index, `u32` little-endian.
+    """
+    return bytes([tag, length]) + account.to_bytes(4, byteorder="little")

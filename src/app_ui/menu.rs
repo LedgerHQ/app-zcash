@@ -20,17 +20,28 @@ use ledger_device_sdk::io::Comm;
 use crate::{app_ui::load_ui_menu_glyph, settings::Settings};
 use ledger_device_sdk::nbgl::NbglHomeAndSettings;
 
+#[cfg(not(feature = "variant_testnet"))]
+const APP_DISPLAY_NAME: &str = "Zcash";
+#[cfg(feature = "variant_testnet")]
+const APP_DISPLAY_NAME: &str = "Zcash Test";
+
 pub fn ui_menu_main(_: &mut Comm) -> NbglHomeAndSettings {
     let settings_strings = [];
     let mut settings: Settings = Default::default();
 
     // Display the home screen.
-    NbglHomeAndSettings::new()
+    let home = NbglHomeAndSettings::new()
         .glyph(load_ui_menu_glyph())
         .settings(settings.get_mut(), &settings_strings)
         .infos(
-            "Zcash",
+            APP_DISPLAY_NAME,
             env!("CARGO_PKG_VERSION"),
             env!("CARGO_PKG_AUTHORS"),
-        )
+        );
+
+    // The testnet build says so on its home screen, beyond its name.
+    #[cfg(feature = "variant_testnet")]
+    let home = home.tagline("Testnet only. Coins have no value.");
+
+    home
 }

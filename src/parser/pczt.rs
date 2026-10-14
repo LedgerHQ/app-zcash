@@ -7,7 +7,10 @@ use alloc::{string::String, string::ToString, vec::Vec};
 use core::fmt::Write as _;
 use core::{cmp, mem};
 
-use crate::consts::{V6_TX_VERSION, V6_VERSION_GROUP_ID};
+use crate::consts::{
+    MAX_ACCOUNT_INDEX, MAX_PCZT_OWN_ACCOUNTS, PCZT_OUTPUT_EXTENSION_ACCOUNT, UNHARDENED_MASK,
+    V6_TX_VERSION, V6_VERSION_GROUP_ID, ZCASH_NETWORK,
+};
 use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use ::orchard::keys::Scope as OrchardScope;
 use corez::io::Read;
@@ -16,7 +19,7 @@ use ledger_device_sdk::hash::HashInit as _;
 use ledger_device_sdk::hash::blake2::{Blake2b_256, Blake2bWithPerso as _};
 use ledger_device_sdk::libcall::swap::CreateTxParams;
 use ledger_device_sdk::log::{debug, error, info};
-use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
+use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver, Revision, Uitem};
 use zcash_encoding::CompactSize;
 use zcash_primitives::transaction::TxVersion;
 use zcash_primitives::transaction::components::orchard as orchard_component;
@@ -28,10 +31,12 @@ use zcash_transparent::bundle::OutPoint;
 use crate::AppSW;
 use crate::app_ui::sign::ui_display_tx;
 use crate::consts::MAX_PCZT_IRONWOOD_ACTIONS_NUMBER;
+use crate::consts::SHIELDED_ACTIONS_HEAP_HEADROOM;
 use crate::consts::{
     MAX_PCZT_ORCHARD_ACTIONS_NUMBER, MAX_PCZT_SCRIPT_SIZE,
-    MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER, MAX_PCZT_TRANSPARENT_INPUTS_NUMBER,
-    MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, SIGHASH_ALL, ZCASH_BIP44_COIN_TYPE,
+    MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER, MAX_PCZT_SHIELDED_RETAINED_OUTPUTS_NUMBER,
+    MAX_PCZT_TRANSPARENT_INPUTS_NUMBER, MAX_PCZT_TRANSPARENT_OUTPUTS_NUMBER, SIGHASH_ALL,
+    ZCASH_BIP44_COIN_TYPE,
 };
 use crate::parser::compute::{
     compute_shielded_signature_digest, compute_transparent_input_signature_digest,
@@ -40,11 +45,13 @@ use crate::parser::compute::{
 use crate::parser::orchard_decipher::{
     DecipheredOrchardOutput, ORCHARD_ENC_CIPHERTEXT_SIZE, ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE,
     ORCHARD_OUT_CIPHERTEXT_SIZE, ORCHARD_RAW_ADDRESS_SIZE, OrchardActionCiphertext,
-    OrchardCompactAction, OrchardDecipherKeys, decipher_compact_value, decipher_value_with_ovk,
+    OrchardCompactAction, OrchardDecipherKeys, OwnAccountKeys, decipher_compact_value,
+    decipher_value_with_ivk, decipher_value_with_ovk,
 };
 use crate::parser::{HASH_SIZE, ORCHARD_MEMO_SIZE};
 use crate::tx::{Hashers, TransferType, TxInfo, TxOutput, TxOutputMemo, TxPool, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _};
+use crate::utils::ensure_heap_headroom;
 use crate::utils::{
     Bip44CheckMode, CheckDispOutput, HexSlice,
     base58_address::{Base58Address, ToBase58Address},
@@ -55,8 +62,9 @@ use crate::utils::{
     output_script_is_regular,
 };
 use crate::zip32::{
-    OrchardAsk, OrchardFvk, derive_orchard_fvk_and_ask_from_sk, derive_orchard_fvk_from_sk,
-    derive_orchard_sk_bytes, orchard_network,
+    OrchardFvk, OrchardValidationKey, RetainedOrchardFvk, derive_orchard_ask_from_sk,
+    derive_orchard_fvk, derive_orchard_fvk_and_ask_from_sk, derive_orchard_fvk_from_sk,
+    derive_orchard_sk_bytes,
 };
 
 use super::reader::{ByteReader, ReadBytesExt};
@@ -133,6 +141,19 @@ fn record_hidden_shielded_change_account(
             Ok(())
         }
     }
+}
+
+/// Claim room for one more shielded output of either kind, displayed or change, refusing once the
+/// budget is spent. Called before [`claim_displayed_shielded_output`] and for the same reason.
+fn claim_retained_shielded_output(tx_info: &mut TxInfo) -> Result<(), ParserError> {
+    if tx_info.retained_shielded_outputs >= MAX_PCZT_SHIELDED_RETAINED_OUTPUTS_NUMBER {
+        error!("Shielded retained-output budget exhausted");
+        return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+    }
+
+    tx_info.retained_shielded_outputs += 1;
+
+    Ok(())
 }
 
 /// Claim room for one more shielded output on the review, refusing once the budget is spent.
@@ -231,6 +252,147 @@ fn try_retain(text: &str) -> Result<String, ParserError> {
         .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
     retained.push_str(text);
     Ok(retained)
+}
+
+/// Length of the account index carried by a [`PCZT_OUTPUT_EXTENSION_ACCOUNT`] extension.
+const OUTPUT_EXTENSION_ACCOUNT_LEN: usize = 4;
+
+/// Parse an output-metadata extension block: `tag u8 · len u8 · value[len]` entries up to the end
+/// of the packet, returning the destination account it declares.
+///
+/// Strict on purpose: an extension this parser does not understand may change what the output
+/// means, so skipping it would show the user something the host did not describe. An unknown or
+/// repeated tag, a length that does not match its tag and a truncated value are all refused.
+fn parse_output_extensions(reader: &mut ByteReader<'_>) -> Result<Option<u32>, ParserError> {
+    let mut account = None;
+
+    while reader.remaining_len() > 0 {
+        let tag = reader
+            .read_u8()
+            .map_err(|_| ParserError::from_str("Truncated PCZT output extension"))?;
+        let len = usize::from(
+            reader
+                .read_u8()
+                .map_err(|_| ParserError::from_str("Truncated PCZT output extension"))?,
+        );
+
+        match tag {
+            PCZT_OUTPUT_EXTENSION_ACCOUNT => {
+                if len != OUTPUT_EXTENSION_ACCOUNT_LEN {
+                    return Err(ParserError::from_str(
+                        "Bad PCZT output account extension length",
+                    ));
+                }
+                if account.is_some() {
+                    return Err(ParserError::from_str("Repeated PCZT output extension"));
+                }
+                let mut value = [0u8; OUTPUT_EXTENSION_ACCOUNT_LEN];
+                reader
+                    .read_exact(&mut value)
+                    .map_err(|_| ParserError::from_str("Truncated PCZT output extension"))?;
+                let index = u32::from_le_bytes(value);
+                // The device hardens the index itself; a host passing it hardened already is
+                // describing some other path than the one this field names.
+                if index & !UNHARDENED_MASK != 0 {
+                    return Err(ParserError::from_str("Hardened PCZT output account index"));
+                }
+                if index > MAX_ACCOUNT_INDEX {
+                    return Err(ParserError::from_str(
+                        "PCZT output account index out of range",
+                    ));
+                }
+                account = Some(index);
+            }
+            _ => return Err(ParserError::from_str("Unknown PCZT output extension")),
+        }
+    }
+
+    Ok(account)
+}
+
+/// The ZIP 32 account path of another account of the seed, built from the path being spent.
+///
+/// Purpose and coin type are taken from the source path rather than from a default, so a
+/// transaction on one network cannot reach a key of the other. The source account itself is
+/// refused: its outputs are change or payments the device already recognizes, and naming it here
+/// would let a declaration relabel them.
+fn own_account_path(source: &Bip32Path, account: u32) -> Result<Bip32Path, ParserError> {
+    const HARDENED: u32 = 0x8000_0000;
+
+    let source = source.as_slice();
+    if source.len() != crate::consts::ZIP32_PATH_LEN {
+        return Err(ParserError::from_sw(AppSW::BadState));
+    }
+    let hardened_account = account | HARDENED;
+    if source[2] == hardened_account {
+        return Err(ParserError::from_str(
+            "PCZT output declares the account being spent",
+        ));
+    }
+
+    let mut encoded = [0u8; 4 * crate::consts::ZIP32_PATH_LEN];
+    for (chunk, component) in
+        encoded
+            .chunks_exact_mut(4)
+            .zip([source[0], source[1], hardened_account])
+    {
+        chunk.copy_from_slice(&component.to_be_bytes());
+    }
+    let path = Bip32Path::from_dpath(crate::consts::ZIP32_PATH_LEN, &encoded)
+        .map_err(ParserError::from_sw)?;
+
+    if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
+        return Err(ParserError::from_str(
+            "PCZT output account path not compliant",
+        ));
+    }
+
+    Ok(path)
+}
+
+/// Record an output proven to pay another account of the seed.
+///
+/// It is a payment like any other for every rule but its rendering: never change, never hidden,
+/// counted against both output budgets before anything is allocated for it, and shown with its
+/// memo. No address is encoded — the account is what the user recognizes, and an internal address
+/// is one no wallet shows.
+fn push_own_account_output(
+    tx_info: &mut TxInfo,
+    output: DecipheredOrchardOutput,
+    account: u32,
+) -> Result<(), ParserError> {
+    claim_retained_shielded_output(tx_info)?;
+    claim_displayed_shielded_output(tx_info)?;
+
+    tx_info
+        .outputs
+        .try_reserve(1)
+        .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
+    let memo = match output.memo.as_ref() {
+        Some(memo) => memo_display(tx_info, memo)?,
+        None => None,
+    };
+
+    debug!(
+        "PCZT own-account output: account {}, amount {}",
+        account, output.value
+    );
+
+    tx_info.outputs.push(TxOutput {
+        amount: output.value,
+        address: String::new(),
+        is_change: false,
+        memo,
+        pool: TxPool::Orchard,
+        own_account: Some(account),
+    });
+
+    Ok(())
+}
+
+/// Drop the viewing keys of the other accounts, wiping them, and release their storage.
+fn discard_own_account_keys(tx_info: &mut TxInfo) {
+    tx_info.own_account_keys = Vec::new();
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -335,6 +497,7 @@ struct PcztOrchardActionSigningRecord {
 }
 
 pub struct PcztParserCtx<'ctx> {
+    pub comm: &'ctx mut ledger_device_sdk::io::Comm,
     pub tx_state: &'ctx mut TxSigningState,
     pub tx_info: &'ctx mut TxInfo,
     pub hashers: &'ctx mut Hashers,
@@ -375,8 +538,9 @@ struct PcztCurrentActionState {
     enc_ciphertext: Vec<u8>,
     alpha: Option<[u8; 32]>,
     path: Option<Bip32Path>,
-    fvk: Option<OrchardFvk>,
     note_plaintext_version: u8,
+    /// Account the host declared the output pays, through the output-metadata extension block.
+    output_account: Option<u32>,
 }
 
 impl PcztCurrentActionState {
@@ -401,8 +565,8 @@ impl PcztCurrentActionState {
             enc_ciphertext: Vec::new(),
             alpha: None,
             path: None,
-            fvk: None,
             note_plaintext_version: NOTE_VERSION_ORCHARD,
+            output_account: None,
         }
     }
 }
@@ -453,6 +617,10 @@ pub struct PcztParser {
     // Derivation path the cached spending key belongs to, used to reject a
     // second Orchard action declaring a different path.
     orchard_spending_key_path: Option<Bip32Path>,
+    // Shared by both pools under orchard_spending_key_path; wiped before review or on reset.
+    orchard_fvk: Option<RetainedOrchardFvk>,
+    // Normalized scalar under the same account path. Wiped before review or on reset.
+    orchard_validation_key: Option<OrchardValidationKey>,
     is_v6_tx: bool,
     has_orchard_bundle: bool,
     has_ironwood_bundle: bool,
@@ -502,6 +670,8 @@ impl PcztParser {
             current_action: PcztCurrentActionState::new(),
             orchard_spending_key: None,
             orchard_spending_key_path: None,
+            orchard_fvk: None,
+            orchard_validation_key: None,
             is_v6_tx: false,
             has_orchard_bundle: false,
             has_ironwood_bundle: false,
@@ -538,9 +708,8 @@ impl PcztParser {
     // All Orchard actions of a PCZT share one account key (one UFVK), so the
     // first action's `path` fixes the key for the whole transaction. A later
     // action declaring a different path is rejected rather than served the
-    // cached key: the caller would otherwise derive an FVK from one path while
-    // deciding the network (`orchard_network`) from another, and sign with a key
-    // the declared path does not produce.
+    // cached key: the caller would otherwise sign with a key the declared path
+    // does not produce.
     pub fn orchard_spending_key(&mut self, path: &Bip32Path) -> Result<&Secret<32>, AppSW> {
         match self.orchard_spending_key_path {
             Some(cached_path) if cached_path != *path => return Err(AppSW::BadState),
@@ -566,6 +735,8 @@ impl PcztParser {
     fn clear_orchard_spending_key(&mut self) {
         self.orchard_spending_key = None;
         self.orchard_spending_key_path = None;
+        self.orchard_fvk = None;
+        self.orchard_validation_key = None;
     }
 
     fn reset_on_error<T>(&mut self, result: Result<T, ParserError>) -> Result<T, ParserError> {
@@ -822,6 +993,9 @@ impl PcztParser {
             Ok(())
         })();
 
+        if result.is_err() {
+            discard_own_account_keys(ctx.tx_info);
+        }
         self.reset_on_error(result)
     }
 
@@ -883,7 +1057,113 @@ impl PcztParser {
             Ok(())
         })();
 
+        if result.is_err() {
+            discard_own_account_keys(ctx.tx_info);
+        }
         self.reset_on_error(result)
+    }
+
+    /// Derive, once per transaction, the viewing keys of another account an output declares.
+    ///
+    /// Runs while the output metadata is parsed, at the shallowest point that knows the account,
+    /// rather than inside the output's validation where the derivation would stack on top of note
+    /// decryption. The derivation draws on the per-run budget like any other, and the full viewing
+    /// key is dropped as soon as its two IVKs are taken.
+    #[inline(never)]
+    fn prepare_own_account_keys(
+        &self,
+        tx_info: &mut TxInfo,
+        account: u32,
+    ) -> Result<(), ParserError> {
+        if tx_info
+            .own_account_keys
+            .iter()
+            .any(|keys| keys.account == account)
+        {
+            return Ok(());
+        }
+
+        let source = self
+            .orchard_spending_key_path
+            .as_ref()
+            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+        let path = own_account_path(source, account)?;
+
+        if tx_info.own_account_keys.len() >= MAX_PCZT_OWN_ACCOUNTS {
+            error!("Own-account budget exhausted");
+            return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+        }
+        // Reserved whole on first use, so a later account never regrows the vector mid-parse.
+        let missing = MAX_PCZT_OWN_ACCOUNTS - tx_info.own_account_keys.len();
+        tx_info
+            .own_account_keys
+            .try_reserve_exact(missing)
+            .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
+        ensure_heap_headroom(SHIELDED_ACTIONS_HEAP_HEADROOM).map_err(ParserError::from_sw)?;
+
+        let keys = {
+            let fvk =
+                RetainedOrchardFvk::new(derive_orchard_fvk(&path).map_err(ParserError::from_sw)?);
+            OwnAccountKeys::from_fvk(account, &fvk).map_err(ParserError::from_sw)?
+        };
+        tx_info.own_account_keys.push(keys);
+
+        Ok(())
+    }
+
+    /// Recognize the current action's output as a note of the account it declares.
+    ///
+    /// The declaration is a claim, and this is the only way it is accepted: the note has to decrypt
+    /// under that account's internal or external IVK and pass the full note validation. Any other
+    /// outcome refuses the action — falling back to the undeclared paths would let a declaration
+    /// that fails to prove itself still reach the review.
+    #[inline(never)]
+    fn recognize_own_account_output(
+        &self,
+        tx_info: &TxInfo,
+        account: u32,
+        enc_ciphertext: &[u8],
+        out_ciphertext: &[u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
+        note_version: u8,
+        refusal: &'static str,
+    ) -> Result<DecipheredOrchardOutput, ParserError> {
+        let keys = tx_info
+            .own_account_keys
+            .iter()
+            .find(|keys| keys.account == account)
+            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+
+        let mut enc_ciphertext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
+        enc_ciphertext_prefix.copy_from_slice(
+            enc_ciphertext
+                .get(..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE)
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?,
+        );
+        let action = OrchardActionCiphertext {
+            compact: OrchardCompactAction {
+                nullifier: self.current_action.nullifier,
+                cmx: self.current_action.cmx,
+                ephemeral_key: self.current_action.ephemeral_key,
+                enc_ciphertext_prefix,
+            },
+            rk: self.current_action.rk,
+            cv_net: self.current_action.cv_net,
+            enc_ciphertext,
+            out_ciphertext: *out_ciphertext,
+        };
+
+        for ivk in [&keys.internal_ivk, &keys.external_ivk] {
+            match decipher_value_with_ivk(ivk, &action, note_version) {
+                Ok(Some(output)) => return Ok(output),
+                Ok(None) => {}
+                Err(ledger_zcash_crypto::Error::OutOfMemory) => {
+                    return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+                }
+                Err(err) => debug!("PCZT own-account decryption failed: {:?}", err),
+            }
+        }
+
+        Err(ParserError::from_str(refusal))
     }
 
     pub fn finish_pczt(&mut self) -> Result<(), ParserError> {
@@ -905,7 +1185,10 @@ impl PcztParser {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_RETAINED_MEMO_BYTES, memo_display};
+    use super::{
+        Bip32Path, ByteReader, MAX_RETAINED_MEMO_BYTES, memo_display, own_account_path,
+        parse_output_extensions,
+    };
     use crate::parser::{HASH_SIZE, ORCHARD_MEMO_SIZE};
     use crate::tx::TxInfo;
     use ledger_device_sdk::testing::TestType;
@@ -1065,6 +1348,103 @@ mod tests {
                 return Err(());
             };
             if rendered.value.len() != 2 * HASH_SIZE {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    fn extensions(block: &[u8]) -> Result<Option<u32>, ()> {
+        parse_output_extensions(&mut ByteReader::new(block)).map_err(|_| ())
+    }
+
+    /// An empty block declares nothing; one well-formed entry declares its account.
+    #[test_case]
+    const OUTPUT_EXTENSIONS_ACCEPT_THE_ACCOUNT_TAG: TestType = TestType {
+        modname: module_path!(),
+        name: "output_extensions_accept_the_account_tag",
+        f: || {
+            if extensions(&[])? != None
+                || extensions(&[0x01, 4, 7, 0, 0, 0])? != Some(7)
+                || extensions(&[0x01, 4, 100, 0, 0, 0])? != Some(100)
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// Unknown, repeated, mis-sized, truncated, hardened and out-of-range entries are all refused.
+    #[test_case]
+    const OUTPUT_EXTENSIONS_REFUSE_MALFORMED_BLOCKS: TestType = TestType {
+        modname: module_path!(),
+        name: "output_extensions_refuse_malformed_blocks",
+        f: || {
+            let malformed: [&[u8]; 9] = [
+                &[0x02, 4, 1, 0, 0, 0],
+                &[0x01, 4, 1, 0, 0, 0, 0x01, 4, 1, 0, 0, 0],
+                &[0x01, 3, 1, 0, 0],
+                &[0x01, 5, 1, 0, 0, 0, 0],
+                &[0x01, 4, 1, 0],
+                &[0x01, 4, 1, 0, 0, 0x80],
+                &[0x01, 4, 101, 0, 0, 0],
+                &[0x01, 4, 0xff, 0xff, 0xff, 0x7f],
+                &[0x01],
+            ];
+            if malformed.iter().any(|block| extensions(block).is_ok()) {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    fn zip32_path(account: u32) -> Bip32Path {
+        zip32_path_for_coin(crate::consts::ZCASH_BIP44_COIN_TYPE, account)
+    }
+
+    fn zip32_path_for_coin(coin_type: u32, account: u32) -> Bip32Path {
+        let mut encoded = [0u8; 12];
+        for (chunk, component) in
+            encoded
+                .chunks_exact_mut(4)
+                .zip([0x8000_0020, 0x8000_0000 | coin_type, account])
+        {
+            chunk.copy_from_slice(&component.to_be_bytes());
+        }
+        Bip32Path::from_dpath(3, &encoded).unwrap_or_default()
+    }
+
+    /// The destination path keeps the source's prefix, hardens the index, and never names the
+    /// account being spent.
+    #[test_case]
+    const OWN_ACCOUNT_PATH_IS_BUILT_FROM_THE_SOURCE: TestType = TestType {
+        modname: module_path!(),
+        name: "own_account_path_is_built_from_the_source",
+        f: || {
+            let source = zip32_path(0x8000_0000);
+            if own_account_path(&source, 1).map_err(|_| ())? != zip32_path(0x8000_0001)
+                || own_account_path(&source, 0).is_ok()
+                || own_account_path(&zip32_path(0x8000_0002), 2).is_ok()
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    /// A source path on the other network's coin type builds no destination: a mainnet build
+    /// never reaches a testnet account's keys, nor the reverse.
+    #[test_case]
+    const OWN_ACCOUNT_PATH_STAYS_ON_THE_BUILD_NETWORK: TestType = TestType {
+        modname: module_path!(),
+        name: "own_account_path_stays_on_the_build_network",
+        f: || {
+            let other_coin_type = if crate::consts::ZCASH_BIP44_COIN_TYPE == 133 {
+                1
+            } else {
+                133
+            };
+            if own_account_path(&zip32_path_for_coin(other_coin_type, 0x8000_0000), 1).is_ok() {
                 return Err(());
             }
             Ok(())

@@ -28,7 +28,7 @@ jobs:
   # vendored crates are path dependencies, so cargo does not cap their lints and a global
   # `-D warnings` would break on an upstream bump rather than on our code.
   check_clippy:
-    name: Run clippy on every supported device
+    name: Run clippy on every supported device and build variant
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-dev-tools:latest
@@ -36,9 +36,12 @@ jobs:
       fail-fast: false
       matrix:
         target: [nanox, nanosplus, stax, flex, apex_p]
+        # The testnet logic and glyphs are compiled out of every other build, so the variant is
+        # linted on its own, over the same devices.
+        features: ["", "zcash/variant_testnet"]
     steps:
       - name: Clone
         uses: actions/checkout@v4
 
       - name: Clippy
-        run: cargo clippy --locked -p zcash -p ledger_zcash_crypto --target ${{ matrix.target }} -- -D warnings
+        run: cargo clippy --locked -p zcash -p ledger_zcash_crypto --target ${{ matrix.target }} --features "${{ matrix.features }}" -- -D warnings

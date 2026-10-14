@@ -953,7 +953,7 @@ def test_trusted_input_v4_nu6_old(backend):
     assert sw == 0x9000
     sw, _ = transport.exchange_raw("e042800003000000")
     assert sw == 0x9000
-    sw, txid = transport.exchange_raw("e042800014000000000f000000000000000000000000000000000000")
+    sw, txid = transport.exchange_raw("e042800014000000000f000000000000000000000000000000")
     assert sw == 0x9000
 
     txid = txid[4 : 4 + 32 + 4 + 8]

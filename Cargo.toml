@@ -1,19 +1,20 @@
 [workspace]
 members = ["ledger_zcash_crypto"]
 default-members = ["."]
-exclude = ["vendor/rust-secp256k1"]
 
 [workspace.dependencies]
-# Floor at 1.37: earlier releases accept an APDU while a command is still being processed, so a
-# transport can be answered mid-review. The app does not enable `io_new`, so it runs the legacy I/O
-# path, which is where that release added the guard. Expressed as a requirement rather than left to
-# the lock file, which a regeneration could move on its own.
-ledger_device_sdk = { version = "1.37", features = ["sys"] }
+# Pinned exactly. The app's I/O and review behaviour is validated against one SDK release, and the
+# build updates this crate to the newest version the requirement allows, so a newer release comes in
+# only as a deliberate bump, re-validated. No release below 1.38.0 would do in any case: `io_new`
+# delivers APDUs to the app, BOLOS ones (CLA 0xB0) included, on a locked device before 1.37.1; 1.37
+# is where it rejects a command arriving mid-review; and before 1.38.0 it still runs BOLOS commands
+# other than GET_VERSION, quit and certificate load among them, while a review is displayed.
+ledger_device_sdk = { version = "=1.41.0", features = ["sys", "io_new"] }
 zeroize = { version = "1.6.0", default-features = false }
 
 [package]
 name = "zcash"
-version = "3.9.4"
+version = "3.9.5"
 authors = ["Ledger"]
 edition = "2024"
 
@@ -24,12 +25,12 @@ corez = { version = "0.1.1", default-features = false, features = ["alloc"] }
 arrayvec = { version = "0.7.6", default-features = false }
 bs58 = { version = "0.5.1", default-features = false }
 
-zcash_primitives = { version = "0.30.0", default-features = false }
-zcash_protocol = { version = "0.10.4", default-features = false }
-# Held at 0.4: zcash_{primitives,transparent,address} all resolve 0.4, so moving alone double-links.
-zcash_encoding = { version = "0.4.0", default-features = false }
-zcash_transparent = { version = "0.10.0", default-features = false }
-zcash_address = { version = "0.13.0", default-features = false }
+zcash_primitives = { version = "=0.31.0-pre.0", default-features = false }
+zcash_protocol = { version = "=0.11.0-pre.0", default-features = false }
+# zcash_{primitives,transparent,address} all resolve 0.5, so moving it alone would double-link.
+zcash_encoding = { version = "0.5", default-features = false }
+zcash_transparent = { version = "=0.11.0-pre.0", default-features = false }
+zcash_address = { version = "=0.14.0-pre.0", default-features = false }
 
 orchard = { path = "./vendor/orchard", default-features = false, features = ["ledger"] }
 num_enum = { version = "0.7.5", default-features = false }
@@ -39,12 +40,14 @@ zeroize = { workspace = true }
 # Pulled by bitvec (via orchard)
 radium = { path = "./vendor/radium" }
 # Pulled by bip32 (zcash_transparent) and zcash_script
-secp256k1 = { path = "./vendor/rust-secp256k1" }
+secp256k1 = { path = "./vendor/secp256k1" }
+secp256k1-sys = { path = "./vendor/secp256k1-sys" }
 # Used directly and by zcash_primitives
 orchard = { path = "./vendor/orchard" }
 # Pulled by zcash_primitives
 sapling-crypto = { path = "./vendor/sapling-crypto" }
-# Pulled by lazy_static
+# Pulled by lazy_static. The unpatched `spin` 0.10 also in Cargo.lock comes from `pprof`, a Unix-only
+# dev-dependency of orchard's benches, and never reaches a device build.
 spin = { path = "./vendor/spin" }
 portable-atomic = { git = "https://github.com/taiki-e/portable-atomic.git", tag = "v1.12.0" }
 # Pulled by orchard and redjubjub
@@ -66,7 +69,10 @@ debug = true
 [features]
 default = ["ledger_device_sdk/nano_nbgl", "legacy_path"]
 
-testnet = []
+# The only way to build the testnet logic: it selects SDK build variant 0, whose install
+# parameters (name, icons, derivation paths) travel with the binary, so the testnet address
+# prefixes and coin type never ship under the mainnet install parameters, nor the reverse.
+variant_testnet = ["ledger_device_sdk/variant_0"]
 
 # Enables debug logging
 debug = ["ledger_device_sdk/debug", "ledger_device_sdk/log_debug"]
@@ -109,6 +115,25 @@ icon = "icons/flex_app_zcash.gif"
 
 [package.metadata.ledger.apex_p]
 icon = "icons/apex_app_zcash.gif"
+
+[package.metadata.ledger.variants.0]
+name = "Zcash Test"
+path = ["44'/1'", "32'/1'"]
+
+[package.metadata.ledger.variants.0.nanox]
+icon = "icons/nanox_app_zcash_test.gif"
+
+[package.metadata.ledger.variants.0.nanosplus]
+icon = "icons/nanox_app_zcash_test.gif"
+
+[package.metadata.ledger.variants.0.stax]
+icon = "icons/stax_app_zcash_test.gif"
+
+[package.metadata.ledger.variants.0.flex]
+icon = "icons/flex_app_zcash_test.gif"
+
+[package.metadata.ledger.variants.0.apex_p]
+icon = "icons/apex_app_zcash_test.gif"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
