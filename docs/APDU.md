@@ -102,8 +102,10 @@ Only the deviations below are Zcash-specific; the shielded flow uses the PCZT co
 
 Zcash deviations:
 
-- V4, V5 and V6 transaction versions are all accepted; `P2 = 0x05` selects the Sapling variant
-  and `0x80` continues an in-progress hash.
+- `GET_TRUSTED_INPUT` reads V4, V5 and V6 previous transactions. The transaction being signed
+  (`HASH_INPUT_START`) must be V5: V4 and V6 are refused with `IncorrectData` (`0x6A80`), a V6
+  transaction being signed through the PCZT commands instead. `P2 = 0x05` selects the Sapling
+  variant and `0x80` continues an in-progress hash.
 - The header's `consensus_branch_id` must be one the protocol defines — Sprout's `0`, then
   Overwinter through NU7 — or the transaction is refused with `IncorrectData` (`0x6A80`). The
   transaction being signed (`HASH_INPUT_START`) must moreover have a version its branch can

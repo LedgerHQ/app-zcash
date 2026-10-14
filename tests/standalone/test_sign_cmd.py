@@ -513,6 +513,38 @@ def test_sign_tx_v5_branch_that_cannot_carry_it_is_rejected(backend, branch_id):
     assert client.get_version().status == 0x9000
 
 
+# Version and version group id as HASH_INPUT_START carries them, before the consensus branch id.
+_V4_VERSION_AND_GROUP = "0400008085202f89"
+_V5_VERSION_AND_GROUP = "050000800a27a726"
+
+
+@pytest.mark.parametrize(
+    "version_and_group, branch_id, accepted",
+    [
+        (_V4_VERSION_AND_GROUP, NU6_3_BRANCH_ID, False),
+        (_V4_VERSION_AND_GROUP, NU7_BRANCH_ID, False),
+        (_V5_VERSION_AND_GROUP, NU7_BRANCH_ID, True),
+    ],
+    ids=["v4_under_nu6_3", "v4_under_nu7", "v5_under_nu7"],
+)
+def test_sign_tx_signs_v5_only(backend, version_and_group, branch_id, accepted):
+    """The legacy path signs V5 transactions only. A V4 header is refused whatever its branch,
+    ZIP 2003's NU7 included, while the same packet carrying a V5 header under NU7 is accepted, so
+    the refusal comes from the version alone."""
+    transport = ZcashCommandSender(backend)
+    header = version_and_group + struct.pack("<I", branch_id).hex() + "01"
+    apdu = "e0440005" + f"{len(bytes.fromhex(header)):02x}" + header
+
+    if accepted:
+        sw, _ = transport.exchange_raw(apdu)
+        assert sw == 0x9000
+        return
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw(apdu)
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
 def test_trusted_input_keeps_the_branch_id_of_a_previous_transaction(backend):
     """A previous transaction only lends an output, so the branch id it declares is not checked
     against its version: branch id 0 still yields a trusted input."""
