@@ -1244,6 +1244,8 @@ def _open_legacy_change_info_state(transport) -> None:
         pytest.param("058000002c80000085000000020000000100000000", id="unhardened_account"),
         # The converse: the address index hardened where BIP-44 leaves it plain.
         pytest.param("058000002c80000085800000020000000180000000", id="hardened_address_index"),
+        # The testnet coin type, which only the testnet build accepts.
+        pytest.param("058000002c80000001800000020000000100000000", id="testnet_coin_type"),
     ],
 )
 def test_legacy_change_info_rejects_non_change_path(backend, change_path):

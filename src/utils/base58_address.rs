@@ -94,3 +94,45 @@ fn output_script_to_transparent_payload(script: &[u8]) -> Result<P2pkhPayload, A
 
     Ok(payload)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Base58Address, ToBase58Address};
+    use ledger_device_sdk::testing::TestType;
+
+    // One 20-byte hash under both script shapes. The mainnet P2SH encoding is the address
+    // `test_pczt_sign_tx_v5_p2sh_output` shows; every expected string is a Base58Check of the
+    // network's version bytes followed by the hash.
+    const P2SH_SCRIPT: [u8; 23] = [
+        0xa9, 0x14, 0x21, 0x7e, 0x32, 0x98, 0xb6, 0xa9, 0x63, 0xa8, 0x72, 0x2b, 0x0e, 0x7c, 0x7d,
+        0x8f, 0x3a, 0xff, 0x1d, 0x94, 0x72, 0xbd, 0x87,
+    ];
+    const P2PKH_SCRIPT: [u8; 25] = [
+        0x76, 0xa9, 0x14, 0x21, 0x7e, 0x32, 0x98, 0xb6, 0xa9, 0x63, 0xa8, 0x72, 0x2b, 0x0e, 0x7c,
+        0x7d, 0x8f, 0x3a, 0xff, 0x1d, 0x94, 0x72, 0xbd, 0x88, 0xac,
+    ];
+
+    #[cfg(not(feature = "variant_testnet"))]
+    const EXPECTED_P2SH: &str = "t3MciQaJ4pe9zHywiRjRHCnK2nibbtzPuiP";
+    #[cfg(feature = "variant_testnet")]
+    const EXPECTED_P2SH: &str = "t29buTFQCh6mMqgXTMURKkQVfuCpmpnGnWL";
+    #[cfg(not(feature = "variant_testnet"))]
+    const EXPECTED_P2PKH: &str = "t1LvhV2odGjqcCpFHJdkgn9x6eCJtLRjmB4";
+    #[cfg(feature = "variant_testnet")]
+    const EXPECTED_P2PKH: &str = "tmCmSosJ2fQM7M4SiyN4RdpcrFBPhvddNyZ";
+
+    /// Each script shape is encoded under the version bytes of the network the build targets.
+    #[test_case]
+    const OUTPUT_SCRIPTS_ENCODE_UNDER_THE_BUILD_NETWORK: TestType = TestType {
+        modname: module_path!(),
+        name: "output_scripts_encode_under_the_build_network",
+        f: || {
+            let p2sh = Base58Address::from_output_script(&P2SH_SCRIPT).map_err(|_| ())?;
+            let p2pkh = Base58Address::from_output_script(&P2PKH_SCRIPT).map_err(|_| ())?;
+            if p2sh.as_str() != EXPECTED_P2SH || p2pkh.as_str() != EXPECTED_P2PKH {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+}
