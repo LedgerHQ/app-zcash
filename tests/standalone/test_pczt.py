@@ -254,6 +254,72 @@ def test_pczt_sign_tx_v5_simple(
     )
 
 
+def test_pczt_session_survives_a_malformed_frame(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A frame whose declared length does not match its payload leaves the PCZT session intact.
+
+    The SDK refuses such a frame with `BadLen` before it reaches the app, so no handler runs and
+    nothing of it is parsed. The session the host has already built is unchanged: the host resends
+    the frame and carries on, and the review and signature cover exactly the well-formed frames.
+
+    Shares the review snapshots of `test_sign_tx_v5_simple`, whose transaction this signs.
+    """
+    PCZT_GLOBAL = PcztGlobal()
+    PATH = "m/44'/133'/0'/0/2"
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path=PATH,
+    )
+    TRANSPARENT_OUTPUT = PcztTransparentOutput(
+        value=81628565,
+        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+    )
+    TX_BYTES = pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], [TRANSPARENT_OUTPUT])
+
+    client = ZcashCommandSender(backend)
+
+    response = client.get_public_key(path=PATH).data
+    public_key, _, _ = unpack_get_public_key_response(response)
+
+    declared_length = 5
+    malformed_frame = struct.pack(
+        ">BBBBB", CLA, InsType.PCZT_TRANSPARENT_OUTPUT, P1.P1_FIRST, P2.P2_NONE, declared_length
+    ) + bytes(declared_length - 2)
+    send_outputs = client._send_pczt_transparent_outputs_sync
+
+    def send_outputs_after_a_malformed_frame(transparent_outputs):
+        with pytest.raises(ExceptionRAPDU) as e:
+            backend.exchange_raw(malformed_frame)
+        assert e.value.status == Errors.SW_WRONG_APDU_LENGTH
+        assert not e.value.data
+        send_outputs(transparent_outputs)
+
+    client._send_pczt_transparent_outputs_sync = send_outputs_after_a_malformed_frame
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=[TRANSPARENT_OUTPUT],
+    ):
+        _review_approve(scenario_navigator, "test_sign_tx_v5_simple")
+
+    signature = client.pczt_sign_transparent(input_index=0).data[:-1]
+
+    assert check_tx_v5_signature_validity(
+        public_key,
+        signature,
+        TX_BYTES,
+        input_index=0,
+        input_amounts=[TRANSPARENT_INPUT.value],
+    )
+
+
 def test_legacy_round_after_a_completed_pczt_is_rejected(
     backend,
     scenario_navigator: NavigateWithScenario,
