@@ -43,7 +43,7 @@ from .own_account_vectors import (
     ORCHARD_ACCOUNT_1_MEMO,
     own_account_orchard_action,
 )
-from .test_pczt_ironwood import _valid_orchard_action
+from .test_pczt_ironwood import _review_reject_up_to_the_choice, _valid_orchard_action
 
 # Mirrors MAX_PCZT_SCRIPT_SIZE in src/consts.rs, itself the host's single-byte CompactSize limit.
 _MAX_PCZT_SCRIPT_SIZE = 252
@@ -2455,7 +2455,7 @@ def test_pczt_orchard_own_account_transfer_rejected_by_user(backend, scenario_na
 
     with pytest.raises(ExceptionRAPDU) as error:
         with _send_own_account_orchard(client, bundle):
-            scenario_navigator.review_reject(test_name="test_pczt_orchard_own_account_transfer_rejected_by_user")
+            _review_reject_up_to_the_choice(scenario_navigator, "test_pczt_orchard_own_account_transfer_rejected_by_user")
     assert error.value.status == Errors.SW_DENY
 
     with pytest.raises(ExceptionRAPDU):
