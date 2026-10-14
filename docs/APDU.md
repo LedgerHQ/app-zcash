@@ -74,8 +74,9 @@ path, whereas key export must not dictate a shape to the host. The requirement i
 stated with each command below.
 
 The testnet build (`variant_testnet`) is installed with `44'/1'` and `32'/1'` instead,
-and accepts coin type `1'` only; a mainnet build accepts coin type `133'` only. Every
-other coin type is refused with the same status word, in both builds.
+and accepts coin type `1'` only; a mainnet build accepts coin type `133'` only. In
+both builds, any other coin type is refused with the status word the command uses for
+a path outside its prefixes.
 
 ## Legacy transparent signing commands
 

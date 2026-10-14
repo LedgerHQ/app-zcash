@@ -88,6 +88,17 @@ mainnet coin type. Its name, icons and home screen differ from the mainnet app. 
 to build the testnet logic; the default build is unchanged. A variant build writes to the same
 output path as the default one, so rebuild before switching between them.
 
+Select it through `variant_testnet` only. The feature both compiles the testnet logic and turns on
+the SDK's variant slot `ledger_device_sdk/variant_0`, which carries the install parameters. Turning
+on the slot alone installs the `Zcash Test` name and the `1'` paths over the mainnet logic: the OS
+then refuses every derivation, but the app is mislabelled. Ledger's reusable build workflow
+(`ledger-app-workflows`, `reusable_build.yml`) builds the variant when its caller passes the
+feature in the `features` input, as `build_and_functional_tests.yml` does.
+
+The swap handlers stay in this build. Exchange reaches them as on mainnet, and the address check
+compares the address Exchange holds with the `tm…` address of a `44'/1'` key. The swap suite
+(`tests/swap`) runs against the mainnet build only.
+
 Its functional tests live in `tests/testnet` and need the variant build:
 ```bash
 cargo ledger build flex -- --features variant_testnet
