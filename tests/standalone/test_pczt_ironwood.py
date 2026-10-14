@@ -29,7 +29,7 @@ from ecdsa import SECP256k1, VerifyingKey
 from ecdsa.keys import BadSignatureError
 from ecdsa.util import sigdecode_der
 from ragger.error import ExceptionRAPDU
-from ragger.navigator import NavigateWithScenario
+from ragger.navigator import NavInsID, NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
 from .own_account_vectors import (
@@ -2545,6 +2545,35 @@ def test_pczt_ironwood_own_account_transfer_beside_change_keeps_change_hidden(
     assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
 
 
+def _review_reject_up_to_the_choice(scenario_navigator: NavigateWithScenario, snapshot_test_name: str) -> None:
+    """Reject a review, comparing every screen up to the rejection choice.
+
+    On a touch device the app answers `Deny` as soon as the rejection is confirmed, and the reply
+    races the status screen: whether the navigation still sees that screen before the reply ends it
+    depends on timing. So the screens are compared up to the choice, which comes before any reply,
+    and the rejection is then confirmed without comparing what follows.
+    """
+    if not scenario_navigator.device.touchable:
+        scenario_navigator.review_reject(test_name=snapshot_test_name)
+        return
+
+    scenario = NavigationScenarioData(
+        scenario_navigator.device, scenario_navigator.backend, UseCase.TX_REVIEW, False
+    )
+    scenario_navigator.navigator.navigate_until_text_and_compare(
+        navigate_instruction=scenario.navigation,
+        validation_instructions=[NavInsID.USE_CASE_REVIEW_REJECT],
+        text=scenario.pattern,
+        path=scenario_navigator.screenshot_path,
+        test_case_name=snapshot_test_name,
+    )
+    scenario_navigator.navigator.navigate(
+        [NavInsID.USE_CASE_CHOICE_CONFIRM],
+        screen_change_before_first_instruction=False,
+        screen_change_after_last_instruction=False,
+    )
+
+
 def test_pczt_ironwood_own_account_transfer_rejected_by_user(backend, scenario_navigator: NavigateWithScenario):
     """Rejecting the review of a transfer to another account releases no signature."""
     client = ZcashCommandSender(backend)
@@ -2552,7 +2581,7 @@ def test_pczt_ironwood_own_account_transfer_rejected_by_user(backend, scenario_n
 
     with pytest.raises(ExceptionRAPDU) as error:
         with _send_own_account_ironwood(client, bundle):
-            scenario_navigator.review_reject(test_name="test_pczt_ironwood_own_account_transfer_rejected_by_user")
+            _review_reject_up_to_the_choice(scenario_navigator, "test_pczt_ironwood_own_account_transfer_rejected_by_user")
     assert error.value.status == Errors.SW_DENY
 
     with pytest.raises(ExceptionRAPDU):

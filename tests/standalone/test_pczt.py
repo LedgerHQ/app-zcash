@@ -46,6 +46,7 @@ from .own_account_vectors import (
 from .test_pczt_ironwood import (
     _NU7_BRANCH_ID,
     _TRANSPARENT_OUTPUT_299K,
+    _review_reject_up_to_the_choice,
     _valid_orchard_action,
     _valid_orchard_bundle,
 )
@@ -2460,7 +2461,7 @@ def test_pczt_orchard_own_account_transfer_rejected_by_user(backend, scenario_na
 
     with pytest.raises(ExceptionRAPDU) as error:
         with _send_own_account_orchard(client, bundle):
-            scenario_navigator.review_reject(test_name="test_pczt_orchard_own_account_transfer_rejected_by_user")
+            _review_reject_up_to_the_choice(scenario_navigator, "test_pczt_orchard_own_account_transfer_rejected_by_user")
     assert error.value.status == Errors.SW_DENY
 
     with pytest.raises(ExceptionRAPDU):
