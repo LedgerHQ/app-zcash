@@ -1,3 +1,5 @@
+use zcash_protocol::consensus::NetworkType;
+
 use crate::AppSW;
 
 pub const ZCASH_TICKER: &str = "ZEC";
@@ -21,6 +23,12 @@ pub const ZIP32_PURPOSE: u32 = 32;
 pub const ZCASH_BIP44_COIN_TYPE: u32 = 133;
 #[cfg(feature = "variant_testnet")]
 pub const ZCASH_BIP44_COIN_TYPE: u32 = 1;
+// The network whose encodings (`u1` / `utest1`, `uview1` / `uviewtest1`) the app produces, chosen
+// by the same build as the coin type.
+#[cfg(not(feature = "variant_testnet"))]
+pub const ZCASH_NETWORK: NetworkType = NetworkType::Main;
+#[cfg(feature = "variant_testnet")]
+pub const ZCASH_NETWORK: NetworkType = NetworkType::Test;
 
 // Transparent inputs one transaction may spend.
 //

@@ -43,8 +43,7 @@ impl PcztParser {
 
         if let Some(fvk) = fvk {
             ctx.tx_info.orchard_decipher_keys = Some(
-                OrchardDecipherKeys::from_fvk(&fvk, orchard_network(path))
-                    .map_err(ParserError::from_sw)?,
+                OrchardDecipherKeys::from_fvk(&fvk, ZCASH_NETWORK).map_err(ParserError::from_sw)?,
             );
             self.orchard_fvk = Some(RetainedOrchardFvk::new(fvk));
         }

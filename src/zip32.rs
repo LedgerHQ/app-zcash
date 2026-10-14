@@ -1,5 +1,4 @@
 use orchard::keys::SpendingKey as OrchardSk;
-use zcash_protocol::consensus::NetworkType;
 
 use ledger_device_sdk::ecc::Pallas;
 use ledger_device_sdk::ecc::Secret;
@@ -47,16 +46,6 @@ pub fn map_ledger_crypto_error(err: ledger_zcash_crypto::Error) -> AppSW {
         ledger_zcash_crypto::Error::OutOfMemory => AppSW::NotEnoughMemorySpace,
         _ => AppSW::TechnicalProblem,
     }
-}
-
-pub fn orchard_network(path: &Bip32Path) -> NetworkType {
-    // m_Orchard / 32' / 1' / account'
-    if let Some(coin_type) = path.as_slice().get(1)
-        && *coin_type == 1 + 0x8000_0000
-    {
-        return NetworkType::Test;
-    }
-    NetworkType::Main
 }
 
 // Derives the Orchard FullViewingKey bytes for the given coin type and account.

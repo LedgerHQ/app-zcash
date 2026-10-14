@@ -4,14 +4,14 @@ use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver, Revi
 use ledger_device_sdk::io::{Command, CommandResponse};
 use ledger_device_sdk::log::{error, info};
 
-use crate::consts::UNHARDENED_MASK;
+use crate::consts::{UNHARDENED_MASK, ZCASH_NETWORK};
 
 use crate::app_ui::address::ui_display_shielded_address;
 use crate::utils::base58_address::{Base58Address, ToBase58Address};
 use crate::utils::bip32_path::Bip32Path;
 use crate::utils::hashers::ToHash160;
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance, encode_string_response};
-use crate::zip32::{derive_transparent_account_pubkey, map_ledger_crypto_error, orchard_network};
+use crate::zip32::{derive_transparent_account_pubkey, map_ledger_crypto_error};
 use crate::{AppSW, P2ShieldedAddrMode, zip32::derive_orchard_fvk};
 
 const TRANSPARENT_ACCOUNT_CHAIN_CODE_LEN: usize = 32;
@@ -114,7 +114,7 @@ pub fn handler_get_shielded_addr<'a>(
                 .address_at_ledger(0u32)
                 .map_err(map_ledger_crypto_error)?;
 
-            let network = orchard_network(&path);
+            let network = ZCASH_NETWORK;
 
             let orchard_address = UnifiedAddress::try_from_items(
                 Revision::R0,

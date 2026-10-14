@@ -5,11 +5,11 @@ use ledger_device_sdk::io::{Command, CommandResponse};
 use ledger_device_sdk::log::{error, info};
 
 use crate::app_ui::address::{ui_display_orchard_fvk, ui_display_ufvk};
-use crate::consts::{UNHARDENED_MASK, ZCASH_BIP44_COIN_TYPE};
+use crate::consts::{UNHARDENED_MASK, ZCASH_BIP44_COIN_TYPE, ZCASH_NETWORK};
 use crate::utils::{
     Bip44CheckMode, HexSlice, check_bip44_compliance, derivation_account, encode_string_response,
 };
-use crate::zip32::{derive_orchard_fvk, derive_transparent_account_pubkey, orchard_network};
+use crate::zip32::{derive_orchard_fvk, derive_transparent_account_pubkey};
 use crate::{
     AppSW, P2VkMode,
     tx::{PendingVkResponse, TxContext},
@@ -128,7 +128,7 @@ pub fn handler_get_vk<'a>(
             let transparent_bytes = derive_transparent_account_pubkey(transparent_path)?;
             info!("Transparent PK: {}", HexSlice(&transparent_bytes));
 
-            let network = orchard_network(&path);
+            let network = ZCASH_NETWORK;
 
             let ufvk = Ufvk::try_from_items(
                 Revision::R0,

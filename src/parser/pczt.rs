@@ -9,7 +9,7 @@ use core::{cmp, mem};
 
 use crate::consts::{
     MAX_PCZT_OWN_ACCOUNTS, PCZT_OUTPUT_EXTENSION_ACCOUNT, UNHARDENED_MASK, V6_TX_VERSION,
-    V6_VERSION_GROUP_ID,
+    V6_VERSION_GROUP_ID, ZCASH_NETWORK,
 };
 use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use ::orchard::keys::Scope as OrchardScope;
@@ -64,7 +64,7 @@ use crate::utils::{
 use crate::zip32::{
     OrchardFvk, OrchardValidationKey, RetainedOrchardFvk, derive_orchard_ask_from_sk,
     derive_orchard_fvk, derive_orchard_fvk_and_ask_from_sk, derive_orchard_fvk_from_sk,
-    derive_orchard_sk_bytes, orchard_network,
+    derive_orchard_sk_bytes,
 };
 
 use super::reader::{ByteReader, ReadBytesExt};
@@ -703,9 +703,8 @@ impl PcztParser {
     // All Orchard actions of a PCZT share one account key (one UFVK), so the
     // first action's `path` fixes the key for the whole transaction. A later
     // action declaring a different path is rejected rather than served the
-    // cached key: the caller would otherwise derive an FVK from one path while
-    // deciding the network (`orchard_network`) from another, and sign with a key
-    // the declared path does not produce.
+    // cached key: the caller would otherwise sign with a key the declared path
+    // does not produce.
     pub fn orchard_spending_key(&mut self, path: &Bip32Path) -> Result<&Secret<32>, AppSW> {
         match self.orchard_spending_key_path {
             Some(cached_path) if cached_path != *path => return Err(AppSW::BadState),
