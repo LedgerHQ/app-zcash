@@ -84,9 +84,11 @@ pub fn get_check_address_params<
 
 //  --8<-- [end:error_code_api]
 
-/// Helper function to read a null-terminated C string into a fixed-size buffer
-/// Returns the buffer and the actual length read
-/// Prints a warning if truncation occurs
+/// Reads a null-terminated C string into a fixed-size buffer and returns it with its length.
+///
+/// A string that does not fit comes back empty rather than cut short: a prefix of the reference
+/// address is not the address Exchange holds, so the check it feeds must fail rather than compare
+/// something else.
 fn read_c_string<const N: usize>(ptr: *const i8) -> ([u8; N], usize) {
     let mut buffer = [0u8; N];
 
@@ -103,11 +105,11 @@ fn read_c_string<const N: usize>(ptr: *const i8) -> ([u8; N], usize) {
         c = unsafe { *ptr.add(length) };
     }
 
-    // Check if truncation occurred
-    if c != '\0' as i8 && length == N {
+    if c != '\0' as i8 {
         use ledger_device_sdk::warn;
 
-        warn!("C string truncated");
+        warn!("C string longer than its buffer");
+        return ([0u8; N], 0);
     }
 
     (buffer, length)
