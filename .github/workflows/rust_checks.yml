@@ -42,19 +42,6 @@ jobs:
         # path that makes them unreachable. Anything else fails here.
         run: cargo audit
 
-  clippy_testnet:
-    name: Lint the testnet variant
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-dev-tools:latest
-    steps:
-      - name: Clone
-        uses: actions/checkout@v4
-
-      - name: Clippy (variant_testnet)
-        # The testnet logic is compiled out of every other build, so only this step sees it.
-        run: cargo clippy --release --locked --target flex --features variant_testnet -- -D warnings
-
   unit_tests:
     name: Run the unit tests and I/O regressions
     runs-on: ubuntu-latest
@@ -80,6 +67,10 @@ jobs:
         # Speculos run down rather than failing one case, so this step is also what catches a
         # memory fault reached from parsing.
         run: cargo test --locked -p zcash --features unit_test --target apex_p
+
+      - name: Cargo test (zcash, testnet variant)
+        # The network constants differ in this build, and only these cases check them directly.
+        run: cargo test --locked -p zcash --features unit_test,variant_testnet --target apex_p
 
       - name: I/O boundary regressions
         run: python3 tests/io-regression/run.py
