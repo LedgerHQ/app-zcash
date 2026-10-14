@@ -129,6 +129,14 @@ impl PcztParser {
         }
 
         let consensus_branch_id = ok!(BranchId::try_from(branch_id_raw));
+        // The user approves a transaction the network can mine, or none: a V6 transaction under a
+        // branch that predates it, or the reverse, is refused before anything is reviewed.
+        let tx_version = if is_v6 { TxVersion::V6 } else { TxVersion::V5 };
+        if !tx_version.valid_in_branch(consensus_branch_id) {
+            return Err(ParserError::from_str(
+                "PCZT transaction version not valid in its consensus branch",
+            ));
+        }
         let fallback_lock_time = self.read_optional_u32(reader)?;
         let expiry_height = ok!(reader.read_u32_le());
         let coin_type = ok!(reader.read_u32_le());

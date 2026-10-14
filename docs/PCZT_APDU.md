@@ -113,7 +113,9 @@ Single packet:
 
 The app accepts a `consensus_branch_id` only if it is a consensus branch id defined by the protocol
 (Sprout's `0`, then Overwinter through NU7) and rejects any other value, ending the session with
-`SW_INVALID_TRANSACTION`.
+`SW_INVALID_TRANSACTION`. The transaction version must also be one that branch carries — V5 from
+NU5, V6 from NU6.3 — so a V6 transaction under NU5, or any version under Sprout's `0`, is refused the
+same way: the network could never mine it.
 
 The PCZT version field encodes the PCZT wire-format revision:
 

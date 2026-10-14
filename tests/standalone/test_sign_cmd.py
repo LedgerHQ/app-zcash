@@ -469,6 +469,62 @@ def test_sign_tx_v5_undefined_branch_id_rejected(backend):
     assert e.value.status == Errors.SW_INVALID_TRANSACTION
 
 
+SPROUT_BRANCH_ID = 0
+CANOPY_BRANCH_ID = 0xE9FF75A6
+
+
+def _trusted_v5_prevout(client: ZcashCommandSender, branch_id: int = NU5_BRANCH_ID) -> tuple[bytes, bytes]:
+    """A trusted input for a V5 previous transaction under `branch_id`, and that transaction's txid."""
+    prevout_tx_bytes = _build_transparent_tx_v5(
+        locktime=0,
+        expiry=0,
+        branch_id=branch_id,
+        inputs=[{"prev_txid": bytes.fromhex("11" * 32), "prev_vout": 0, "script": bytes.fromhex("6a"),
+                 "sequence": 0xFFFFFFFF}],
+        outputs=[{"value": 81_630_485, "script": bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac")}],
+    )
+    trusted_input = client.get_trusted_input(prevout_tx_bytes, 0).data
+    return trusted_input, nu5_txid_digests(prevout_tx_bytes)["final_digest"]
+
+
+@pytest.mark.parametrize(
+    "branch_id",
+    [SPROUT_BRANCH_ID, CANOPY_BRANCH_ID, UNDEFINED_BRANCH_ID],
+    ids=["sprout", "canopy", "undefined"],
+)
+def test_sign_tx_v5_branch_that_cannot_carry_it_is_rejected(backend, branch_id):
+    """The transaction being signed is refused at HASH_INPUT when its branch cannot carry a V5
+    transaction, or is not defined at all: the network could never mine it."""
+    client = ZcashCommandSender(backend)
+    trusted_input, prevout_txid = _trusted_v5_prevout(client)
+    tx_bytes = _build_transparent_tx_v5(
+        locktime=0,
+        expiry=0,
+        branch_id=branch_id,
+        inputs=[{"prev_txid": prevout_txid, "prev_vout": 0,
+                 "script": bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"), "sequence": 0}],
+        outputs=[{"value": 81_628_565, "script": bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac")}],
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input])
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert client.get_version().status == 0x9000
+
+
+def test_trusted_input_keeps_the_branch_id_of_a_previous_transaction(backend):
+    """A previous transaction only lends an output, so the branch id it declares is not checked
+    against its version: branch id 0 still yields a trusted input."""
+    client = ZcashCommandSender(backend)
+
+    trusted_input, prevout_txid = _trusted_v5_prevout(client, SPROUT_BRANCH_ID)
+
+    trusted_txid, trusted_input_idx, _, _, _ = unpack_trusted_input_response(trusted_input)
+    assert trusted_txid == prevout_txid
+    assert trusted_input_idx == 0
+
+
 def test_sign_tx_v5_change(backend, scenario_navigator):
     LOCKTIME = 0x00
     EXPIRY = 0x00

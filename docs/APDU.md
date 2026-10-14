@@ -94,6 +94,12 @@ Zcash deviations:
 
 - V4, V5 and V6 transaction versions are all accepted; `P2 = 0x05` selects the Sapling variant
   and `0x80` continues an in-progress hash.
+- The header's `consensus_branch_id` must be one the protocol defines — Sprout's `0`, then
+  Overwinter through NU7 — or the transaction is refused with `IncorrectData` (`0x6A80`). The
+  transaction being signed (`HASH_INPUT_START`) must moreover have a version its branch can
+  carry: a V5 transaction under a branch that predates NU5 is refused the same way. A previous
+  transaction given to `GET_TRUSTED_INPUT` keeps the branch id the host sends, which for V4 does
+  not even enter its txid.
 - Anchor streaming depends on the version: a V5 Orchard bundle commits to its anchor in the
   hashed preimage, whereas in a V6 transaction both shielded bundles moved the anchor to the
   authorizing digest (ZIP 229), which a trusted input never computes — so the host streams no
