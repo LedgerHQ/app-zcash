@@ -1,9 +1,15 @@
 # Ledger delta for the vendored `orchard` crate.
 #
-# Base: crates.io package orchard 0.15.5 (git 29d1d55db62153dcaeef8ef631c8991c53ed1248)
+# Base: crates.io package orchard 0.16.0
 # Apply from vendor/orchard with: patch -p1 -E < ../patches/orchard_dep.patch
 #
-# Regenerate: fetch the base artifact, then diff it against the vendored tree.
+# Upstream equivalents that replaced earlier hunks of this delta (each checked against the 0.16.0
+# source before the hunk was retired):
+#   - `SpendingKey` wiped on drop: upstream 0.16.0 `keys.rs` implements `Zeroize`, `ZeroizeOnDrop`
+#     and a zeroizing `Drop` under its `zeroize` feature, which the `ledger` feature below enables.
+#   - `SpendingKey` `Debug` printing no key material: upstream 0.16.0 has the redacted impl.
+#
+# Regenerate with vendor/generate_patches.sh, which also verifies the result.
 #
 diff -ruN a/.cargo_vcs_info.json b/.cargo_vcs_info.json
 --- a/.cargo_vcs_info.json

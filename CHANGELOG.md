@@ -12,6 +12,14 @@ allows once it refuses every APDU on a locked device.
 - Refuse to sign a transaction whose version its consensus branch cannot carry, such as a V5
   transaction before NU5 or a V6 one before NU6.3, Sprout's `0` included. A trusted input still
   accepts the branch id of the transaction it reads
+- Require each signing path to have the shape of the key it names: a five-component BIP-44
+  path with a hardened account for a transparent signature, on `HASH_SIGN` and on a PCZT
+  input, and a ZIP-32 account path for an Orchard or Ironwood spend authorization
+- Drop the viewing keys of a PCZT session on every refusal that ends it, including those made
+  before a packet is parsed
+- Refuse a swap reference address longer than its buffer instead of comparing a truncated copy
+- Wipe the incoming viewing key, shared secret and symmetric key of a compact note decryption,
+  and build the ChaCha20-Poly1305 cipher with its zeroizing drop
 - Move to the `zcash_protocol` 0.11 crate set and re-base the vendored `orchard`,
   `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1; vendor `secp256k1` 0.33.1 and
   `secp256k1-sys` 0.14.1 in place of the `rust-secp256k1` tree, carrying the same build stub
@@ -67,7 +75,7 @@ allows once it refuses every APDU on a locked device.
   account's viewing keys and shows the output as `Account index <n>` with its amount and
   memo, only if it decrypts under them, whatever outgoing record the sender kept. A
   declaration the output does not prove, or naming the account being spent, is refused.
-  The declared index goes up to 100, the account range of a signing path. At most four
+  The declared index goes up to 100, the account range of a change path. At most four
   distinct accounts per transaction, each costing one derivation. A swap
   refuses such an output, and any destination left empty
 
