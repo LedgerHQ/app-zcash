@@ -15,17 +15,20 @@
 #           tree that needs files the published package does not carry. No
 #           current pin uses it.
 #
-# Fields: name|kind|coordinate. For `crates` the coordinate is the version; for
-# `git` it is the clone URL and the ref, separated by a space.
+# Fields: name|kind|coordinate|sha256. For `crates` the coordinate is the version
+# and the sha256 is that of the downloaded `.crate` archive, the checksum the
+# crates.io index publishes for that version; a download that does not match is
+# refused. For `git` the coordinate is the clone URL and the ref, separated by a
+# space, and the ref pins the content, so the sha256 field is left empty.
 
 VENDORED_DEPS=(
-    "orchard|crates|0.16.0"
-    "radium|crates|0.7.0"
-    "reddsa|crates|0.6.1"
-    "sapling-crypto|crates|0.9.0"
-    "spin|crates|0.9.8"
-    "secp256k1|crates|0.33.1"
-    "secp256k1-sys|crates|0.14.1"
+    "orchard|crates|0.16.0|4ae7ceb7b5387bd76cf3c0712f57708795c925cecf097036cedb60b5c3706e8f"
+    "radium|crates|0.7.0|dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
+    "reddsa|crates|0.6.1|4a70b6dbd7b3277cbd4d89ee750a30bebab3b9951ee4e166ce15c00975fe410f"
+    "sapling-crypto|crates|0.9.0|4a2cbdcfeef20006adf72699cd466f21fe349674277cc05d3fc9b7302db7b182"
+    "spin|crates|0.9.8|6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+    "secp256k1|crates|0.33.1|d7f404a8dab7a7a5a631e741d8699aa9c8e1d689fc26ccf897c7187565490b69"
+    "secp256k1-sys|crates|0.14.1|f6b2992d4a3cd244539a7d5d0966aadbe5ca7fb868a5d7e38c29499b9e709bbd"
 )
 
 # Present in one tree and not the other for reasons that have nothing to do with
@@ -41,16 +44,31 @@ for _excluded in "${BASE_DIFF_EXCLUDES[@]}"; do
 done
 unset _excluded
 
+# The sha256 of a file, with whichever tool the platform ships.
+file_sha256() {
+    if command -v sha256sum >/dev/null; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
+}
+
 # Fetch a crate's unmodified base into $dest, which must not already exist.
 materialize_base() {
-    local name=$1 kind=$2 coord=$3 dest=$4
+    local name=$1 kind=$2 coord=$3 sha256=$4 dest=$5
 
     case "$kind" in
         crates)
             local url="https://static.crates.io/crates/$name/$name-$coord.crate"
-            local archive
+            local archive actual
             archive=$(mktemp -t "$name.crate.XXXXXX")
             curl -fsSL "$url" -o "$archive"
+            actual=$(file_sha256 "$archive")
+            if [[ "$actual" != "$sha256" ]]; then
+                echo "REFUSING $name $coord: archive sha256 $actual, pinned $sha256" >&2
+                rm -f "$archive"
+                return 1
+            fi
             mkdir -p "$dest"
             tar xzf "$archive" -C "$dest" --strip-components=1
             rm -f "$archive"
