@@ -8,8 +8,8 @@ use core::fmt::Write as _;
 use core::{cmp, mem};
 
 use crate::consts::{
-    MAX_PCZT_OWN_ACCOUNTS, PCZT_OUTPUT_EXTENSION_ACCOUNT, UNHARDENED_MASK, V6_TX_VERSION,
-    V6_VERSION_GROUP_ID,
+    MAX_ACCOUNT_INDEX, MAX_PCZT_OWN_ACCOUNTS, PCZT_OUTPUT_EXTENSION_ACCOUNT, UNHARDENED_MASK,
+    V6_TX_VERSION, V6_VERSION_GROUP_ID,
 };
 use crate::parser::personalization::ZCASH_ORCHARD_HASH_PERSONALIZATION_V6;
 use ::orchard::keys::Scope as OrchardScope;
@@ -295,6 +295,11 @@ fn parse_output_extensions(reader: &mut ByteReader<'_>) -> Result<Option<u32>, P
                 // describing some other path than the one this field names.
                 if index & !UNHARDENED_MASK != 0 {
                     return Err(ParserError::from_str("Hardened PCZT output account index"));
+                }
+                if index > MAX_ACCOUNT_INDEX {
+                    return Err(ParserError::from_str(
+                        "PCZT output account index out of range",
+                    ));
                 }
                 account = Some(index);
             }
@@ -1362,7 +1367,7 @@ mod tests {
         f: || {
             if extensions(&[])? != None
                 || extensions(&[0x01, 4, 7, 0, 0, 0])? != Some(7)
-                || extensions(&[0x01, 4, 0xff, 0xff, 0xff, 0x7f])? != Some(0x7fff_ffff)
+                || extensions(&[0x01, 4, 100, 0, 0, 0])? != Some(100)
             {
                 return Err(());
             }
@@ -1370,19 +1375,21 @@ mod tests {
         },
     };
 
-    /// Unknown, repeated, mis-sized, truncated and hardened entries are all refused.
+    /// Unknown, repeated, mis-sized, truncated, hardened and out-of-range entries are all refused.
     #[test_case]
     const OUTPUT_EXTENSIONS_REFUSE_MALFORMED_BLOCKS: TestType = TestType {
         modname: module_path!(),
         name: "output_extensions_refuse_malformed_blocks",
         f: || {
-            let malformed: [&[u8]; 7] = [
+            let malformed: [&[u8]; 9] = [
                 &[0x02, 4, 1, 0, 0, 0],
                 &[0x01, 4, 1, 0, 0, 0, 0x01, 4, 1, 0, 0, 0],
                 &[0x01, 3, 1, 0, 0],
                 &[0x01, 5, 1, 0, 0, 0, 0],
                 &[0x01, 4, 1, 0],
                 &[0x01, 4, 1, 0, 0, 0x80],
+                &[0x01, 4, 101, 0, 0, 0],
+                &[0x01, 4, 0xff, 0xff, 0xff, 0x7f],
                 &[0x01],
             ];
             if malformed.iter().any(|block| extensions(block).is_ok()) {

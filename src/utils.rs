@@ -1,4 +1,6 @@
-use crate::consts::{UNHARDENED_MASK, ZCASH_BIP44_COIN_TYPE, ZIP32_PATH_LEN, ZIP32_PURPOSE};
+use crate::consts::{
+    MAX_ACCOUNT_INDEX, UNHARDENED_MASK, ZCASH_BIP44_COIN_TYPE, ZIP32_PATH_LEN, ZIP32_PURPOSE,
+};
 use crate::utils::bip32_path::Bip32Path;
 use alloc::vec::Vec;
 use ledger_device_sdk::log::error;
@@ -128,7 +130,6 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const BIP44_COIN_TYPE_OFFSET: usize = 1;
     const BIP44_CHANGE_OFFSET: usize = 3;
     const BIP44_ADDRESS_INDEX_OFFSET: usize = 4;
-    const MAX_BIP44_ACCOUNT_RECOMMENDED: u32 = 100;
     const MAX_BIP44_ADDRESS_INDEX_RECOMMENDED: u32 = 50000;
 
     const BIP44_PREFIX_LEN: usize = 2;
@@ -230,7 +231,7 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
         }
 
         let account = path[BIP44_ACCOUNT_OFFSET] & UNHARDENED_MASK;
-        if account > MAX_BIP44_ACCOUNT_RECOMMENDED {
+        if account > MAX_ACCOUNT_INDEX {
             error!("Bad Bip44 account");
             return false;
         }
