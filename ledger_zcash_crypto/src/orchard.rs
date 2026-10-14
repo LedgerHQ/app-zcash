@@ -282,20 +282,20 @@ fn try_output_recovery_with_ovk(
         return Ok(None);
     }
 
-    let ock = prf_ock_orchard(
+    let ock = Zeroizing::new(prf_ock_orchard(
         ovk,
         &action.cv_net,
         &action.compact.cmx,
         &action.compact.ephemeral_key,
-    )?;
+    )?);
 
-    let mut out_plaintext = [0u8; ORCHARD_OUT_PLAINTEXT_SIZE];
+    let mut out_plaintext = Zeroizing::new([0u8; ORCHARD_OUT_PLAINTEXT_SIZE]);
     if !chacha20poly1305_decrypt(&ock, &action.out_ciphertext, &mut out_plaintext) {
         return Ok(None);
     }
 
     let mut pk_d = [0u8; HASH_SIZE];
-    let mut esk = [0u8; HASH_SIZE];
+    let mut esk = Zeroizing::new([0u8; HASH_SIZE]);
     pk_d.copy_from_slice(&out_plaintext[..HASH_SIZE]);
     esk.copy_from_slice(&out_plaintext[HASH_SIZE..ORCHARD_OUT_PLAINTEXT_SIZE]);
 
@@ -306,10 +306,10 @@ fn try_output_recovery_with_ovk(
         return Ok(None);
     }
 
-    let shared_secret = key_agreement_with_point(&esk, pk_d_point)?;
-    let k_enc = kdf_orchard(&shared_secret, &action.compact.ephemeral_key)?;
+    let shared_secret = Zeroizing::new(key_agreement_with_point(&esk, pk_d_point)?);
+    let k_enc = Zeroizing::new(kdf_orchard(&shared_secret, &action.compact.ephemeral_key)?);
 
-    let mut note_plaintext = [0u8; ORCHARD_NOTE_PLAINTEXT_SIZE];
+    let mut note_plaintext = Zeroizing::new([0u8; ORCHARD_NOTE_PLAINTEXT_SIZE]);
     if !chacha20poly1305_decrypt(&k_enc, action.enc_ciphertext, &mut note_plaintext) {
         return Ok(None);
     }
@@ -326,7 +326,7 @@ fn try_output_recovery_with_ovk(
         &action.compact,
         &note_plaintext_prefix,
         &pk_d,
-        Some(&esk),
+        Some(&*esk),
         &rho,
         Some(memo),
         expected_note_version,
