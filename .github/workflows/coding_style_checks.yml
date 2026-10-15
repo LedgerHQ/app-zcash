@@ -6,6 +6,7 @@ name: Run coding style check
 
 permissions:
   contents: read
+  packages: read
 
 on:
   workflow_dispatch:
