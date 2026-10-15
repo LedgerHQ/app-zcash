@@ -4,6 +4,9 @@ A transparent signature comes from a five-component BIP-44 path with a hardened 
 or Ironwood spend authorization from a ZIP-32 account path. Any other shape names a key no wallet
 derives for that purpose, so the app refuses it, whatever else the path gets right. Every refusal
 here has a control that differs only in the path and is accepted.
+
+Within the transparent shape, the account is not capped and change and address index are the
+host's: the accepted cases pin that, since a host may sign from any account and scope it derives.
 """
 
 import pytest
@@ -33,10 +36,24 @@ COIN_TYPE = 133 | HARDENED
     "path, accepted",
     [
         ([PURPOSE_BIP44, COIN_TYPE, HARDENED, 0, 2], True),
+        ([PURPOSE_BIP44, COIN_TYPE, 101 | HARDENED, 0, 2], True),
+        ([PURPOSE_BIP44, COIN_TYPE, HARDENED, 5, 2], True),
+        ([PURPOSE_BIP44, COIN_TYPE, HARDENED, HARDENED, 2 | HARDENED], True),
         ([PURPOSE_ZIP32, COIN_TYPE, HARDENED], False),
         ([PURPOSE_BIP44, COIN_TYPE, 5, 0, 2], False),
+        ([PURPOSE_BIP44, 1 | HARDENED, HARDENED, 0, 2], False),
+        ([49 | HARDENED, COIN_TYPE, HARDENED, 0, 2], False),
     ],
-    ids=["bip44", "zip32_account_path", "unhardened_account"],
+    ids=[
+        "bip44",
+        "account_above_change_bound",
+        "change_neither_0_nor_1",
+        "hardened_change_and_index",
+        "zip32_account_path",
+        "unhardened_account",
+        "foreign_coin_type",
+        "foreign_purpose",
+    ],
 )
 def test_legacy_signing_path_shape(backend, scenario_navigator: NavigateWithScenario, path, accepted):
     """HASH_SIGN after an approved review, naming the key by the path under test."""
@@ -60,10 +77,24 @@ def test_legacy_signing_path_shape(backend, scenario_navigator: NavigateWithScen
     "signing_path, accepted",
     [
         ("m/44'/133'/0'/0/2", True),
+        ("m/44'/133'/101'/0/2", True),
+        ("m/44'/133'/0'/5/2", True),
+        ("m/44'/133'/0'/0'/2'", True),
         ("m/32'/133'/0'", False),
         ("m/44'/133'/5/0/2", False),
+        ("m/44'/1'/0'/0/2", False),
+        ("m/49'/133'/0'/0/2", False),
     ],
-    ids=["bip44", "zip32_account_path", "unhardened_account"],
+    ids=[
+        "bip44",
+        "account_above_change_bound",
+        "change_neither_0_nor_1",
+        "hardened_change_and_index",
+        "zip32_account_path",
+        "unhardened_account",
+        "foreign_coin_type",
+        "foreign_purpose",
+    ],
 )
 def test_pczt_transparent_input_path_shape(backend, signing_path, accepted):
     """The input packet carrying the path is accepted or refused on the path alone."""
