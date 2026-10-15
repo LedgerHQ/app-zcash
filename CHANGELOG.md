@@ -17,13 +17,14 @@ the key they name, and more of the secrets a note decryption handles are wiped a
   path with a hardened account for a transparent signature, on `HASH_SIGN` and on a PCZT
   input, and a ZIP-32 account path for an Orchard or Ironwood spend authorization
 - Refuse a swap reference address longer than its buffer instead of comparing a truncated copy
-- Wipe the secrets of a compact note decryption (incoming viewing key, shared secret,
-  symmetric key, plaintext prefix) and of an outgoing note recovery (outgoing cipher key,
-  ephemeral secret key, shared secret, symmetric key, plaintexts), the plaintext prefix of a
-  full decryption, and the note seed parsed from any prefix. ChaCha20 and ChaCha20-Poly1305 are built with their zeroizing drop,
-  the keystream left in the stream buffer included. Still held in plain copies: the field
-  elements the incoming viewing key is parsed into, and the memo and note fields a decryption
-  returns for display
+- Wipe the copies a note decryption or an outgoing note recovery holds of its secrets once
+  done with them: incoming viewing key, outgoing cipher key, ephemeral secret key, shared
+  secret, symmetric key, plaintexts and the note seed parsed from them. ChaCha20 and
+  ChaCha20-Poly1305 are built with their zeroizing drop, the keystream left in the stream
+  buffer included. Still held in plain copies: the outgoing cipher key, symmetric key and
+  shared secret in the frames of the functions that derive them, the field elements the
+  incoming viewing key is parsed into, and the memo and note fields a decryption returns for
+  display
 - Move to the `zcash_protocol` 0.11 crate set and re-base the vendored `orchard`,
   `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1; vendor `secp256k1` 0.33.1 and
   `secp256k1-sys` 0.14.1 in place of the `rust-secp256k1` tree, carrying the same build stub
