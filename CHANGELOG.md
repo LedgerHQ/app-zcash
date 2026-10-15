@@ -2,87 +2,29 @@
 
 ## 3.9.5
 
-Performance and hardening release. Validating a shielded transaction repeated work the
-same transaction had already done; this removes the repetition without removing a check.
-Replies also no longer wait for the next ticker event, which the SDK's new I/O path
-allows once it refuses every APDU on a locked device. Signing paths must have the shape of
-the key they name, and more of the secrets a note decryption handles are wiped after use.
+Performance and hardening release.
 
-- Accept the NU7 consensus branch id; any branch id the protocol does not define is
-  still rejected
-- Refuse to sign a transaction whose version its consensus branch cannot carry, such as a V5
-  transaction before NU5 or a V6 one before NU6.3, Sprout's `0` included. A trusted input still
-  accepts the branch id of the transaction it reads
-- Require each signing path to have the shape of the key it names: a five-component BIP-44
-  path with a hardened account for a transparent signature, on `HASH_SIGN` and on a PCZT
-  input, and a ZIP-32 account path for an Orchard or Ironwood spend authorization
-- Refuse a swap reference address longer than its buffer instead of comparing a truncated copy
-- Wipe the copies a note decryption or an outgoing note recovery holds of its secrets once
-  done with them: incoming viewing key, outgoing cipher key, ephemeral secret key, shared
-  secret, symmetric key, plaintexts and the note seed parsed from them. ChaCha20 and
-  ChaCha20-Poly1305 are built with their zeroizing drop, the keystream left in the stream
-  buffer included. Still held in plain copies: the outgoing cipher key, symmetric key and
-  shared secret in the frames of the functions that derive them, the field elements the
-  incoming viewing key is parsed into, and the memo and note fields a decryption returns for
-  display
-- Move to the `zcash_protocol` 0.11 crate set and re-base the vendored `orchard`,
-  `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1; vendor `secp256k1` 0.33.1 and
-  `secp256k1-sys` 0.14.1 in place of the `rust-secp256k1` tree, carrying the same build stub
-  and routing the 0.33 context lock through `portable-atomic` so Nano X still builds
-- Add a testnet build variant (`variant_testnet`): app `Zcash Test`, derivation paths under
-  coin type `1'`, distinct icons and home screen. It replaces the former `testnet` feature,
-  which built testnet logic under the mainnet install parameters
-- Reuse the account key, the viewing keys and the note material already derived for
-  a transaction across its shielded actions, keeping every per-action account,
-  randomized-key, ownership, nullifier and commitment check, and failing closed when
-  an action names a different account
-- Keep fixed and locally derived curve points in full coordinates instead of
-  compressing and decoding them again before each operation
-- Derive the viewing key and the spend authorizing key in a single pass, and retain
-  the normalized authorizing scalar from the first action that spends so the later
-  ones reuse it. A transaction that spends nothing never derives one
-- Reuse the recipient already checked by ownership verification when validating the
-  nullifier of the same action
-- Compute each Sinsemilla step as one doubling and one addition instead of two
-  additions, over the same refusals
-- Compute the diversifier square-root ratio directly instead of inverting the divisor
-  and searching for a root
-- Drop the viewing keys once validation is over rather than at the end of the
-  transaction, so they do not outlive the review wait, and wipe the full viewing key
-  along with the incoming and outgoing ones
-- Use the SDK's new I/O path (`io_new`) on every target: a reply leaves as soon as its
-  command completes, instead of waiting for the next ticker event
-- Require SDK 1.41.0. Its `io_new` path answers `DeviceLocked` to every APDU on a locked
-  device, the SDK's own built-in commands included, and while a command is in flight
-  answers only the built-in GET_VERSION: quit and certificate load received during a
-  review are refused with `CmdNotAccepted`. A swap whose amount, fee, address or extra
-  ID from Exchange does not fit its buffer now fails instead of going on with a
-  truncated value
+- Accept the NU7 consensus branch id, and refuse a transaction version its consensus branch
+  cannot carry
+- Accept a shielded change split across several notes of the account being spent
+- Recognize a shielded transfer to another account of the same seed, declared by the host and
+  shown only if the output decrypts under that account's keys
+- Add a testnet build variant (`variant_testnet`)
+- Speed up shielded validation by reusing the keys and note material already derived for the
+  transaction
+- Use the SDK's new I/O path (`io_new`, SDK 1.41.0): a reply leaves as soon as its command
+  completes, and a locked device or an ongoing review refuses other commands
 - Reject an APDU whose payload length differs from its declared length
-- Return to Exchange after a swap panic even when the error reply cannot be sent
-- Count a reply the transport fails to deliver as a failed command: the transaction is
-  reset, and a swap reports a failure to Exchange
-- Reserve a shielded action's ciphertext buffer at its full size, and refuse with
-  `NotEnoughMemorySpace` when it does not fit. It grew packet by packet, which needed
-  about twice its size at once, and a failed growth exited the app: a t→z with 30 or
-  more transparent inputs did so on every device
-- Accept a shielded transaction's change split across several notes of the account
-  being spent, as wallets do to keep part of the balance spendable while the rest
-  confirms: up to five change notes beside one recipient, and four notes when
-  shielding or rebalancing. The review still shows at most four shielded outputs, and
-  at most six are retained, change notes included. A transparent change output stays
-  single, and rules out a shielded one
-- Refuse with `NotEnoughMemorySpace` a transaction whose remaining actions or review the
-  heap cannot hold, instead of exiting the app: 32 transparent inputs beside 32 shielded
-  actions, or beside four recipients and a change note, did so on every device
-- Recognize a shielded transfer to another account of the same seed. The host may
-  declare, in an output's metadata, the ZIP 32 account it pays; the device derives that
-  account's viewing keys and shows the output as `Account index <n>` with its amount and
-  memo, only if it decrypts under them, whatever outgoing record the sender kept. A
-  declaration the output does not prove, or naming the account being spent, is refused.
-  The declared index goes up to 100, the account range of a change path. At most four
-  distinct accounts per transaction, each costing one derivation. A swap
-  refuses such an output, and any destination left empty
+- Refuse with `NotEnoughMemorySpace`, instead of exiting the app, a transaction the heap cannot
+  hold
+- Require each signing path to have the shape of the key it names: BIP-44 for a transparent
+  signature, ZIP-32 for an Orchard or Ironwood spend authorization
+- Harden the swap flow: an Exchange value or reference address that does not fit its buffer is
+  refused, and every failure returns to Exchange
+- Wipe more of the secrets a note decryption handles, and drop the viewing keys once validation
+  is over
+- Move to the `zcash_protocol` 0.11 crate set and re-base the vendored `orchard`,
+  `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1
 
 ## 3.9.4
 
