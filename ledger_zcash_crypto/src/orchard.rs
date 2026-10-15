@@ -282,20 +282,20 @@ fn try_output_recovery_with_ovk(
         return Ok(None);
     }
 
-    let ock = prf_ock_orchard(
+    let ock = Zeroizing::new(prf_ock_orchard(
         ovk,
         &action.cv_net,
         &action.compact.cmx,
         &action.compact.ephemeral_key,
-    )?;
+    )?);
 
-    let mut out_plaintext = [0u8; ORCHARD_OUT_PLAINTEXT_SIZE];
+    let mut out_plaintext = Zeroizing::new([0u8; ORCHARD_OUT_PLAINTEXT_SIZE]);
     if !chacha20poly1305_decrypt(&ock, &action.out_ciphertext, &mut out_plaintext) {
         return Ok(None);
     }
 
     let mut pk_d = [0u8; HASH_SIZE];
-    let mut esk = [0u8; HASH_SIZE];
+    let mut esk = Zeroizing::new([0u8; HASH_SIZE]);
     pk_d.copy_from_slice(&out_plaintext[..HASH_SIZE]);
     esk.copy_from_slice(&out_plaintext[HASH_SIZE..ORCHARD_OUT_PLAINTEXT_SIZE]);
 
@@ -306,15 +306,15 @@ fn try_output_recovery_with_ovk(
         return Ok(None);
     }
 
-    let shared_secret = key_agreement_with_point(&esk, pk_d_point)?;
-    let k_enc = kdf_orchard(&shared_secret, &action.compact.ephemeral_key)?;
+    let shared_secret = Zeroizing::new(key_agreement_with_point(&esk, pk_d_point)?);
+    let k_enc = Zeroizing::new(kdf_orchard(&shared_secret, &action.compact.ephemeral_key)?);
 
-    let mut note_plaintext = [0u8; ORCHARD_NOTE_PLAINTEXT_SIZE];
+    let mut note_plaintext = Zeroizing::new([0u8; ORCHARD_NOTE_PLAINTEXT_SIZE]);
     if !chacha20poly1305_decrypt(&k_enc, action.enc_ciphertext, &mut note_plaintext) {
         return Ok(None);
     }
 
-    let mut note_plaintext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
+    let mut note_plaintext_prefix = Zeroizing::new([0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
     note_plaintext_prefix.copy_from_slice(&note_plaintext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
     let mut memo = Vec::new();
     memo.try_reserve_exact(ORCHARD_MEMO_SIZE)
@@ -326,7 +326,7 @@ fn try_output_recovery_with_ovk(
         &action.compact,
         &note_plaintext_prefix,
         &pk_d,
-        Some(&esk),
+        Some(&*esk),
         &rho,
         Some(memo),
         expected_note_version,
@@ -349,7 +349,7 @@ fn try_compact_note_decryption_with_ivk(
     }
 
     let ivk = match pallas_base_from_repr(*ivk) {
-        Ok(ivk) if !bool::from(ivk.is_zero()) => ivk,
+        Ok(ivk) if !bool::from(ivk.is_zero()) => Zeroizing::new(ivk.to_repr()),
         _ => return Ok(None),
     };
 
@@ -357,10 +357,10 @@ fn try_compact_note_decryption_with_ivk(
         return Ok(None);
     };
 
-    let shared_secret = key_agreement_with_point(&ivk.to_repr(), ephemeral_point)?;
-    let k_enc = kdf_orchard(&shared_secret, &compact.ephemeral_key)?;
+    let shared_secret = Zeroizing::new(key_agreement_with_point(&ivk, ephemeral_point)?);
+    let k_enc = Zeroizing::new(kdf_orchard(&shared_secret, &compact.ephemeral_key)?);
 
-    let mut note_plaintext_prefix = compact.enc_ciphertext_prefix;
+    let mut note_plaintext_prefix = Zeroizing::new(compact.enc_ciphertext_prefix);
     chacha20_decrypt_compact(&k_enc, &mut note_plaintext_prefix);
 
     let Some(diversifier) =
@@ -373,7 +373,7 @@ fn try_compact_note_decryption_with_ivk(
         Ok(g_d) => g_d,
         Err(_) => return Ok(None),
     };
-    let pk_d = crate::orchard_pk_d_from_base(&ivk.to_repr(), &g_d)?;
+    let pk_d = crate::orchard_pk_d_from_base(&ivk, &g_d)?;
 
     parse_and_validate_note_plaintext(
         compact,
@@ -420,7 +420,7 @@ fn try_note_decryption_with_ivk(
         return Ok(None);
     }
 
-    let mut note_plaintext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
+    let mut note_plaintext_prefix = Zeroizing::new([0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
     note_plaintext_prefix.copy_from_slice(&note_plaintext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
 
     let Some(diversifier) =
@@ -671,7 +671,7 @@ fn prf_expand_rseed_with_rho(
 struct OrchardNotePlaintextPrefix {
     diversifier: [u8; DIVERSIFIER_SIZE],
     value: u64,
-    rseed: [u8; HASH_SIZE],
+    rseed: Zeroizing<[u8; HASH_SIZE]>,
 }
 
 fn parse_note_plaintext_diversifier(
@@ -699,7 +699,7 @@ fn parse_note_plaintext_prefix(
     value_bytes.copy_from_slice(&plaintext[NOTE_VALUE_OFFSET..RSEED_OFFSET]);
     let value = u64::from_le_bytes(value_bytes);
 
-    let mut rseed = [0u8; HASH_SIZE];
+    let mut rseed = Zeroizing::new([0u8; HASH_SIZE]);
     rseed.copy_from_slice(
         &plaintext[RSEED_OFFSET..RSEED_OFFSET + ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE - RSEED_OFFSET],
     );

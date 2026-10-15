@@ -301,7 +301,7 @@ pub fn handler_hash_sign<'a>(
     let path_data = &data[..path_len];
     let path: Bip32Path = path_data.try_into()?;
 
-    if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
+    if !check_bip44_compliance(&path, Bip44CheckMode::TransparentSigning) {
         error!("Signing path not compliant");
         return Err(AppSW::ConditionsOfUseNotSatisfied);
     }

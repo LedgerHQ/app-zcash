@@ -341,7 +341,7 @@ fn own_account_path(source: &Bip32Path, account: u32) -> Result<Bip32Path, Parse
     let path = Bip32Path::from_dpath(crate::consts::ZIP32_PATH_LEN, &encoded)
         .map_err(ParserError::from_sw)?;
 
-    if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
+    if !check_bip44_compliance(&path, Bip44CheckMode::Zip32Only) {
         return Err(ParserError::from_str(
             "PCZT output account path not compliant",
         ));

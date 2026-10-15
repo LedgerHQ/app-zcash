@@ -115,8 +115,10 @@ pub enum Bip44CheckMode {
     Full {
         is_change_path: bool,
     },
-    /// Purpose and coin type on a five-component BIP-44 path, or a ZIP-32 account path.
-    OnlyCoinType,
+    /// The key a transparent signature comes from: a five-component BIP-44 path under the app's
+    /// purpose and coin type, account hardened. Change and address index are left to the host,
+    /// which signs from every scope it derives.
+    TransparentSigning,
     Zip32Only,
     /// Purpose and coin type only, at any depth: key export accepts account-level and deeper paths,
     /// so the app restricts its prefixes without dictating the shape.
@@ -181,8 +183,12 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
                 return false;
             }
         }
-        // Shielded derivations arrive as ZIP-32 account paths, transparent ones as BIP-44.
-        Bip44CheckMode::OnlyCoinType => {}
+        Bip44CheckMode::TransparentSigning => {
+            if is_zip32_shape {
+                error!("ZIP32 path where a transparent signing path is required");
+                return false;
+            }
+        }
     }
 
     if is_zip32_shape {
@@ -224,12 +230,12 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
         return false;
     }
 
-    if let Bip44CheckMode::Full { is_change_path } = mode {
-        if path[BIP44_ACCOUNT_OFFSET] & HARDENED == 0 {
-            error!("Bip44 account is not hardened");
-            return false;
-        }
+    if path[BIP44_ACCOUNT_OFFSET] & HARDENED == 0 {
+        error!("Bip44 account is not hardened");
+        return false;
+    }
 
+    if let Bip44CheckMode::Full { is_change_path } = mode {
         let account = path[BIP44_ACCOUNT_OFFSET] & UNHARDENED_MASK;
         if account > MAX_ACCOUNT_INDEX {
             error!("Bad Bip44 account");

@@ -84,9 +84,11 @@ pub fn get_check_address_params<
 
 //  --8<-- [end:error_code_api]
 
-/// Helper function to read a null-terminated C string into a fixed-size buffer
-/// Returns the buffer and the actual length read
-/// Prints a warning if truncation occurs
+/// Reads a null-terminated C string into a fixed-size buffer and returns it with its length.
+///
+/// A string that does not fit comes back empty rather than cut short: a prefix of the reference
+/// address is not the address Exchange holds, so the check it feeds must fail rather than compare
+/// something else.
 fn read_c_string<const N: usize>(ptr: *const i8) -> ([u8; N], usize) {
     let mut buffer = [0u8; N];
 
@@ -103,12 +105,41 @@ fn read_c_string<const N: usize>(ptr: *const i8) -> ([u8; N], usize) {
         c = unsafe { *ptr.add(length) };
     }
 
-    // Check if truncation occurred
-    if c != '\0' as i8 && length == N {
+    if c != '\0' as i8 {
         use ledger_device_sdk::warn;
 
-        warn!("C string truncated");
+        warn!("C string longer than its buffer");
+        return ([0u8; N], 0);
     }
 
     (buffer, length)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_c_string;
+    use ledger_device_sdk::testing::TestType;
+
+    /// A string that fills its buffer exactly is read whole; one byte longer comes back empty, so
+    /// the address check it feeds compares nothing rather than a prefix.
+    #[test_case]
+    const READ_C_STRING_REFUSES_A_STRING_LONGER_THAN_ITS_BUFFER: TestType = TestType {
+        modname: module_path!(),
+        name: "read_c_string_refuses_a_string_longer_than_its_buffer",
+        f: || {
+            let fits = *b"t1abc\0";
+            let too_long = *b"t1abcd\0";
+
+            let (buffer, length) = read_c_string::<5>(fits.as_ptr() as *const i8);
+            if length != 5 || &buffer[..length] != b"t1abc" {
+                return Err(());
+            }
+
+            let (buffer, length) = read_c_string::<5>(too_long.as_ptr() as *const i8);
+            if length != 0 || buffer != [0u8; 5] {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 }
