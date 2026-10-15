@@ -17,9 +17,12 @@ allows once it refuses every APDU on a locked device.
   input, and a ZIP-32 account path for an Orchard or Ironwood spend authorization
 - Refuse a swap reference address longer than its buffer instead of comparing a truncated copy
 - Wipe the secrets of a compact note decryption (incoming viewing key, shared secret,
-  symmetric key) and of an outgoing note recovery (outgoing cipher key, ephemeral secret key,
-  shared secret, symmetric key, plaintexts), and build the ChaCha20-Poly1305 cipher with its
-  zeroizing drop
+  symmetric key, plaintext prefix) and of an outgoing note recovery (outgoing cipher key,
+  ephemeral secret key, shared secret, symmetric key, plaintexts), the plaintext prefix of a
+  full decryption, and the note seed parsed from any prefix. ChaCha20 and ChaCha20-Poly1305 are built with their zeroizing drop,
+  the keystream left in the stream buffer included. Still held in plain copies: the field
+  elements the incoming viewing key is parsed into, and the memo and note fields a decryption
+  returns for display
 - Move to the `zcash_protocol` 0.11 crate set and re-base the vendored `orchard`,
   `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1; vendor `secp256k1` 0.33.1 and
   `secp256k1-sys` 0.14.1 in place of the `rust-secp256k1` tree, carrying the same build stub
