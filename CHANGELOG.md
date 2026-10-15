@@ -2,10 +2,11 @@
 
 ## 3.9.5
 
-Performance release. Validating a shielded transaction repeated work the same
-transaction had already done; this removes the repetition without removing a check.
+Performance and hardening release. Validating a shielded transaction repeated work the
+same transaction had already done; this removes the repetition without removing a check.
 Replies also no longer wait for the next ticker event, which the SDK's new I/O path
-allows once it refuses every APDU on a locked device.
+allows once it refuses every APDU on a locked device. Signing paths must have the shape of
+the key they name, and more of the secrets a note decryption handles are wiped after use.
 
 - Accept the NU7 consensus branch id; any branch id the protocol does not define is
   still rejected
