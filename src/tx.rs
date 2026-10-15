@@ -114,8 +114,7 @@ pub struct TxOutput {
     pub is_change: bool,
     pub memo: Option<TxOutputMemo>,
     pub pool: TxPool,
-    /// ZIP 32 index of another account of the seed this output pays, proven by decrypting it under
-    /// that account's viewing key. Such an output is shown by its account, not by an address.
+    /// Seed account (ZIP 32) this output pays, proven by decryption; shown instead of an address.
     pub own_account: Option<u32>,
 }
 
@@ -188,14 +187,11 @@ pub struct TxInfo {
     ///
     /// Counted rather than derived from `outputs` so the budget is spent before an address is
     /// encoded: what it bounds is the allocation, so it cannot be read from the allocations already
-    /// made. Change notes are excluded here and bounded by `retained_shielded_outputs`.
+    /// made. Change notes are counted in `retained_shielded_outputs`.
     pub displayed_shielded_outputs: usize,
-    /// Shielded outputs already accepted, displayed and change alike, across both shielded pools.
-    ///
-    /// Claimed before an address is encoded, for the reason above.
+    /// Shielded outputs accepted, displayed and change alike; claimed before encoding, as above.
     pub retained_shielded_outputs: usize,
-    /// Whether the transparent change output was seen. There is at most one, and none beside a
-    /// shielded change note.
+    /// Transparent change seen; at most one, and never beside a shielded change note.
     pub is_change_found: bool,
     pub change_pk_hash: Option<[u8; 20]>,
     /// Account component of the change path the host declared, hardening bit included.
@@ -220,8 +216,7 @@ pub struct TxInfo {
     pub branch_id_raw: u32,
 
     pub orchard_decipher_keys: Option<OrchardDecipherKeys>,
-    /// Viewing keys of the other accounts the transaction pays, derived once per account and
-    /// dropped with the source account's keys.
+    /// IVKs of the other seed accounts paid, derived once each; wiped with the source keys.
     pub own_account_keys: Vec<OwnAccountKeys>,
 }
 

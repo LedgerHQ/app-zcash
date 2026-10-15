@@ -10,8 +10,7 @@ path = "src/lib.rs"
 ledger_device_sdk = { workspace = true }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["zeroize"] }
 chacha20 = { version = "0.10", default-features = false, features = ["cipher", "zeroize"] }
-# Not used directly: `chacha20/zeroize` wipes the cipher core only, while the keystream left over
-# in the stream wrapper's buffer is wiped by `cipher/zeroize`, which no other crate enables.
+# Only for `cipher/zeroize`: wipes the leftover keystream that `chacha20/zeroize` does not.
 cipher = { version = "0.5", default-features = false, features = ["zeroize"] }
 ff = { version = "0.14", default-features = false }
 subtle = { version = "2.6", default-features = false }

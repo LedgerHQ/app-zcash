@@ -19,12 +19,11 @@ pub(crate) unsafe fn set_swap_panic_handler(handler: fn(&PanicInfo) -> !) {
     }
 }
 
-/// Retain the initialized transport for the diverging swap panic handler.
+/// Registers the transport for the swap panic handler.
 ///
 /// # Safety
 /// `comm` must stay valid until the app returns to Exchange, and every `&mut Comm` the app uses
-/// must be derived from this same pointer. The handler's reborrow then only ends a borrow that
-/// is never used again, since the handler does not return.
+/// must derive from it.
 pub(crate) unsafe fn set_swap_comm(comm: *mut io::Comm) {
     unsafe { SWAP_COMM = comm };
 }
@@ -32,13 +31,8 @@ pub(crate) unsafe fn set_swap_comm(comm: *mut io::Comm) {
 pub(crate) fn swap_panic_handler(info: &PanicInfo) -> ! {
     error!("Swap panic happened! {:#?}", info);
 
-    // A fresh Comm has no transport. Use the registered static instance, as the
-    // SDK's exiting panic handler does, but return to Exchange afterward.
-    //
-    // SAFETY: a panic raised inside a `Comm` method leaves that method's borrow on the stack
-    // below this frame, mid-update. The reply restarts staging at offset zero and carries the
-    // status word alone, so nothing that method left in the buffer is sent, and no frame below
-    // runs again once control returns to Exchange.
+    // SAFETY: the interrupted `Comm` borrow is never resumed, and the reply restarts at offset
+    // zero with the status word alone, so nothing it left half-written is sent.
     unsafe {
         if !SWAP_COMM.is_null() {
             let _ = (*SWAP_COMM).begin_response().send(io::StatusWords::Panic);

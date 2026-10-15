@@ -1,9 +1,4 @@
-"""Shielded change split across several notes, in the Orchard pool and across both shielded pools.
-
-The Ironwood rules are covered in test_pczt_ironwood.py. Each change note here is the dummy-spend
-action of the mixed Orchard bundle, paying the account's internal address, repeated: the device keeps
-no record of the notes it has seen, so the note count stays the only variable.
-"""
+"""Shielded change split across several notes, in the Orchard pool and across both shielded pools."""
 import hashlib
 
 import pytest
@@ -31,7 +26,6 @@ from .test_pczt_ironwood import (
 
 
 def _orchard_split_change_bundle(change_notes: int, with_recipient: bool = True) -> PcztOrchardBundle:
-    """An Orchard bundle whose change is split across `change_notes` notes of account 0."""
     base = _mixed_real_and_dummy_orchard_bundle()
     recipient = [base.actions[0]] if with_recipient else []
     actions = recipient + [_mixed_real_and_dummy_orchard_bundle().actions[1] for _ in range(change_notes)]
@@ -54,8 +48,7 @@ def _ironwood_change_bundle(change_notes: int) -> PcztIronwoodBundle:
 
 
 def _refused(client: ZcashCommandSender, **pczt) -> ExceptionRAPDU:
-    # The last packet is answered when the block exits, so a refusal raised while classifying the
-    # outputs, just before the review, surfaces there rather than before the block runs.
+    # The refusal comes with the last packet, answered when the block exits.
     with pytest.raises(ExceptionRAPDU) as error:
         with client.send_pczt(**pczt):
             pass
@@ -88,7 +81,6 @@ def test_pczt_orchard_shield_into_too_many_notes_refused(backend):
 
 
 def test_pczt_orchard_transparent_and_shielded_change_refused(backend):
-    """A transparent change output rules out an Orchard change note beside it."""
     client = ZcashCommandSender(backend)
     pubkey = client._compressed_pubkey_from_path(_OWN_CHANGE_PATH)  # pylint: disable=W0212
     own_change = PcztTransparentOutput(
@@ -110,10 +102,7 @@ def test_pczt_orchard_split_change_in_another_account_yields_no_signature(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """Every hidden Orchard change note stays bound to the account being spent.
-
-    The notes return to account 0 while the transparent input signed here belongs to account 1.
-    """
+    """The change notes return to account 0 while the signed transparent input belongs to account 1."""
     foreign_account_input = PcztTransparentInput(
         prevout_txid=_TRANSPARENT_INPUT_11K.prevout_txid,
         prevout_index=_TRANSPARENT_INPUT_11K.prevout_index,
@@ -140,8 +129,7 @@ def test_pczt_orchard_split_change_in_another_account_yields_no_signature(
 
 
 def test_pczt_split_change_across_both_pools_counts_against_one_budget(backend):
-    """The retained-output budget spans both pools: four Orchard outputs and three Ironwood change
-    notes make seven, refused although neither pool alone exceeds six."""
+    """Four Orchard and three Ironwood outputs exceed the budget although neither pool alone does."""
     error = _refused(
         ZcashCommandSender(backend),
         pczt_global=PCZT_V6_GLOBAL,

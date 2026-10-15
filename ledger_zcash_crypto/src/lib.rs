@@ -186,9 +186,7 @@ pub fn orchard_pk_d(ivk: &[u8; 32], g_d: &[u8; 32]) -> Result<[u8; 32], Error> {
     orchard_pk_d_with_point(&scalar, pallas_point_from_bytes(g_d)?)
 }
 
-/// Derives a transmission key from a locally derived base without decompressing it.
-/// The incoming viewing key undergoes the same canonical and nonzero checks as
-/// [`orchard_pk_d`]; the base can only be constructed by [`DiversifiedBase::derive`].
+/// [`orchard_pk_d`] from a [`DiversifiedBase`], skipping decompression; same `ivk` checks.
 pub fn orchard_pk_d_from_base(ivk: &[u8; 32], base: &DiversifiedBase) -> Result<[u8; 32], Error> {
     let scalar = incoming_scalar_bytes_be(ivk)?;
     orchard_pk_d_with_point(&scalar, base.to_sdk()?)

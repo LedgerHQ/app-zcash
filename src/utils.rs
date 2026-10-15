@@ -84,11 +84,8 @@ impl core::fmt::Display for HexSlice<'_> {
     }
 }
 
-/// Refuse, with `NotEnoughMemorySpace`, work the heap has no room to finish.
-///
-/// Some allocations on the paths this guards are infallible — inside dependencies and in the review
-/// — and a failed one exits the application. Reserving a contiguous block of `bytes` fallibly and
-/// releasing it at once proves the room exists while refusing is still a status word.
+/// Refuse with `NotEnoughMemorySpace` unless `bytes` of contiguous heap are free, so later
+/// infallible allocations cannot exit the app.
 pub fn ensure_heap_headroom(bytes: usize) -> Result<(), AppSW> {
     let mut probe: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     probe
@@ -115,9 +112,7 @@ pub enum Bip44CheckMode {
     Full {
         is_change_path: bool,
     },
-    /// The key a transparent signature comes from: a five-component BIP-44 path under the app's
-    /// purpose and coin type, account hardened. Change and address index are left to the host,
-    /// which signs from every scope it derives.
+    /// Transparent signing key: five-component BIP-44 path, hardened account, change/index free.
     TransparentSigning,
     Zip32Only,
     /// Purpose and coin type only, at any depth: key export accepts account-level and deeper paths,

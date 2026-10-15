@@ -1,10 +1,4 @@
-"""The mainnet build refuses every testnet path, coin type `1'`.
-
-The two builds are told apart by their coin type alone: the mainnet one declares `44'/133'` and
-`32'/133'`, the testnet one `44'/1'` and `32'/1'`. The testnet suite checks that its build refuses
-`133'`; these check the converse, on every command that takes a path. A refusal has to come back as
-a status word: left to the OS, the derivation would take the app down instead of answering.
-"""
+"""The mainnet build refuses testnet (coin type `1'`) paths with a status word, on every command taking a path."""
 
 import pytest
 from application_client.pczt import (
@@ -170,7 +164,6 @@ def test_pczt_testnet_orchard_account_refused(backend):
         p1 = client._pczt_chunk_p1(index, len(packets))
         backend.exchange(cla=CLA, ins=InsType.PCZT_ORCHARD_ACTION, p1=p1, data=packets[index])
 
-    # The action count, then the spend fields.
     send(0)
     send(1)
     with pytest.raises(ExceptionRAPDU) as e:
@@ -183,12 +176,7 @@ def test_pczt_testnet_orchard_account_refused(backend):
 
 @pytest.mark.parametrize("coin_type", [133, 1], ids=["mainnet", "testnet"])
 def test_legacy_signing_follows_the_coin_type(backend, scenario_navigator: NavigateWithScenario, coin_type):
-    """The legacy transaction is reviewed and ready to sign; HASH_SIGN then names the key.
-
-    The mainnet key signs and the testnet one is refused, over the same round, so the refusal can
-    only come from the path. The review is the one `test_sign_tx_v5_old` compares, so its screens
-    are not compared again here.
-    """
+    """Over the same legacy round, HASH_SIGN signs with the mainnet key and refuses the testnet one."""
     transport = ZcashCommandSender(backend)
     open_legacy_signing(transport, lambda: _approve_without_comparing(scenario_navigator))
     apdu = hash_sign_apdu([44 | HARDENED, coin_type | HARDENED, HARDENED, 0, 2])

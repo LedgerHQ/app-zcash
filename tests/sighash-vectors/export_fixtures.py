@@ -1,8 +1,6 @@
-"""Write the fields of the NU7 signing fixtures as JSON, for the digest generator to read.
+"""Export the NU7 signing fixtures as JSON for the digest generator.
 
-Run from `tests/` with the standalone requirements installed:
-
-    python3 sighash-vectors/export_fixtures.py > sighash-vectors/fixtures.json
+Run from `tests/`: python3 sighash-vectors/export_fixtures.py > sighash-vectors/fixtures.json
 """
 import json
 import sys

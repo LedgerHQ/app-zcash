@@ -11,8 +11,8 @@ use crate::zip32::orchard_derivations_spent;
 /// Replies with the heap the allocator can still serve and the bundle bounds this build carries.
 ///
 /// Layout: largest free block as a big-endian `u32`, then the Orchard action, Ironwood action and
-/// transparent input bounds as big-endian `u16`s, then the Orchard derivations this run has
-/// requested as a big-endian `u32`, so a test can tell how many a transaction cost.
+/// transparent input bounds as big-endian `u16`s, then the Orchard derivations spent as a
+/// big-endian `u32`.
 ///
 /// The bounds travel with the measurement because a measurement build may carry raised ones, and a
 /// figure read without knowing which bound produced it says nothing about either.

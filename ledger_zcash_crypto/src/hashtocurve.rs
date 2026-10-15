@@ -66,7 +66,6 @@ const PALLAS_THETA: Fp = Fp::from_raw([
 ]);
 
 // `GENERATOR^t where t * 2^s + 1 = p` with `t` odd; in other words, this is a `2^s` root of unity.
-// Used by `sqrt_ratio()`.
 const PALLAS_ROOT_OF_UNITY: Fp = Fp::from_raw([
     0xbdad6fabd87ea32f,
     0xea322bf2b7bb7584,
@@ -74,8 +73,7 @@ const PALLAS_ROOT_OF_UNITY: Fp = Fp::from_raw([
     0x2bce74deac30ebda,
 ]);
 
-// RFC 9380 F.2.1.1 constants c6 = Z^t and c7 = Z^((t + 1) / 2), where
-// Z = ROOT_OF_UNITY. This preserves the ratio convention used with PALLAS_THETA.
+// RFC 9380 F.2.1.1 c6 = Z^t, c7 = Z^((t + 1) / 2), Z = ROOT_OF_UNITY (matches PALLAS_THETA).
 const SQRT_RATIO_C6: pallas::Base = pallas::Base::from_raw([
     0x3d626185ee6c5b71,
     0x7dfb60c2fc84a3b1,
@@ -347,16 +345,13 @@ impl JacobianPoint {
     }
 }
 
-/// A nonidentity Pallas base derived by Orchard's diversifier hash.
-///
-/// Full coordinates avoid decoding the canonical encoding again at each use.
-/// Construction is restricted to hash-to-curve; wallet-provided encodings cannot
-/// bypass point validation through this type. It holds no SDK allocation.
+/// Nonidentity Orchard diversified base; only hash-to-curve constructs it, so host
+/// encodings cannot bypass point validation through it.
 #[derive(Clone, Copy)]
 pub struct DiversifiedBase(AffinePoint);
 
 impl DiversifiedBase {
-    /// Derives the base, including Orchard's identity-result fallback.
+    /// Includes Orchard's fallback to the empty-message hash on an identity result.
     pub fn derive(d: &[u8; 11]) -> Result<Self, Error> {
         let point = match hash_to_curve_pallas(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION, d)? {
             Some(point) => point,
@@ -366,7 +361,6 @@ impl DiversifiedBase {
         Ok(Self(point))
     }
 
-    /// Returns the same canonical compressed encoding used in note commitments.
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }
@@ -375,14 +369,11 @@ impl DiversifiedBase {
         Ok(self.0.to_sdk()?)
     }
 
-    /// The base is derived on device by hash-to-curve, so it satisfies the
-    /// checks [`crate::points::ValidatedPoint`] stands for without decoding.
     pub(crate) fn to_validated_point(self) -> Result<crate::points::ValidatedPoint, Error> {
         Ok(self.0.to_validated()?)
     }
 }
 
-/// Returns the canonical Orchard diversifier-hash encoding.
 pub fn diversify_hash_ledger(d: &[u8; 11]) -> Result<[u8; 32], Error> {
     Ok(DiversifiedBase::derive(d)?.to_bytes())
 }
@@ -492,10 +483,8 @@ fn map_to_curve_simple_swu_iso_pallas(u: &Fp) -> Result<JacobianPoint, Error> {
     })
 }
 
-// Returns sqrt(num/div), or sqrt(ROOT_OF_UNITY*num/div) and false for nonsquares.
-// The allocation-free algorithm from https://www.rfc-editor.org/rfc/rfc9380#appendix-F.2.1.1
-// avoids the heap tables enabled by the app's pasta_curves feature unification.
-// Loop bounds and the exponent are public constants; selections handle nonsquares.
+// sqrt(num/div), or sqrt(ROOT_OF_UNITY*num/div) and false for nonsquares. RFC 9380 F.2.1.1:
+// constant-time and allocation-free, unlike `Field::sqrt` under `pasta_curves/sqrt-table`.
 #[inline(never)]
 fn sqrt_ratio(num: &Fp, div: &Fp) -> Result<(bool, Fp), Error> {
     if num.is_zero() {
@@ -505,7 +494,7 @@ fn sqrt_ratio(num: &Fp, div: &Fp) -> Result<(bool, Fp), Error> {
         return Ok((false, Fp::ZERO));
     }
 
-    // div^(2^32 - 1), using five multiplications.
+    // s = div^(2^32 - 1)
     let mut s = div.0;
     for i in 0..5 {
         s = square_n(s, 1 << i) * s;

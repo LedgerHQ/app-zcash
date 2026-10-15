@@ -76,7 +76,7 @@ pub fn handler_pczt_header<'a>(
     info!("Reset TX context for PCZT header parsing");
     ctx.reset_for_new_transaction(LegacyParserMode::Signature)?;
 
-    // UI callbacks may reuse the SDK buffer while the parser reviews the transaction.
+    // Copied: UI callbacks may reuse the SDK buffer during review.
     let data = arrayvec::ArrayVec::<u8, 255>::try_from(command.get_data())
         .map_err(|_| reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength))?;
     let comm = command.into_comm();
@@ -108,7 +108,7 @@ pub fn handler_pczt_transparent_input<'a>(
         debug!("Start PCZT transparent input parsing");
     }
 
-    // UI callbacks may reuse the SDK buffer while the parser reviews the transaction.
+    // Copied: UI callbacks may reuse the SDK buffer during review.
     let data = arrayvec::ArrayVec::<u8, 255>::try_from(command.get_data())
         .map_err(|_| reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength))?;
     let comm = command.into_comm();
@@ -145,7 +145,7 @@ pub fn handler_pczt_transparent_output<'a>(
         debug!("Start PCZT transparent output parsing");
     }
 
-    // UI callbacks may reuse the SDK buffer while the parser reviews the transaction.
+    // Copied: UI callbacks may reuse the SDK buffer during review.
     let data = arrayvec::ArrayVec::<u8, 255>::try_from(command.get_data())
         .map_err(|_| reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength))?;
     let comm = command.into_comm();
@@ -183,7 +183,7 @@ pub fn handler_pczt_orchard_action<'a>(
         debug!("Start PCZT orchard action parsing");
     }
 
-    // UI callbacks may reuse the SDK buffer while the parser reviews the transaction.
+    // Copied: UI callbacks may reuse the SDK buffer during review.
     let data = arrayvec::ArrayVec::<u8, 255>::try_from(command.get_data())
         .map_err(|_| reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength))?;
     let comm = command.into_comm();
@@ -223,7 +223,7 @@ pub fn handler_pczt_ironwood_action<'a>(
         debug!("Start PCZT ironwood action parsing");
     }
 
-    // UI callbacks may reuse the SDK buffer while the parser reviews the transaction.
+    // Copied: UI callbacks may reuse the SDK buffer during review.
     let data = arrayvec::ArrayVec::<u8, 255>::try_from(command.get_data())
         .map_err(|_| reset_pczt_parser_with_sw(ctx, AppSW::WrongApduLength))?;
     let comm = command.into_comm();

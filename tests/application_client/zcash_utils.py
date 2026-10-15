@@ -124,7 +124,7 @@ def t_address_from_pubkey(pub_key: bytes, version_bytes: bytes = T_ADDRESS_VERSI
 
     ripemd160_hash = ripemd160(sha256_hash)
 
-    # Prepend the network version bytes (0x1C, 0xB8 for mainnet; 0x1D, 0x25 for testnet)
+    # Prepend the network version bytes
     addr_payload = version_bytes + ripemd160_hash
     # Calculate the checksum
     checksum = hashlib.sha256(hashlib.sha256(addr_payload).digest()).digest()[:4]

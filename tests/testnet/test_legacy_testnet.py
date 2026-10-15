@@ -1,10 +1,4 @@
-"""The testnet build refuses a mainnet key on the legacy transparent signing commands.
-
-Two of them carry a derivation path: the change-information packet, which takes an output off the
-review, and HASH_SIGN, which names the key that signs. Both ship in the testnet build and both must
-refuse coin type `133'`. GET_TRUSTED_INPUT carries no path: it vouches for a previous transaction's
-output amount whatever the network, so it has nothing to refuse here.
-"""
+"""The testnet build refuses a mainnet key on the legacy signing commands that carry a path."""
 
 import pytest
 from application_client.zcash_command_sender import Errors, ZcashCommandSender
@@ -35,11 +29,7 @@ def test_legacy_change_info_follows_the_coin_type(backend, coin_type):
 
 @pytest.mark.parametrize("coin_type", [1, 133], ids=["testnet", "mainnet"])
 def test_legacy_signing_follows_the_coin_type(backend, scenario_navigator: NavigateWithScenario, coin_type):
-    """The transaction is reviewed and ready to sign; HASH_SIGN then names the key.
-
-    The testnet key signs and the mainnet one is refused, over the same round, so the refusal can
-    only come from the path. The review itself is not under test, so its screens are not compared.
-    """
+    """Over the same legacy round, HASH_SIGN signs with the testnet key and refuses the mainnet one."""
     transport = ZcashCommandSender(backend)
     open_legacy_signing(transport, lambda: review_approve(scenario_navigator, None, compare=False))
     apdu = hash_sign_apdu([44 | HARDENED, coin_type | HARDENED, HARDENED, 0, 2])

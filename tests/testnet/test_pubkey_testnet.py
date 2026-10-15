@@ -52,8 +52,7 @@ def test_get_public_key_testnet_confirm_refused(backend, scenario_navigator: Nav
     assert len(e.value.data) == 0
 
 
-# The testnet build declares `44'/1'` and `32'/1'` only. A mainnet path must come back as a status
-# word: left to the OS, the derivation would take the app down instead of answering.
+# A non-testnet path must come back as a status word, not take the app down.
 @pytest.mark.parametrize(
     "path",
     [

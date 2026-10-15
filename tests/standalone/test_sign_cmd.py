@@ -461,8 +461,7 @@ def test_sign_tx_v5_undefined_branch_id_rejected(backend):
 
     client = ZcashCommandSender(backend)
 
-    # The legacy parser converts the header's branch id with `BranchId::try_from`: an undefined value
-    # aborts the parse, so no trusted input is produced.
+    # An undefined branch id aborts the legacy header parse.
     with pytest.raises(ExceptionRAPDU) as e:
         client.get_trusted_input(prevout_tx_bytes, 0)
 
@@ -493,8 +492,7 @@ def _trusted_v5_prevout(client: ZcashCommandSender, branch_id: int = NU5_BRANCH_
     ids=["sprout", "canopy", "undefined"],
 )
 def test_sign_tx_v5_branch_that_cannot_carry_it_is_rejected(backend, branch_id):
-    """The transaction being signed is refused at HASH_INPUT when its branch cannot carry a V5
-    transaction, or is not defined at all: the network could never mine it."""
+    """Refused at HASH_INPUT: the network could never mine a V5 transaction under this branch."""
     client = ZcashCommandSender(backend)
     trusted_input, prevout_txid = _trusted_v5_prevout(client)
     tx_bytes = _build_transparent_tx_v5(
@@ -528,9 +526,7 @@ _V5_VERSION_AND_GROUP = "050000800a27a726"
     ids=["v4_under_nu6_3", "v4_under_nu7", "v5_under_nu7"],
 )
 def test_sign_tx_signs_v5_only(backend, version_and_group, branch_id, accepted):
-    """The legacy path signs V5 transactions only. A V4 header is refused whatever its branch,
-    ZIP 2003's NU7 included, while the same packet carrying a V5 header under NU7 is accepted, so
-    the refusal comes from the version alone."""
+    """A V4 header is refused under any branch while the same packet with a V5 header is accepted."""
     transport = ZcashCommandSender(backend)
     header = version_and_group + struct.pack("<I", branch_id).hex() + "01"
     apdu = "e0440005" + f"{len(bytes.fromhex(header)):02x}" + header
@@ -546,8 +542,7 @@ def test_sign_tx_signs_v5_only(backend, version_and_group, branch_id, accepted):
 
 
 def test_trusted_input_keeps_the_branch_id_of_a_previous_transaction(backend):
-    """A previous transaction only lends an output, so the branch id it declares is not checked
-    against its version: branch id 0 still yields a trusted input."""
+    """A previous transaction only lends an output, so its branch id is not checked against its version."""
     client = ZcashCommandSender(backend)
 
     trusted_input, prevout_txid = _trusted_v5_prevout(client, SPROUT_BRANCH_ID)

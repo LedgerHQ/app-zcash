@@ -1,13 +1,7 @@
-//! Signature digests of PCZT fixtures under NU7 and NU6.3, computed by the reference
-//! implementation of ZIP 244 and its V6 extension.
+//! ZIP 244 signature digests of the `fixtures.json` PCZTs under NU7 and NU6.3, computed with
+//! `zcash_primitives` independently of the firmware.
 //!
-//! The device computes these digests itself. This program recomputes them from the fixture fields
-//! with the published `zcash_primitives`, so that a test can check a returned signature against a
-//! digest the firmware had no part in. The fields come from `fixtures.json`, which
-//! `export_fixtures.py` writes from the test modules.
-//!
-//! Run from a directory outside the repository, so that its `.cargo/config.toml`, which rebuilds
-//! `core` for the device, does not apply:
+//! Run outside the repository so its `.cargo/config.toml` (device `core` rebuild) does not apply:
 //!
 //! ```sh
 //! HOST=$(rustc -vV | awk '/^host:/ {print $2}')
@@ -86,7 +80,7 @@ struct ActionFields {
     out_ciphertext: String,
 }
 
-/// The previous outputs the transparent inputs spend, which the transparent digest commits to.
+/// Outputs spent by the transparent inputs, which the transparent digest commits to.
 #[derive(Debug)]
 struct SpentOutputs(Vec<TxOut>);
 
@@ -186,12 +180,10 @@ fn transaction(fixture: &Fixture, branch: BranchId) -> TransactionData<Unsigned>
     )
 }
 
-/// The digest a shielded spend authorization signs.
 fn shielded_sighash(tx: &TransactionData<Unsigned>) -> [u8; 32] {
     *signature_hash(tx, &SignableInput::Shielded, &tx.digest(TxIdDigester)).as_ref()
 }
 
-/// The digest the first transparent input's signature signs, under SIGHASH_ALL.
 fn transparent_sighash(tx: &TransactionData<Unsigned>, fixture: &Fixture) -> [u8; 32] {
     let first = &fixture.transparent_inputs[0];
     let script_pubkey = script(&first.script);

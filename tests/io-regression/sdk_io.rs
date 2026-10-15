@@ -12,7 +12,6 @@ use io_new as io;
 #[path = "sdk_seph.rs"]
 mod sdk_seph;
 
-// Only platform bindings and the legacy status/header definitions are substituted.
 pub const OS_IO_PACKET_TYPE_NONE: u8 = 0;
 pub const OS_IO_PACKET_TYPE_SEPH: u8 = 1;
 pub const OS_IO_PACKET_TYPE_SE_EVT: u8 = 2;
@@ -69,8 +68,7 @@ mod io_legacy {
     pub const BOLOS_INS_GET_VERSION: u8 = 1;
     pub const BOLOS_INS_QUIT: u8 = 0xa7;
     pub const BOLOS_INS_SET_PKI_CERT: u8 = 6;
-    // The SDK's rule, mirrored because its `io_legacy` is not compiled here: the only built-in
-    // command answered while another command is in flight.
+    // Mirrors the SDK's `io_legacy`, which is not compiled here.
     pub fn is_bolos_apdu_allowed_in_flight(cla: u8, ins: u8) -> bool {
         cla == 0xb0 && ins == BOLOS_INS_GET_VERSION
     }
@@ -103,7 +101,7 @@ struct Os {
     builtin_calls: usize,
     review_callback: Option<fn() -> bool>,
     fail_send: bool,
-    // Frames still to be received while the PIN is set and not validated.
+    // Frames received before the PIN is validated.
     locked_frames: usize,
 }
 thread_local! { static OS: RefCell<Os> = RefCell::new(Os::default()); }
@@ -231,7 +229,6 @@ fn overlapping_review_commands_preserve_the_original_reply() {
     let comm = comm.next_command().into_comm();
     let callback = OS.with_borrow(|os| os.review_callback.unwrap());
     let mut expected = Vec::new();
-    // The review lends its Comm to the callbacks for as long as it is displayed.
     comm.lend_to_nbgl(|| {
         for transport in [
             OS_IO_PACKET_TYPE_RAW_APDU,

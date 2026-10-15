@@ -1,7 +1,6 @@
 name: Rust checks
 
-# Checks `RUST.instructions.md` asks for that no reusable workflow provides: auditing the
-# dependency tree, running the unit tests of both crates, and the I/O boundary regressions.
+# Checks `RUST.instructions.md` asks for that no reusable workflow provides.
 
 permissions:
   contents: read
@@ -57,9 +56,7 @@ jobs:
       - name: Cargo test (ledger_zcash_crypto)
         # These are SDK `TestType` cases executed by `sdk_test_runner` under Speculos, so they
         # need a device target rather than the host; the runner comes from .cargo/config.toml.
-        # Built in the shipping profile: the test binary competes for the device's flash, and
-        # a case that links a software reference implementation to cross-check against does
-        # not fit there unoptimised. Release is also the codegen the application ships with.
+        # Release: unoptimised, the test binary with its software references does not fit in flash.
         run: cargo test --release --locked -p ledger_zcash_crypto --features unit_test --target apex_p
 
       - name: Cargo test (zcash)
@@ -69,7 +66,7 @@ jobs:
         run: cargo test --locked -p zcash --features unit_test --target apex_p
 
       - name: Cargo test (zcash, testnet variant)
-        # The network constants differ in this build, and only these cases check them directly.
+        # Network constants differ in this build.
         run: cargo test --locked -p zcash --features unit_test,variant_testnet --target apex_p
 
       - name: I/O boundary regressions
@@ -88,13 +85,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build and run the vectors under Speculos
-        # The harness is deliberately outside the workspace — its SDK unit-test feature must
-        # not unify into an application build — so it carries its own lockfile and cannot ride
-        # the `cargo test` steps above. `--no-run` yields a device executable that Speculos
-        # runs; the SDK runner exits non-zero on a failing case, which fails this step.
-        # The executable path comes from cargo's own JSON output, not a glob over the deps
-        # directory: cargo also emits a same-prefix, no-extension `-rodata-reloc` sibling
-        # artifact there, which a name pattern cannot tell apart from the real ELF.
+        # Outside the workspace so its SDK unit-test feature cannot unify into the app build.
+        # ELF path from cargo's JSON: a glob would also match the `-rodata-reloc` sibling.
         run: |
           export LEDGER_SDK_PATH="$FLEX_SDK"
           elf=$(cargo test --manifest-path tests/key-reuse/Cargo.toml --lib --no-run --release --target flex --locked --message-format=json \

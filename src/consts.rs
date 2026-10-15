@@ -17,8 +17,7 @@ pub const MAX_PCZT_SCRIPT_SIZE: usize = 252;
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
 pub const SIGHASH_ALL: u8 = 0x01;
 pub const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
-// Highest account index the app treats as one of the user's accounts, whether it names the account
-// of a change path or the destination a PCZT output declares.
+// Highest account index of the user's, for change paths and declared PCZT output accounts.
 pub const MAX_ACCOUNT_INDEX: u32 = 100;
 pub const ZIP32_PATH_LEN: usize = 3;
 pub const ZIP32_PURPOSE: u32 = 32;
@@ -26,8 +25,6 @@ pub const ZIP32_PURPOSE: u32 = 32;
 pub const ZCASH_BIP44_COIN_TYPE: u32 = 133;
 #[cfg(feature = "variant_testnet")]
 pub const ZCASH_BIP44_COIN_TYPE: u32 = 1;
-// The network whose encodings (`u1` / `utest1`, `uview1` / `uviewtest1`) the app produces, chosen
-// by the same build as the coin type.
 #[cfg(not(feature = "variant_testnet"))]
 pub const ZCASH_NETWORK: NetworkType = NetworkType::Main;
 #[cfg(feature = "variant_testnet")]
@@ -77,32 +74,18 @@ pub const MAX_PCZT_IRONWOOD_ACTIONS_NUMBER: usize = 32;
 // that still collects an approval; a raise therefore belongs with a fix for that, not before it.
 pub const MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER: usize = 4;
 
-// Shielded outputs one transaction may hold for its review: the displayed ones plus the change
-// notes kept off it, across both shielded pools.
-//
-// A change note holds the same encoded address and output record as a displayed output, so it is
-// bounded the same way. Six lets a wallet split its change across up to five notes beside one
-// recipient. It is measured rather than assumed: a recipient and five change notes beside the full
-// transparent input bound parse, review and sign on Nano X. A payload holding more than the heap
-// can is refused by the headroom guards, not by this count.
+// Displayed outputs plus hidden change notes, both shielded pools. Six (one recipient, five change
+// notes) fits Nano X; heap exhaustion is refused by the headroom guards, not by this count.
 pub const MAX_PCZT_SHIELDED_RETAINED_OUTPUTS_NUMBER: usize = 6;
 
-// Distinct other accounts of the seed one transaction may pay, across both shielded pools.
-//
-// Each costs one Orchard derivation against the per-run budget and keeps two viewing keys for the
-// parse. Every output to another account is displayed, so the displayed-output budget already caps
-// them at four; this bound states it where the derivations are counted.
+// Distinct other seed accounts one transaction may pay; each costs one Orchard derivation.
 pub const MAX_PCZT_OWN_ACCOUNTS: usize = MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER;
 
 // Tag of the output-metadata extension naming the ZIP 32 account an output pays.
 pub const PCZT_OUTPUT_EXTENSION_ACCOUNT: u8 = 0x01;
 
-// Contiguous heap a shielded bundle must leave free once its signing records are reserved.
-//
-// Measured with the heap probe: parsing an action needs about 2.6 KiB, and below about 1.5 KiB an
-// infallible allocation on the key or decryption path exits the application. Refusing below this at
-// the count packet keeps every failure a status word; between it and the real need, the parser's
-// own fallible allocations refuse instead.
+// Free heap required once signing records are reserved: an infallible allocation on the key or
+// decryption path exits the app, so refusing early keeps the failure a status word.
 pub const SHIELDED_ACTIONS_HEAP_HEADROOM: usize = 2560;
 
 // Highest action count the signing instructions can address, P2 carrying the action index in a

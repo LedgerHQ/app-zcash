@@ -156,9 +156,7 @@ pub fn check_swap_params(
 
     let output = external_outputs[0];
 
-    // A transfer to another account of the seed is shown by its account and carries no address,
-    // so it can never be the destination the user approved in Exchange. Refused outright: the
-    // address comparison below would accept it against an empty destination.
+    // An own-account output has no address, so it would match an empty destination.
     if output.own_account.is_some() {
         error!("Swap output pays another account of the seed");
         return Err(SwapError::with_message(
@@ -455,8 +453,6 @@ mod tests {
         },
     };
 
-    /// Refused whatever the destination: the output's empty address against an empty destination,
-    /// and, so that this refusal is shown to hold on its own, an address equal to the destination.
     #[test_case]
     const OWN_ACCOUNT_OUTPUT_IS_REFUSED: TestType = TestType {
         modname: module_path!(),

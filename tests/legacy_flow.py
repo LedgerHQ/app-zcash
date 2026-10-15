@@ -1,14 +1,11 @@
-"""The legacy signing round of `test_sign_tx_v5_old`, as raw APDUs, shared by the Ragger suites.
+"""Legacy round of `test_sign_tx_v5_old` as raw APDUs, up to HASH_SIGN.
 
-It takes the device to the point where HASH_SIGN may name the key to sign with, so that a refusal
-there can only come from that key's derivation path. No APDU in it carries a path, which is what
-lets the mainnet and the testnet builds run it alike.
+No APDU carries a path, so the mainnet and testnet builds both run it.
 """
 
 from typing import Callable
 
-# GET_TRUSTED_INPUT over the previous transaction, output 0. The last packet answers the trusted
-# input itself.
+# GET_TRUSTED_INPUT over the previous transaction, output 0.
 _TRUSTED_INPUT_ROUND = [
     "e04200001100000000050000800a27a726b4d0d6c201",
     "e04280002598cd6cd9559cd98109ad0622f899bc38805f11648e4f985ebe344b8238f87b13010000006b",
@@ -23,7 +20,7 @@ _TRUSTED_INPUT_ROUND = [
 _TRUSTED_INPUT_LAST = "e0428000090000000004f9081a00"
 _INPUT_SCRIPT = "e04480801d76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac00000000"
 _OUTPUTS = "e04a80002301958ddd04000000001976a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"
-# HASH_SIGN extra header data: locktime, sighash type and expiry. It triggers the review.
+# HASH_SIGN extra header data; it triggers the review.
 _EXTRA_HEADER = "e04800000b0000000000000100000000"
 # User validation code length, locktime, sighash type and expiry, after the path in HASH_SIGN.
 _SIGN_SUFFIX = "00" + "00000000" + "01" + "00000000"
@@ -36,10 +33,7 @@ def _send(transport, apdu: str) -> bytes:
 
 
 def open_legacy_change_info(transport) -> str:
-    """Run the first round up to its outputs, where a change path may be declared.
-
-    Returns the trusted input, which the signing round sends again.
-    """
+    """Run the first round up to its outputs and return the trusted input."""
     for apdu in _TRUSTED_INPUT_ROUND:
         _send(transport, apdu)
     trusted_input = _send(transport, _TRUSTED_INPUT_LAST).hex()
@@ -72,7 +66,7 @@ def open_legacy_signing(transport, approve: Callable[[], None]) -> None:
 
 
 def change_info_apdu(path: list[int]) -> str:
-    """HASH_INPUT_FINALIZE_FULL declaring the change output's path, components hardened as given."""
+    """HASH_INPUT_FINALIZE_FULL declaring `path` as the change path."""
     data = _pack_path(path)
     return "e04aff00" + f"{len(bytes.fromhex(data)):02x}" + data
 
@@ -82,6 +76,6 @@ def _pack_path(path: list[int]) -> str:
 
 
 def hash_sign_apdu(path: list[int]) -> str:
-    """HASH_SIGN for the key at `path`, given as BIP-32 components with the hardening bit set."""
+    """HASH_SIGN for the key at `path` (BIP-32 components, hardening bit included)."""
     data = _pack_path(path) + _SIGN_SUFFIX
     return "e0480000" + f"{len(bytes.fromhex(data)):02x}" + data

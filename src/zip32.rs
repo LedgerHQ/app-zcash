@@ -11,11 +11,10 @@ pub use orchard::keys::FullViewingKey as OrchardFvk;
 pub use orchard::keys::LedgerValidationKey as OrchardValidationKey;
 pub use orchard::keys::SpendAuthorizingKey as OrchardAsk;
 
-/// An Orchard FVK held across APDUs. Its `nk` and `rivk` are viewing-key secrets, wiped on drop
-/// like the IVK and OVK derived from them.
+/// An Orchard FVK held across APDUs, wiped on drop: `nk` and `rivk` are viewing-key secrets.
 pub struct RetainedOrchardFvk(OrchardFvk);
 
-// `zeroize_flat_type` below requires a value with no drop glue of its own.
+// Required by `zeroize_flat_type` below.
 const _: () = assert!(!core::mem::needs_drop::<OrchardFvk>());
 
 impl RetainedOrchardFvk {
@@ -34,8 +33,7 @@ impl core::ops::Deref for RetainedOrchardFvk {
 
 impl Drop for RetainedOrchardFvk {
     fn drop(&mut self) {
-        // SAFETY: the FVK owns only fixed-size field elements and byte arrays (no pointer, no
-        // `Drop`), for which all-zero bytes are a valid value, and it is not read again.
+        // SAFETY: the FVK is plain field elements and bytes, valid all-zero, and not read again.
         unsafe { zeroize::zeroize_flat_type(&mut self.0) }
     }
 }
@@ -131,11 +129,9 @@ fn consume_orchard_derivation_budget() -> Result<(), AppSW> {
     Ok(())
 }
 
-/// Orchard derivations this run of the app has requested, for measurement builds only.
 #[cfg(feature = "heap_probe")]
 pub fn orchard_derivations_spent() -> u32 {
-    // SAFETY: the app is single-threaded; this reads the counter `consume_orchard_derivation_budget`
-    // alone writes.
+    // SAFETY: single-threaded; only `consume_orchard_derivation_budget` writes it.
     unsafe { ORCHARD_DERIVATIONS }
 }
 
@@ -153,9 +149,8 @@ pub fn derive_orchard_fvk(path: &Bip32Path) -> Result<OrchardFvk, AppSW> {
     Ok(orchard_fvk)
 }
 
-// FVK derivation from a cached spending key (no `zip32_orchard_derive`). Kept
-// alongside the combined form because an action that spends nothing needs the
-// viewing key without materializing an authorizing key.
+// FVK derivation from a cached spending key (no `zip32_orchard_derive`).
+// For actions that spend nothing: no authorizing key is materialized.
 pub fn derive_orchard_fvk_from_sk(sk_bytes: &Secret<32>) -> Result<OrchardFvk, AppSW> {
     let sk = orchard_sk_from_bytes(sk_bytes)?;
     OrchardFvk::ledger_try_from(&sk).map_err(map_ledger_crypto_error)

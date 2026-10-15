@@ -1,14 +1,10 @@
-//! Prints `tests/testnet/testnet_vectors.py`'s reference values for account 0 of the Speculos
-//! default seed.
+//! Prints `tests/testnet/testnet_vectors.py`'s values for account 0 of the Speculos default seed.
 //!
-//! Usage: `ledger-testnet-vectors [coin_type]`, coin type 1 by default. Run with 133, it prints the
-//! mainnet values of the same derivations, which `tests/standalone` pins independently: that is
-//! what ties this generator to the device's derivation.
+//! Usage: `ledger-testnet-vectors [coin_type]` (default 1). Coin type 133 prints the mainnet values
+//! `tests/standalone` pins, which ties this generator to the device's derivation.
 //!
-//! The Orchard action is the standalone single-spend fixture's: one note of 300000 zats spent from
-//! the external address, one zero-value output to the internal address, alpha 1. Its anchor is not
-//! derived here: the device cannot relate an anchor to a note, so the testnet vectors reuse the
-//! standalone fixture's value as is.
+//! The Orchard action mirrors the standalone single-spend fixture, whose anchor is reused as is:
+//! the device cannot relate an anchor to a note.
 
 use orchard::keys::{FullViewingKey, Scope, SpendValidatingKey, SpendingKey};
 use orchard::note::{ExtractedNoteCommitment, Note, NoteVersion, RandomSeed, Rho};
@@ -25,14 +21,12 @@ const SPECULOS_DEFAULT_MNEMONIC: &str = "glory promote mansion idle axis finger 
 
 const SPEND_VALUE: u64 = 300_000;
 
-/// A 32-byte field whose first byte is `first` and every other byte zero, the fixture's shape.
 fn leading(first: u8) -> [u8; 32] {
     let mut bytes = [0u8; 32];
     bytes[0] = first;
     bytes
 }
 
-/// BIP-39 seed of a mnemonic with an empty passphrase.
 fn bip39_seed(mnemonic: &str) -> [u8; 64] {
     let mut seed = [0u8; 64];
     pbkdf2::pbkdf2_hmac::<sha2::Sha512>(mnemonic.as_bytes(), b"mnemonic", 2048, &mut seed);
@@ -90,14 +84,12 @@ fn main() {
     py_bytes("ORCHARD_INTERNAL_RECIPIENT_ACCOUNT_0", &internal.to_raw_address_bytes());
     py_bytes("ORCHARD_FVK_ACCOUNT_0", &fvk.to_bytes());
 
-    // The spent note, to the external address.
     let spend_rho = Rho::from_bytes(&leading(0x06)).expect("canonical rho");
     let spend_rseed = RandomSeed::from_bytes(leading(0x1a), &spend_rho).expect("valid rseed");
     let spent = Note::from_parts(external, NoteValue::from_raw(SPEND_VALUE), spend_rho, spend_rseed, NoteVersion::V2)
         .expect("valid note");
     let nullifier = spent.nullifier(&fvk);
 
-    // The zero-value output to the internal address, its rho the spend's nullifier.
     let output_rho = Rho::from_bytes(&nullifier.to_bytes()).expect("a nullifier is a canonical rho");
     let output_rseed = RandomSeed::from_bytes(leading(0x2e), &output_rho).expect("valid rseed");
     let output = Note::from_parts(internal, NoteValue::from_raw(0), output_rho, output_rseed, NoteVersion::V2)

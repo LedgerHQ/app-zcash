@@ -1,22 +1,6 @@
-"""Reference values for the testnet account 0 of the Speculos default seed.
+"""Testnet account 0 of the Speculos default seed, printed by `tests/testnet-vectors` (not read back from the device).
 
-Printed by `tests/testnet-vectors`, a host tool built on the published crates the app's vendored
-ones are based on (`orchard` 0.16.0, `zcash_address` 0.14.0-pre.0, `zcash_transparent`
-0.11.0-pre.0), from the BIP-39 seed of the Speculos default mnemonic with coin type 1 (ZIP-32 path
-`m/32'/1'/0'`, BIP-44 path `m/44'/1'/0'`). Regenerate them from a directory outside the
-repository, whose `.cargo/config.toml` targets the device:
-
-    cargo run --manifest-path <repo>/tests/testnet-vectors/Cargo.toml --target <host triple>
-
-Run with the argument `133`, the same tool prints the mainnet UFVK, unified address, spend
-recipient, nullifier, commitment, value commitment and randomized key committed in
-`tests/standalone`, which is what ties it to the device's derivation. None of these values was read
-back from the device.
-
-The Orchard action mirrors the standalone single-spend fixture: one note of 300000 zats spent from
-the external address (rho `06..`, rseed `1a..`), one zero-value output to the internal address
-(rseed `2e..`, rho the spend nullifier, rcv `42..`), alpha 1. Its anchor is the standalone
-fixture's, reused as is: the device cannot relate an anchor to a note.
+Regenerate outside the repository: cargo run --manifest-path <repo>/tests/testnet-vectors/Cargo.toml --target <host triple>
 """
 
 # pylint: disable=C0301
@@ -37,4 +21,5 @@ ORCHARD_NULLIFIER = bytes.fromhex("51dded408d568e03e7ee2087c3b86f8eeaabaf6dbb682
 ORCHARD_CMX = bytes.fromhex("c6f89cc4a83532d5721de540d55d1a47bd3ea192bb80ffd9bbbeb871e0c7932c")
 ORCHARD_CV_NET = bytes.fromhex("00b3324110776396d31646041679fd6530d57c353c6be0a93a0cd55b30aa6d8b")
 ORCHARD_RK_ALPHA_1 = bytes.fromhex("8d5666ff8b62c0eec61a95c6dd9182e1f5d8d3b79062313965405b4909174918")
+# The standalone fixture's anchor: the device cannot relate an anchor to a note.
 ORCHARD_ANCHOR = bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109")

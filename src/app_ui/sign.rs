@@ -30,15 +30,10 @@ use alloc::boxed::Box;
 use core::fmt;
 use ledger_device_sdk::sys::nbgl_contentTagValue_t;
 
-/// Heap the review builder takes before any field is copied: an empty C string for each of its three
-/// titles, then the three titles themselves. Each block is a few dozen bytes once rounded to the
-/// allocator's granularity; this covers the longest subtitle with room to spare.
+/// Heap the review builder takes for its three titles and their empty C strings, with margin.
 const REVIEW_TITLES_HEAP: usize = 160;
 
-/// Format `args` into a string whose one allocation is fallible.
-///
-/// `format!` exits the application when the heap cannot serve it. Measuring the text first lets that
-/// allocation be reserved exactly, so writing the text never grows the string.
+/// Like `format!`, but fails instead of exiting the app when the heap cannot serve it.
 fn try_format(args: fmt::Arguments<'_>) -> Result<String, AppSW> {
     struct Length(usize);
     impl fmt::Write for Length {
@@ -69,14 +64,8 @@ const fn heap_block(bytes: usize) -> usize {
     bytes.next_multiple_of(8)
 }
 
-/// Heap `NbglReview::show` takes to build the review of `fields`: the tag/value list it lifts the
-/// fields into, then the C copy of that list — a name and a value C string per field, the pair array
-/// and two per-pair index lists.
-///
-/// The build is infallible, and a request the heap cannot serve exits the application. The heap is a
-/// first-fit list with no block header, so one free block this large serves every request of the
-/// build whatever order they come in. The bound follows the blocks rather than their order, which is
-/// what changes between SDK releases.
+/// Heap `NbglReview::show` takes for `fields`; it exits the app on allocation failure.
+/// The heap is first-fit with no block header, so one free block this large serves the whole build.
 fn review_build_heap(fields: &[Field]) -> usize {
     let count = fields.len();
     let strings: usize = fields
@@ -85,7 +74,7 @@ fn review_build_heap(fields: &[Field]) -> usize {
         .sum();
 
     heap_block(count * size_of::<TagValue>())
-        // The SDK's `CField`: a field's name and value as C strings, side by side.
+        // The SDK's `CField`: name and value C strings.
         + heap_block(count * size_of::<(Box<[u8]>, Box<[u8]>)>())
         + strings
         + 2 * heap_block(count * size_of::<Option<usize>>())
@@ -110,8 +99,7 @@ pub fn ui_display_tx(
     locktime: u32,
     expiry_height: u32,
 ) -> Result<bool, AppSW> {
-    // Every allocation the review makes is fallible or bounded beforehand: the review is the last
-    // step before signing, and the host chooses how much it holds.
+    // Allocations here are fallible or pre-bounded: the host controls the review's size.
     let fees_str = format_zec_amount(fees)?;
     let locktime_str = try_format(format_args!("{locktime}"))?;
     let expiry_str = if expiry_height == 0 {
@@ -146,9 +134,7 @@ pub fn ui_display_tx(
         let idx = idx + 1;
         name_strs.push((
             try_format(format_args!("Output #{idx} amount"))?,
-            // An output to another account of the seed is shown by that account rather than by an
-            // address: the ZIP 32 index, worded as an index since wallets often number accounts
-            // from 1.
+            // An own-account output shows its ZIP 32 account index instead of an address.
             if output.own_account.is_some() {
                 try_format(format_args!("Output #{idx} account"))?
             } else {
@@ -174,7 +160,7 @@ pub fn ui_display_tx(
         ));
     }
 
-    // Define transaction review fields: two per output, its memo, then fees, lock time and expiry.
+    // Two per output, its memo, then fees, lock time and expiry.
     let mut my_fields = Vec::new();
     my_fields
         .try_reserve_exact(2 * displayed + memos + 3)

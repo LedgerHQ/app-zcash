@@ -14508,14 +14508,12 @@ fn pasta_point_from_s_index(index: usize) -> Option<pallas::Affine> {
     Option::from(pallas::Affine::from_xy(x, y))
 }
 
-// Computes (P incomplete-add S) incomplete-add P as 2P + S. For nonidentity
-// inputs the first addition fails exactly when P = ±S. Once those cases are
-// excluded, the second can fail only when 2P + S is the identity.
+// (P incomplete-add S) incomplete-add P as 2P + S: the first addition fails exactly when
+// P = ±S, the second only when 2P + S is the identity.
 #[inline(never)]
 fn sinsemilla_double_and_add(p: pallas::Point, s: pallas::Affine) -> Option<pallas::Point> {
     let s_x = Option::<pallas::Base>::from(s.coordinates().map(|c| *c.x()))?;
     let (p_x, _, p_z) = p.jacobian_coordinates();
-    // Compare affine x-coordinates without normalizing P or inverting a field element.
     if bool::from(p.is_identity()) || p_x == s_x * p_z.square() {
         return None;
     }

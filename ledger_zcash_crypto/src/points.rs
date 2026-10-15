@@ -1,7 +1,7 @@
 //! Full coordinates for points constructed locally; external encodings still require decoding.
 use ledger_device_sdk::ecc::{CurvesId, CxError, math::EcPoint};
 
-/// Internal affine coordinates. Only known constants and hash-to-curve construct these.
+/// Only known constants and hash-to-curve construct these.
 #[derive(Clone, Copy)]
 pub(crate) struct AffinePoint {
     x_be: [u8; 32],
@@ -9,9 +9,8 @@ pub(crate) struct AffinePoint {
 }
 
 impl AffinePoint {
-    /// The caller vouches that `(x, y)` is a Pallas point other than the identity: a protocol
-    /// constant or a hash-to-curve output. [`Self::to_validated`] relies on it without checking,
-    /// so host-supplied bytes go through [`ValidatedPoint::from_external`] instead.
+    /// Caller vouches `(x, y)` is a nonidentity Pallas point; [`Self::to_validated`] trusts it.
+    /// Host-supplied bytes go through [`ValidatedPoint::from_external`] instead.
     pub(crate) fn from_trusted_coordinates(x_be: [u8; 32], y_be: [u8; 32]) -> Self {
         Self { x_be, y_be }
     }
@@ -29,23 +28,17 @@ impl AffinePoint {
         encoded
     }
 
-    /// Valid by construction; see [`Self::from_trusted_coordinates`].
     pub(crate) fn to_validated(self) -> Result<ValidatedPoint, CxError> {
         Ok(ValidatedPoint(self.to_sdk()?))
     }
 }
 
-/// A Pallas point that carries the proof it was checked: either its encoding
-/// passed [`ValidatedPoint::from_external`], or it was built on device from
-/// coordinates that cannot fail those checks. The inner point is reachable only
-/// by consuming the wrapper, so an operation that requires a checked point
-/// cannot be handed a raw host encoding.
+/// A Pallas point checked by [`ValidatedPoint::from_external`] or built on device, so an
+/// operation requiring a checked point cannot be handed a raw host encoding.
 pub(crate) struct ValidatedPoint(EcPoint);
 
 impl ValidatedPoint {
-    /// Decodes an externally supplied encoding, rejecting the all-zero form,
-    /// the identity, and any encoding that is not the canonical one for its
-    /// point. `None` on any of those, so callers fail closed.
+    /// `None` for the all-zero form, the identity, or a noncanonical encoding (fail closed).
     pub(crate) fn from_external(bytes: &[u8; 32]) -> Result<Option<Self>, crate::Error> {
         if *bytes == [0u8; 32] {
             return Ok(None);
@@ -72,7 +65,6 @@ impl ValidatedPoint {
     }
 }
 
-/// Fixed Orchard bases, shared with Ironwood and RedPallas.
 #[derive(Clone, Copy)]
 pub(crate) enum Basepoint {
     SpendAuth,
@@ -86,8 +78,7 @@ impl Basepoint {
         self.coordinates().to_sdk()
     }
 
-    // Canonical affine coordinates of the original compressed constants. The device
-    // test below checks each against SDK decompression of that independent encoding.
+    // Checked against SDK decompression of the protocol encodings by the test below.
     fn coordinates(self) -> AffinePoint {
         match self {
             Self::SpendAuth => AffinePoint {
@@ -147,8 +138,6 @@ mod tests {
     use super::*;
     use ledger_device_sdk::testing::TestType;
 
-    /// The wrapper is the only route from a host encoding to a scalar multiplication,
-    /// so its refusals are the guarantee. Exercise them rather than the callers.
     #[test_case]
     const EXTERNAL_ENCODINGS_ARE_CHECKED: TestType = TestType {
         modname: module_path!(),
@@ -162,8 +151,7 @@ mod tests {
                 return Err(());
             }
 
-            // All-zero is the identity's encoding and the explicit early refusal;
-            // all-ones decodes to no point on the curve.
+            // All-ones decodes to no point on the curve.
             for refused in [[0u8; 32], [0xff; 32]] {
                 if ValidatedPoint::from_external(&refused)
                     .map_err(|_| ())?

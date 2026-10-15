@@ -5,8 +5,7 @@ pub mod address;
 pub mod menu;
 pub mod sign;
 
-// The testnet build carries its own glyphs, so that it cannot be mistaken for the mainnet app.
-// `include_gif!` takes a literal path, hence a macro choosing between the two files.
+// Distinct testnet glyphs; `include_gif!` needs a literal path, hence a macro.
 macro_rules! variant_glyph {
     ($mainnet:tt, $testnet:tt) => {{
         #[cfg(not(feature = "variant_testnet"))]

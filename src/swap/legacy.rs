@@ -84,11 +84,8 @@ pub fn get_check_address_params<
 
 //  --8<-- [end:error_code_api]
 
-/// Reads a null-terminated C string into a fixed-size buffer and returns it with its length.
-///
-/// A string that does not fit comes back empty rather than cut short: a prefix of the reference
-/// address is not the address Exchange holds, so the check it feeds must fail rather than compare
-/// something else.
+/// Reads a null-terminated C string into a fixed-size buffer; one that does not fit reads empty,
+/// so the address check fails rather than compare a prefix.
 fn read_c_string<const N: usize>(ptr: *const i8) -> ([u8; N], usize) {
     let mut buffer = [0u8; N];
 
@@ -120,8 +117,6 @@ mod tests {
     use super::read_c_string;
     use ledger_device_sdk::testing::TestType;
 
-    /// A string that fills its buffer exactly is read whole; one byte longer comes back empty, so
-    /// the address check it feeds compares nothing rather than a prefix.
     #[test_case]
     const READ_C_STRING_REFUSES_A_STRING_LONGER_THAN_ITS_BUFFER: TestType = TestType {
         modname: module_path!(),

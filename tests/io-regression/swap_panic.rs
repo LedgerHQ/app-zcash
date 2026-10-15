@@ -21,8 +21,7 @@ pub mod log {
     pub use crate::error;
 }
 
-// Mirror the SDK's two send contracts. The SDK fixture separately runs the real
-// SDK implementations with a failing transport to keep this contract checked.
+// Mirrors the SDK's two send contracts, which `sdk_io.rs` checks against the real SDK.
 pub mod io {
     pub struct Comm;
     pub enum StatusWords {

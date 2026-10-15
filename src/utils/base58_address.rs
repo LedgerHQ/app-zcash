@@ -100,9 +100,7 @@ mod tests {
     use super::{Base58Address, ToBase58Address};
     use ledger_device_sdk::testing::TestType;
 
-    // One 20-byte hash under both script shapes. The mainnet P2SH encoding is the address
-    // `test_pczt_sign_tx_v5_p2sh_output` shows; every expected string is a Base58Check of the
-    // network's version bytes followed by the hash.
+    // Same 20-byte hash in both shapes; expected = Base58Check(network version bytes || hash).
     const P2SH_SCRIPT: [u8; 23] = [
         0xa9, 0x14, 0x21, 0x7e, 0x32, 0x98, 0xb6, 0xa9, 0x63, 0xa8, 0x72, 0x2b, 0x0e, 0x7c, 0x7d,
         0x8f, 0x3a, 0xff, 0x1d, 0x94, 0x72, 0xbd, 0x87,
@@ -121,7 +119,6 @@ mod tests {
     #[cfg(feature = "variant_testnet")]
     const EXPECTED_P2PKH: &str = "tmCmSosJ2fQM7M4SiyN4RdpcrFBPhvddNyZ";
 
-    /// Each script shape is encoded under the version bytes of the network the build targets.
     #[test_case]
     const OUTPUT_SCRIPTS_ENCODE_UNDER_THE_BUILD_NETWORK: TestType = TestType {
         modname: module_path!(),

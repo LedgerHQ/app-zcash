@@ -1,12 +1,8 @@
 use super::*;
 
 impl PcztParser {
-    /// Reuses account material only after checking the complete cached path.
-    /// The validation key is wiped before review; each real action still checks rk.
-    ///
-    /// A bundle whose actions all spend nothing never materializes an authorizing
-    /// key: the viewing key alone answers every check such a bundle can raise, so
-    /// the scalar is derived on the first real spend and reused from there.
+    /// Reuses account material only after checking the complete cached path. The validation key is
+    /// derived on the first real spend and wiped before review; each real action still checks rk.
     pub(super) fn prepare_shielded_account_keys(
         &mut self,
         ctx: &mut PcztParserCtx<'_>,
@@ -58,7 +54,6 @@ impl PcztParser {
     }
 
     /// Returns recipient material only after matching a key from the checked account.
-    /// The value is used immediately by the same action's nullifier check.
     pub(super) fn validated_spend_recipient(
         &self,
         fvk: &OrchardFvk,
@@ -128,8 +123,7 @@ impl PcztParser {
         }
 
         let consensus_branch_id = ok!(BranchId::try_from(branch_id_raw));
-        // The user approves a transaction the network can mine, or none: a V6 transaction under a
-        // branch that predates it, or the reverse, is refused before anything is reviewed.
+        // Refuse, before any review, a V6 transaction under a pre-V6 branch or the reverse.
         let tx_version = if is_v6 { TxVersion::V6 } else { TxVersion::V5 };
         if !tx_version.valid_in_branch(consensus_branch_id) {
             return Err(ParserError::from_str(
@@ -224,8 +218,7 @@ impl PcztParser {
             ironwood_vb
         );
 
-        // An output to another account of the seed is not change, so it counts as external here: the
-        // change notes beside it stay hidden, and it is shown.
+        // An output to another seed account is not change: it is shown and the change stays hidden.
         // In the case of internal transfers between pools (for example, transparent -> Orchard or Orchard -> transparent),
         // we have to display the internal outputs on the clear-sign screen.
         // Not in swap mode: there is no screen to reveal anything on, and clearing `is_change`
@@ -233,7 +226,7 @@ impl PcztParser {
         let has_external_output = ctx.tx_info.outputs.iter().any(|output| !output.is_change);
         let reveal_self_outputs = !has_external_output && ctx.swap_params.is_none();
         if reveal_self_outputs {
-            // Revealed change notes are displayed, so the display bound holds for them as well.
+            // Revealed change notes are displayed, so they must fit the display bound.
             if ctx.tx_info.retained_shielded_outputs > MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER {
                 error!("Too many shielded outputs to reveal on the review");
                 return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
@@ -251,8 +244,7 @@ impl PcztParser {
         let spent_from_private = spent_from_private || self.ironwood_spend_value_sum > 0;
         let transfer_type =
             TransferType::classify(spent_from_public, spent_from_private, &ctx.tx_info.outputs);
-        // No validation remains after this point. Dropping the decipher caches
-        // wipes every IVK and the OVK before the human review wait.
+        // No validation remains: wipe every IVK and the OVK before the review wait.
         self.orchard_fvk = None;
         self.orchard_validation_key = None;
         ctx.tx_info.orchard_decipher_keys = None;

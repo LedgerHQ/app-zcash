@@ -3,7 +3,7 @@
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
-# Transparent-only P2PKH script prefix and suffix: OP_DUP OP_HASH160 <push 20> ... OP_EQUALVERIFY OP_CHECKSIG
+# OP_DUP OP_HASH160 <push 20> ... OP_EQUALVERIFY OP_CHECKSIG
 P2PKH_SCRIPT_PREFIX = bytes.fromhex("76a914")
 P2PKH_SCRIPT_SUFFIX = bytes.fromhex("88ac")
 

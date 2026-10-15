@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Kept out of the application workspace: this is a host tool, and it builds on the published
-# crates only, the vendored ones left aside, so the digests it prints owe nothing to the device code.
+# Host tool outside the workspace, on published crates only: independent of the device code.
 [workspace]
 
 [dependencies]

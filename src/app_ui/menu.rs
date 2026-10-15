@@ -39,7 +39,6 @@ pub fn ui_menu_main(_: &mut Comm) -> NbglHomeAndSettings {
             env!("CARGO_PKG_AUTHORS"),
         );
 
-    // The testnet build says so on its home screen, beyond its name.
     #[cfg(feature = "variant_testnet")]
     let home = home.tagline("Testnet only. Coins have no value.");
 

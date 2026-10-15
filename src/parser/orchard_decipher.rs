@@ -50,8 +50,7 @@ impl OrchardDecipherKeys {
         })
     }
 
-    /// Reuses the IVK for a scope. `fvk` must be the key passed to `from_fvk`;
-    /// the PCZT parser enforces one account path for this cache's lifetime.
+    /// Cached IVK for `scope`; `fvk` must be the key passed to `from_fvk`.
     pub(crate) fn incoming_viewing_key(
         &mut self,
         fvk: &FullViewingKey,
@@ -72,10 +71,7 @@ impl OrchardDecipherKeys {
     }
 }
 
-/// Incoming viewing keys of another account of the seed, which an output of the transaction pays.
-///
-/// Only the IVKs are kept: they are what recognizes the output, and the full viewing key they come
-/// from is dropped as soon as they are taken. Wiped on drop like the source account's keys.
+/// IVKs of another seed account an output pays; the FVK is not kept. Wiped on drop.
 pub(crate) struct OwnAccountKeys {
     /// ZIP 32 account index, unhardened.
     pub account: u32,

@@ -194,9 +194,7 @@ def _assert_pczt_orchard_sign_digest(
     ]
     auth_sigs = _sign_all_orchard_actions(client, orchard_bundle)
 
-    # Removing redundant blinded curve operations changes Speculos RNG consumption,
-    # hence the nonce. Both the retained vector and the device signature must
-    # verify against the same independently computed digest and action rk.
+    # The nonce depends on Speculos RNG consumption, so both signatures are verified rather than compared.
     digest = nu5_signature_digests(tx_bytes, input_amounts)["final_digest"]
     real_actions = [action for action in orchard_bundle.actions if action.spend_value != 0]
     for action, signature, expected in zip(real_actions, auth_sigs, expected_auth_sigs, strict=True):
@@ -278,14 +276,7 @@ def test_pczt_session_survives_a_malformed_frame(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """A frame whose declared length does not match its payload leaves the PCZT session intact.
-
-    The SDK refuses such a frame with `BadLen` before it reaches the app, so no handler runs and
-    nothing of it is parsed. The session the host has already built is unchanged: the host resends
-    the frame and carries on, and the review and signature cover exactly the well-formed frames.
-
-    Shares the review snapshots of `test_sign_tx_v5_simple`, whose transaction this signs.
-    """
+    """The SDK refuses a length-mismatched frame before the app; the host resends it and the session goes on."""
     PCZT_GLOBAL = PcztGlobal()
     PATH = "m/44'/133'/0'/0/2"
     TRANSPARENT_INPUT = PcztTransparentInput(
@@ -2033,11 +2024,7 @@ def test_pczt_orchard_change_split_across_notes_signs(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """The Orchard half of the split-change rule: a second change note is accepted and signs.
-
-    The same change note is repeated, the device keeping no record of the notes it has seen. The
-    transparent input pays the fee the extra change note leaves uncovered.
-    """
+    """A repeated Orchard change note is accepted; the transparent input covers the fee it leaves uncovered."""
     base = _mixed_real_and_dummy_orchard_bundle()
     recipient, change = base.actions
     bundle = PcztOrchardBundle(
@@ -2346,9 +2333,6 @@ def test_pczt_hidden_shielded_change_in_another_account_yields_no_signature(
 
 
 # ── Transfers to another account of the same seed (Orchard pool) ───────────────
-#
-# The Orchard counterparts of the own-account tests of test_pczt_ironwood.py, on a V5 transaction:
-# the extension block follows `rcv` directly, Orchard metadata carrying no version byte.
 
 _OWN_ACCOUNT_ORCHARD_TRANSFER_VECTORS = {
     "internal_address_external_ovk": ORCHARD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK,
@@ -2361,10 +2345,7 @@ _OWN_ACCOUNT_ORCHARD_TRANSFER_VECTORS = {
 
 
 def _own_account_orchard_bundle(own_action: PcztOrchardAction, change: bool = False) -> PcztOrchardBundle:
-    """Account 0 spends 300 000 zatoshis and pays `own_action`; the rest is the fee.
-
-    With `change`, the change note of account 0 from the mixed real-and-dummy bundle sits beside it.
-    """
+    """Account 0 spends 300 000 zatoshis to `own_action`, plus its own change note with `change`."""
     actions = [_valid_orchard_action(), own_action]
     if change:
         actions.append(_mixed_real_and_dummy_orchard_bundle().actions[1])
@@ -2377,7 +2358,6 @@ def _own_account_orchard_bundle(own_action: PcztOrchardAction, change: bool = Fa
 
 
 def _assert_own_account_orchard_refused(client: ZcashCommandSender, own_action: PcztOrchardAction) -> None:
-    """The bundle is refused while it is parsed, the session ends, and the app keeps answering."""
     with pytest.raises(ExceptionRAPDU) as error:
         with client.send_pczt(
             pczt_global=PcztGlobal(),
@@ -2399,8 +2379,7 @@ def _assert_own_account_orchard_refused(client: ZcashCommandSender, own_action: 
     ids=_OWN_ACCOUNT_ORCHARD_TRANSFER_VECTORS.keys(),
 )
 def test_pczt_orchard_own_account_transfer_signs(backend, scenario_navigator: NavigateWithScenario, vector):
-    """A declared Orchard transfer to account 1 signs and shows `Account index 1`, whatever the OVK
-    policy and whichever of the account's addresses it pays; every case draws the same screens."""
+    """Every OVK policy and address scope signs and draws the same `Account index 1` screens."""
     client = ZcashCommandSender(backend)
 
     with client.send_pczt(
@@ -2424,7 +2403,6 @@ def _send_own_account_orchard(client: ZcashCommandSender, bundle: PcztOrchardBun
 
 
 def test_pczt_orchard_own_account_transfer_shows_its_memo(backend, scenario_navigator: NavigateWithScenario):
-    """The memo of an Orchard transfer to another account is shown, after the account it goes to."""
     client = ZcashCommandSender(backend)
 
     with _send_own_account_orchard(client, _own_account_orchard_bundle(own_account_orchard_action(ORCHARD_ACCOUNT_1_MEMO))):
@@ -2437,11 +2415,7 @@ def test_pczt_orchard_own_account_transfer_beside_change_keeps_change_hidden(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """Beside an Orchard transfer to account 1, the change note of account 0 stays off the review.
-
-    The transfer counts as an external output, so nothing triggers the self-transfer reveal: the
-    review shows the transfer, its memo and the fee, and no change note.
-    """
+    """The transfer counts as external, so nothing reveals the change note as a self-transfer."""
     client = ZcashCommandSender(backend)
     bundle = _own_account_orchard_bundle(own_account_orchard_action(ORCHARD_ACCOUNT_1_MEMO), change=True)
 
@@ -2455,7 +2429,6 @@ def test_pczt_orchard_own_account_transfer_beside_change_keeps_change_hidden(
 
 
 def test_pczt_orchard_own_account_transfer_rejected_by_user(backend, scenario_navigator: NavigateWithScenario):
-    """Rejecting the review of an Orchard transfer to another account releases no signature."""
     client = ZcashCommandSender(backend)
     bundle = _own_account_orchard_bundle(own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK))
 
@@ -2469,26 +2442,20 @@ def test_pczt_orchard_own_account_transfer_rejected_by_user(backend, scenario_na
 
 
 def test_pczt_orchard_own_account_output_undeclared_is_refused(backend):
-    """Without a declaration, an output account 0 cannot recover is refused, as it always was."""
     client = ZcashCommandSender(backend)
 
     _assert_own_account_orchard_refused(client, own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK, declared=None))
 
 
 def test_pczt_orchard_own_account_declared_for_another_account_is_refused(backend):
-    """An output to account 1 declared for account 2 is refused, even though account 0's external
-    OVK would recover it as an ordinary payment."""
+    """Refused even though account 0's external OVK would recover it as an ordinary payment."""
     client = ZcashCommandSender(backend)
 
     _assert_own_account_orchard_refused(client, own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK, declared=2))
 
 
 def test_pczt_orchard_own_account_declared_for_a_recipient_outside_the_seed_is_refused(backend):
-    """A payment to a recipient outside the seed, declared for account 1, is refused.
-
-    Account 0's external OVK recovers it as an ordinary payment, which a failed declaration must not
-    fall back to.
-    """
+    """A failed declaration must not fall back to recovery by account 0's external OVK."""
     action = _mixed_real_and_dummy_orchard_bundle().actions[0]
     action.output_extensions = output_account_extension(1)
 
@@ -2496,7 +2463,6 @@ def test_pczt_orchard_own_account_declared_for_a_recipient_outside_the_seed_is_r
 
 
 def test_pczt_orchard_own_account_declaring_the_source_account_is_refused(backend):
-    """Declaring account 0, the account being spent, is refused."""
     client = ZcashCommandSender(backend)
 
     _assert_own_account_orchard_refused(client, own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK, declared=0))
@@ -2504,7 +2470,6 @@ def test_pczt_orchard_own_account_declaring_the_source_account_is_refused(backen
 
 @pytest.mark.parametrize("extensions", MALFORMED_OUTPUT_EXTENSIONS.values(), ids=MALFORMED_OUTPUT_EXTENSIONS.keys())
 def test_pczt_orchard_own_account_malformed_extension_is_refused(backend, extensions: bytes):
-    """Every malformed extension block is refused in the Orchard pool too."""
     client = ZcashCommandSender(backend)
 
     _assert_own_account_orchard_refused(
@@ -2517,12 +2482,7 @@ def test_pczt_orchard_v5_nu7_branch_id_signs(
     backend,
     scenario_navigator: NavigateWithScenario,
 ):
-    """A V5 Orchard PCZT under the NU7 branch id signs with the unchanged contract.
-
-    The signature verifies against the NU7 digest and not against the same transaction under NU5:
-    the branch id enters the digest through the ZIP 244 header, so this is what shows the device
-    signed for the branch it was given.
-    """
+    """The signature verifies against the NU7 digest and not the NU5 one, so the branch id is what was signed."""
     client = ZcashCommandSender(backend)
     pczt_global = PcztGlobal(consensus_branch_id=_NU7_BRANCH_ID)
     bundle = _valid_orchard_bundle()

@@ -96,12 +96,8 @@ pub fn decipher_compact_value(
     try_compact_note_decryption_with_ivk(ivk, compact, expected_note_version)
 }
 
-/// Full incoming decryption of an action under `ivk`: the note, its recipient and its memo.
-///
-/// Holds the result to the same validation as [`decipher_value_with_ovk`] — the authenticated
-/// ciphertext, `esk` rederived from `rseed`, `epk = [esk]·g_d` and the recomputed `cmx` — so a note
-/// recognized here is proven exactly as one recovered by its sender. `Ok(None)` means the action is
-/// not a note for this key.
+/// Full incoming decryption, validated as [`decipher_value_with_ovk`] (AEAD, `esk` from `rseed`,
+/// `epk = [esk]·g_d`, `cmx`). `Ok(None)`: the action is not a note for this key.
 pub fn decipher_value_with_ivk(
     ivk: &[u8; HASH_SIZE],
     action: &OrchardActionCiphertext<'_>,
@@ -110,8 +106,7 @@ pub fn decipher_value_with_ivk(
     try_note_decryption_with_ivk(ivk, action, expected_note_version)
 }
 
-/// Canonical recipient material with a nonidentity base and transmission key.
-/// Private fields prevent unchecked encodings from reaching the reuse path.
+/// Canonical nonidentity `g_d` and `pk_d`; private fields keep unchecked encodings out.
 #[derive(Clone, Copy)]
 pub struct ValidatedRecipient {
     g_d: [u8; HASH_SIZE],
@@ -119,9 +114,8 @@ pub struct ValidatedRecipient {
 }
 
 impl ValidatedRecipient {
-    /// Checks that the claimed key is derived from this base and canonical nonzero IVK.
-    /// The caller binds the base to the note's diversifier and the IVK to its account.
-    /// A mismatch returns `None`; only an exact match permits recipient reuse.
+    /// `None` unless `claimed_pk_d` derives from `base` and `ivk`. The caller binds `base` to the
+    /// note's diversifier and `ivk` to its account.
     pub fn from_ivk(
         ivk: &[u8; HASH_SIZE],
         base: &crate::DiversifiedBase,
@@ -149,7 +143,6 @@ impl ValidatedRecipient {
     }
 }
 
-/// Computes an Orchard spend nullifier, validating the raw recipient.
 #[inline(never)]
 pub fn spend_nullifier_bytes(
     nk: &[u8; HASH_SIZE],
@@ -163,11 +156,7 @@ pub fn spend_nullifier_bytes(
     })
 }
 
-/// V3 (ZIP 2005 / Ironwood) variant of [`spend_nullifier_bytes`], over a validated
-/// raw recipient.
-///
-/// Commits with [`note_commitment_v3_point`] so that the commitment matches the
-/// on-chain V3 note and the derived nullifier agrees with the value in the PCZT.
+/// V3 (ZIP 2005 / Ironwood) variant of [`spend_nullifier_bytes`].
 #[inline(never)]
 pub fn spend_nullifier_bytes_v3(
     nk: &[u8; HASH_SIZE],
@@ -181,9 +170,7 @@ pub fn spend_nullifier_bytes_v3(
     })
 }
 
-/// Reuses recipient validation for an Orchard nullifier. All remaining note and
-/// key checks are identical to [`spend_nullifier_bytes`]. No raw recipient is
-/// accepted alongside the validated value, so its base and key cannot diverge.
+/// [`spend_nullifier_bytes`] over an already validated recipient.
 #[inline(never)]
 pub fn spend_nullifier_for_recipient(
     nk: &[u8; HASH_SIZE],
@@ -195,7 +182,7 @@ pub fn spend_nullifier_for_recipient(
     spend_nullifier_inner(nk, value, rho, rseed, false, || Ok(*recipient))
 }
 
-/// Ironwood counterpart of [`spend_nullifier_for_recipient`], using the V3 commitment.
+/// V3 (Ironwood) variant of [`spend_nullifier_for_recipient`].
 #[inline(never)]
 pub fn spend_nullifier_v3_for_recipient(
     nk: &[u8; HASH_SIZE],
@@ -231,13 +218,8 @@ fn spend_nullifier_inner(
     let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
         cm
     } else {
-        // The commitment `cm` is already a pure-Rust point, so converting the
-        // scalar-mul result and adding in software keeps exactly one SDK point
-        // alive here; adding with SDK points would hold three at once (cm, the
-        // scalar-mul result, the sum). The `cx_bn` pool is a small shared budget
-        // with no documented ceiling, and Speculos does not model it, so this
-        // path keeps its footprint minimal by construction rather than against a
-        // measured limit.
+        // Adding in software keeps one SDK point alive instead of three: the `cx_bn` pool is
+        // small, has no documented ceiling, and Speculos does not model it.
         let nullifier_k_ec =
             pallas_basepoint_mul(Basepoint::Nullifier, &scalar_bytes_be(&nullifier_scalar))?;
         point_from_sdk_point(&nullifier_k_ec)? + cm
@@ -451,8 +433,7 @@ fn try_note_decryption_with_ivk(
     )
 }
 
-/// `known_g_d` is only supplied by incoming decryption, which derived it from
-/// the same plaintext prefix. Outgoing recovery derives it here instead.
+/// `known_g_d` must come from the same plaintext prefix; `None` derives it here.
 #[expect(
     clippy::too_many_arguments,
     reason = "Keep note fields and optional reuse material in one validation pass"
@@ -585,8 +566,6 @@ fn chacha20_decrypt_compact(
     chacha.apply_keystream(plaintext);
 }
 
-/// Consumes a validated point so its SDK resources are released after agreement.
-/// The parameter type is what keeps an unchecked host encoding out of here.
 fn key_agreement_with_point(
     scalar_bytes_le: &[u8; HASH_SIZE],
     point: ValidatedPoint,
@@ -623,7 +602,6 @@ fn is_valid_nonidentity_pallas_point(bytes: &[u8; HASH_SIZE]) -> Result<bool, Er
     Ok(validated_nonidentity_pallas_point(bytes)?.is_some())
 }
 
-/// Decodes once, retaining the canonical encoding and nonidentity checks.
 fn validated_nonidentity_pallas_point(
     bytes: &[u8; HASH_SIZE],
 ) -> Result<Option<ValidatedPoint>, Error> {
@@ -940,7 +918,6 @@ mod tests {
     // `_DUMMY_CHANGE_VALUE` from test_pczt_ironwood.py
     const VALUE: u64 = 10000;
 
-    /// Decodes a lowercase hex literal at compile time; a malformed literal fails the build.
     const fn hex<const N: usize>(text: &[u8]) -> [u8; N] {
         const fn nibble(c: u8) -> u8 {
             match c {
@@ -959,8 +936,7 @@ mod tests {
         out
     }
 
-    // An Ironwood note of 280 000 zatoshis carrying a memo, paid to the internal address of
-    // account 1 of the Speculos seed with no outgoing record, and that account's IVKs.
+    // Ironwood note to account 1 (Speculos seed), internal address, no outgoing record.
     // Regenerate with `gen_own_account_unit_vectors` in vendor/orchard/src/note_encryption.rs.
     const OWN_ACCOUNT_1_INTERNAL_IVK: [u8; 32] =
         hex(b"66ad6732f0136edd61e83ff257e0195d18cd0e52d4946c7ef368eecb8f79a93b");
@@ -978,8 +954,7 @@ mod tests {
     const OWN_ENC_CIPHERTEXT: [u8; 580] = hex(b"1935fb26b3de60b04618b2e49e32d9f5857f57d7a6cc07b4c3033a359af541b523d7b5afce86cc46bd4d10ac2566f102d9f2cf5d26d75631d47501cf502b715d3cda030a81b8e73efc192888148283fbbacdf01fa292ba47272c379108aa35af5df7d60d8b1254421ffa51b4fca1594d31464bb86ad45ac71b1bfebabcd0c96dd30bce41f51d27a88096e577fc87cada264c79ca3c30189786563a8f04e2ddf3891d33de5aba96845889f5413dffc555a02d94e38def18cba0dce24da72118b5db77e37e16d68a1a5d3f489df3b9617e4537ce53dbec4a7a005efb29f34afd5e72306ec7e708f20c4a3f5da304da926bc86e497a069167a0d95585a0d3f9843f6be4bc1802558e9973b2ba55e7961ed75371f00837c858c2cdb7346ac4927f768fc31eb0c24581719b47183d59e87c1176a425b6015d93417e008b4f2687f3a56e2cbfa004c6f328dd1529b575d27674a22f1f6054834a4dec236215b13bb792e7c441507ee22e40a81700ad3fa66e05d28b982d2c2201fc40802b9342c39ae3e2d7608aaa662f7dae0977417fd90ccce749c0c7f86cfafc90e4b68024f3d72ad47766ae0fe2779a12f3fbb5b752c93cb4755bcadc35153ce52a549724622a679ca00591fed9d194563d45349e9b06c8408dfc0584d1acc983b1a891f212f8affcc1b34a793de26be01cf5c61547cb6f88e7ec83c80bf1d21058bc1b0c18d05dc37db425ded14dd2a9410f3e3e3c3ad076347307c8a30b1505a657af0c45f9f70b1de4382f27da74eaf7181553ac67118cfb7c6bd2dfd754d82faed4cdcbe3ec973c6bfb");
     const OWN_VALUE: u64 = 280_000;
     const OWN_MEMO: &[u8] = b"Savings top-up";
-    // The same note encrypted under another note's ephemeral key: it decrypts under the IVK, but
-    // its `epk` is not `[esk]·g_d` for the `esk` its own `rseed` yields.
+    // Same note under another note's `esk`: decrypts, but `epk` does not derive from its `rseed`.
     const OWN_FOREIGN_ESK_EPK: [u8; 32] =
         hex(b"be70bd899026c4d8ca4367d19b1c3818a1baf0cc461866cb333a9bed9ab79039");
     const OWN_FOREIGN_ESK_ENC_CIPHERTEXT: [u8; 580] = hex(b"930dcf668d5b4d9feae9995613ee915ab7e0e25ad1d24f857639bee1751e0458ea9bd35b78757531494cc8121de193ed1bdfddf5908f054b4f86628a65a8ddf7338bac5f5134a2dfc254ef5a251500b4bee8299bca078680e28fa81b668d8bd39d73fc046c1e0eabac7cdb5532129ae57b6e8f1137395d5816528387ccf403f845dd822de35b9e3292cd9c5b5e7c5077af37204f3bc44e86e25d0549c2083661f9dd924de432152c61b0a97d9110ec08ee1665394fa6125c7bd177891d31e5358bcc00670bd28b38980ad7ad3f1973d713239f5ea0f9196890a1fa0d5a51295289b9f1977aa9d16d3ede70a5ac66f272cc2f5f7d478bd795309cbb24961b9860c7070c1ddbdf0c6e975b91f839b3b6879d714fa205261c815ebca8ec2412252bd318f01075dc01b8904ef54051c218bb85da515c0ecc4420dfa4b4d08a992d8c3d00d86d03600f237c814d695102b58a3827dade84b3326169cc35f78a0705e11601671406819780a72d535f1678001851ec20a3fce6b1f6ccc314ee636154b3ad5b762e088baa9a3bf6a898062dbe745aff55846ca870bf22be608c6ba25edd2be99db0f1ef16fb3aa65f32f9892e5c84308aace1db56f7f378d2bfb5ff7b4aa00b4b3d1203e3e959391f2e77800d08b2cf91442240dac2d9faa34d60f7dd3bec58391589335282e38e4e34ed553addb994800953d9b47eb2eb66c2d17f5df171565b91a7f0afd913403477c1b3b07857e72e95bbf8e6973fc0ce1389ab32f8b8954bfb0da6dafebc0a1768507040346e31d3eb3bfecf1883357c8e4386d25ade8e26d2");
@@ -1016,7 +991,6 @@ mod tests {
         }
     }
 
-    /// The destination account's IVK recovers the note whole: value, recipient and memo.
     #[test_case]
     const IVK_DECRYPTION_RECOVERS_VALUE_RECIPIENT_AND_MEMO: TestType = TestType {
         modname: module_path!(),
@@ -1043,7 +1017,6 @@ mod tests {
         },
     };
 
-    /// The account's other IVK, and the other pool's note version, recognize nothing.
     #[test_case]
     const IVK_DECRYPTION_REFUSES_ANOTHER_KEY_OR_POOL: TestType = TestType {
         modname: module_path!(),
@@ -1058,7 +1031,6 @@ mod tests {
         },
     };
 
-    /// A single flipped bit anywhere in the ciphertext, memo or tag included, fails the AEAD.
     #[test_case]
     const IVK_DECRYPTION_REFUSES_A_TAMPERED_CIPHERTEXT: TestType = TestType {
         modname: module_path!(),
@@ -1078,7 +1050,6 @@ mod tests {
         },
     };
 
-    /// A note that decrypts but whose `epk` is not derived from its own `rseed` is refused.
     #[test_case]
     const IVK_DECRYPTION_REFUSES_A_FOREIGN_EPHEMERAL_KEY: TestType = TestType {
         modname: module_path!(),
@@ -1093,7 +1064,6 @@ mod tests {
         },
     };
 
-    /// A note that decrypts under a `cmx` it does not commit to is refused.
     #[test_case]
     const IVK_DECRYPTION_REFUSES_A_CMX_MISMATCH: TestType = TestType {
         modname: module_path!(),

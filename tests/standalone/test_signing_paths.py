@@ -1,12 +1,6 @@
-"""Each signing path has the shape of the key it names.
+"""Each signing path must have the shape of the key it names; every refusal has an accepted control.
 
-A transparent signature comes from a five-component BIP-44 path with a hardened account; an Orchard
-or Ironwood spend authorization from a ZIP-32 account path. Any other shape names a key no wallet
-derives for that purpose, so the app refuses it, whatever else the path gets right. Every refusal
-here has a control that differs only in the path and is accepted.
-
-Within the transparent shape, the account is not capped and change and address index are the
-host's: the accepted cases pin that, since a host may sign from any account and scope it derives.
+Transparent accounts are not capped, and change and address index are the host's.
 """
 
 import pytest
@@ -56,7 +50,6 @@ COIN_TYPE = 133 | HARDENED
     ],
 )
 def test_legacy_signing_path_shape(backend, scenario_navigator: NavigateWithScenario, path, accepted):
-    """HASH_SIGN after an approved review, naming the key by the path under test."""
     transport = ZcashCommandSender(backend)
     open_legacy_signing(transport, lambda: _approve_without_comparing(scenario_navigator))
     apdu = hash_sign_apdu(path)
@@ -97,7 +90,6 @@ def test_legacy_signing_path_shape(backend, scenario_navigator: NavigateWithScen
     ],
 )
 def test_pczt_transparent_input_path_shape(backend, signing_path, accepted):
-    """The input packet carrying the path is accepted or refused on the path alone."""
     client = ZcashCommandSender(backend)
     txin = PcztTransparentInput(
         prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
@@ -128,7 +120,7 @@ def test_pczt_transparent_input_path_shape(backend, signing_path, accepted):
     ids=["zip32_account_path", "bip44"],
 )
 def test_pczt_orchard_action_path_shape(backend, signing_path, accepted):
-    """The account path rides in its own packet, the second of each action, and is judged there."""
+    """The account path rides in each action's second packet and is judged there."""
     action = PcztOrchardAction(
         cv_net=bytes(32),
         nullifier=bytes(32),
@@ -155,7 +147,6 @@ def test_pczt_orchard_action_path_shape(backend, signing_path, accepted):
         p1 = client._pczt_chunk_p1(index, len(packets))
         backend.exchange(cla=CLA, ins=InsType.PCZT_ORCHARD_ACTION, p1=p1, data=packets[index])
 
-    # The action count, then the spend fields.
     send(0)
     send(1)
 
@@ -178,7 +169,6 @@ def test_pczt_orchard_action_path_shape(backend, signing_path, accepted):
     ids=["zip32_account_path", "bip44"],
 )
 def test_pczt_ironwood_action_path_shape(backend, signing_path, accepted):
-    """The Ironwood twin of the Orchard case: same packet order, the path judged at the second."""
     action = PcztIronwoodAction(
         cv_net=bytes(32),
         nullifier=bytes(32),
@@ -206,7 +196,6 @@ def test_pczt_ironwood_action_path_shape(backend, signing_path, accepted):
         p1 = client._pczt_chunk_p1(index, len(packets))
         backend.exchange(cla=CLA, ins=InsType.PCZT_IRONWOOD_ACTION, p1=p1, data=packets[index])
 
-    # The action count, then the spend fields.
     send(0)
     send(1)
 

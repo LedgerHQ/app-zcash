@@ -1,4 +1,4 @@
-"""Fixtures and patches shared by the Ragger suites. Each suite's conftest imports them."""
+"""Fixtures and patches shared by the Ragger suites."""
 
 import tomllib
 from pathlib import Path

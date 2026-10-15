@@ -1,7 +1,6 @@
 use image::{ImageFormat, ImageReader, Pixel};
 
-// Derives the home-screen glyph of the small devices from the application icon: the icon is
-// masked to the rounded outline the home screen expects, then inverted inside it.
+// Masks the icon to the small devices' rounded home-screen outline, then inverts it inside.
 fn derive_home_glyph(source: &str, target: &str) {
     println!("cargo:rerun-if-changed=icons/{source}");
 
@@ -37,7 +36,7 @@ fn main() {
     println!("cargo:rerun-if-changed=script.ld");
     println!("cargo:rerun-if-changed=icons/mask_14x14.gif");
 
-    // Both glyphs are always derived, whichever build is running, so each stays reproducible.
+    // Both glyphs in every build, so each stays reproducible.
     derive_home_glyph("nanox_app_zcash.gif", "home_nano_nbgl.png");
     derive_home_glyph("nanox_app_zcash_test.gif", "home_nano_nbgl_test.png");
 }

@@ -385,9 +385,7 @@ impl TryFrom<ApduHeader> for Instruction {
     }
 }
 
-/// The outcome of a command once its reply has been attempted. A reply the transport did not
-/// deliver fails the command, so the transaction state it reached is reset like on any error and
-/// a swap ends refused.
+/// Fails a command whose reply was not delivered, so its state is reset like on any error.
 fn delivered_status(sent: Result<(), CommError>, status: AppSW) -> AppSW {
     match sent {
         Ok(()) => status,
@@ -520,8 +518,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
         // SAFETY: `comm_ptr` is the static Comm, which outlives the swap call.
         unsafe { swap::panic_handler::set_swap_comm(comm_ptr) };
     }
-    // SAFETY: the swap panic handler reborrows from this same pointer, and only from a panic,
-    // after which this borrow is never used again.
+    // SAFETY: the swap panic handler reborrows this pointer only on a non-returning panic.
     let comm = unsafe { &mut *comm_ptr };
     comm.set_expected_cla(ZCASH_CLA);
 
@@ -554,8 +551,7 @@ pub fn normal_main(swap_params: Option<&CreateTxParams>) -> bool {
         let ins = match command.decode::<Instruction>() {
             Ok(ins) => ins,
             Err(sw) => {
-                // Decode failures must not reach a transaction handler. No state was touched,
-                // so a reply the transport loses leaves nothing to undo.
+                // No state was touched, so an undelivered reply leaves nothing to undo.
                 if command.reply(&[], sw).is_err() {
                     error!("APDU reply not delivered");
                 }
@@ -705,7 +701,6 @@ mod tests {
         },
     };
 
-    /// A signature the host never received must not leave the command counted as a success.
     #[test_case]
     const UNDELIVERED_REPLY_FAILS_THE_COMMAND: TestType = TestType {
         modname: module_path!(),

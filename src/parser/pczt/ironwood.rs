@@ -218,8 +218,7 @@ impl PcztParser {
         const OUTPUT_METADATA_WITH_RCV_LEN: usize = OUTPUT_METADATA_WITHOUT_RCV_LEN + 32;
         const OUTPUT_METADATA_WITH_NOTE_VERSION_LEN: usize = OUTPUT_METADATA_WITH_RCV_LEN + 1;
 
-        // Past the version byte comes the extension block, which therefore always follows it: the
-        // version byte is what keeps the two optional parts from being read one for the other.
+        // The extension block follows the version byte, which keeps the two optional parts apart.
         let has_note_version = match reader.remaining_len() {
             OUTPUT_METADATA_WITHOUT_RCV_LEN => {
                 return Err(ParserError::from_str("Missing PCZT ironwood rcv"));
@@ -458,8 +457,8 @@ impl PcztParser {
             }
 
             let offset = self.pool_field_bytes.len();
-            // Reserved whole and fallibly: growing packet by packet doubles the capacity past
-            // `size` and holds the old and new blocks at once, and a failed growth exits the app.
+            // Reserved whole and fallibly: per-packet growth over-allocates, holds both blocks at
+            // once, and exits the app on failure.
             self.pool_field_bytes
                 .try_reserve_exact(missing)
                 .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
@@ -859,16 +858,14 @@ impl PcztParser {
         network: NetworkType,
         is_change: bool,
     ) -> Result<(), ParserError> {
-        // Only a transparent change sets the flag, and the transparent outputs are parsed before
-        // either shielded bundle, so this is where the two kinds of change meet.
+        // Transparent outputs parse first, so the flag can only be a transparent change.
         if is_change && ctx.tx_info.is_change_found {
             return Err(ParserError::from_str(
                 "Transparent and shielded change outputs detected",
             ));
         }
 
-        // Claimed before the address below is encoded: the budgets bound that allocation, which a
-        // change note makes too.
+        // Claimed before the address is encoded, since the budgets bound that allocation.
         claim_retained_shielded_output(ctx.tx_info)?;
         if !is_change {
             claim_displayed_shielded_output(ctx.tx_info)?;
@@ -884,7 +881,6 @@ impl PcztParser {
             record_hidden_shielded_change_account(ctx.tx_info, path)?;
         }
 
-        // The record's slot is reserved before anything is allocated for it, as the budgets are.
         ctx.tx_info
             .outputs
             .try_reserve(1)

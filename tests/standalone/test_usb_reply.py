@@ -38,8 +38,7 @@ def test_usb_reply_independent_of_new_ticker(backend):
 def usb_stream(backend, monkeypatch):
     if not isinstance(backend, SpeculosBackend):
         pytest.skip("This overlap test uses the emulator APDU stream")
-    # The HTTP transport owns one pending response per request. Use one TCP
-    # reader so a rejected intruder cannot replace the outstanding review reply.
+    # One TCP reader, so a rejected intruder cannot replace the outstanding review reply.
     with socket.create_connection(("127.0.0.1", backend._apdu_port), timeout=30) as stream:
         def read_exact(count):
             data = b""
@@ -101,7 +100,7 @@ def test_usb_reply_overlap_preserves_review(backend, scenario_navigator, usb_str
                 scenario_navigator.device, backend, UseCase.TX_REVIEW, approve,
             )
             if approve and scenario_navigator.device.touchable:
-                # This app has no approval status screen (same as its fixture helper).
+                # This app has no approval status screen.
                 scenario.validation = scenario.validation[:-1]
             scenario_navigator.navigator.navigate_until_text(
                 navigate_instruction=scenario.navigation,
@@ -125,8 +124,7 @@ def test_usb_reply_overlap_preserves_review(backend, scenario_navigator, usb_str
             client.pczt_sign_ironwood(action_index=0)
         assert denied.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
         assert not denied.value.data
-    # Both control and candidate have a transient post-sign status screen.
-    # Check readiness after that screen rather than racing a new APDU into it.
+    # Wait out the transient post-sign status screen rather than racing an APDU into it.
     if approve:
         backend.wait_for_home_screen(timeout=10)
     assert backend.exchange_raw(VERSION).status == 0x9000

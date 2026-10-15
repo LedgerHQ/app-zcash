@@ -28,10 +28,10 @@ def main():
         shutil.copyfile(sdk_dir / "src/seph.rs", work / "sdk_seph.rs")
         shutil.copyfile(Path(__file__).with_name("sdk_io.rs"), work / "sdk_io.rs")
         binary = work / "sdk-io-tests"
-        # nano_nbgl compiles in the NBGL loan the review callbacks require, as on every target.
+        # nano_nbgl enables the NBGL loan the review callbacks need.
         subprocess.run(["rustc", "--edition=2024", "--test", "--cfg", 'feature="nano_nbgl"',
                         str(work / "sdk_io.rs"), "-o", str(binary)], check=True)
-        # The SDK lets one Comm exist per process, as on a device, so each test gets its own.
+        # The SDK allows one Comm per process, so each test runs in its own.
         listing = subprocess.check_output([str(binary), "--list"], text=True)
         names = [line.removesuffix(": test") for line in listing.splitlines() if line.endswith(": test")]
         for name in names:

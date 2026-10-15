@@ -143,8 +143,7 @@ fn record_hidden_shielded_change_account(
     }
 }
 
-/// Claim room for one more shielded output of either kind, displayed or change, refusing once the
-/// budget is spent. Called before [`claim_displayed_shielded_output`] and for the same reason.
+/// Claim room for one more shielded output, displayed or change, before anything is allocated.
 fn claim_retained_shielded_output(tx_info: &mut TxInfo) -> Result<(), ParserError> {
     if tx_info.retained_shielded_outputs >= MAX_PCZT_SHIELDED_RETAINED_OUTPUTS_NUMBER {
         error!("Shielded retained-output budget exhausted");
@@ -254,15 +253,12 @@ fn try_retain(text: &str) -> Result<String, ParserError> {
     Ok(retained)
 }
 
-/// Length of the account index carried by a [`PCZT_OUTPUT_EXTENSION_ACCOUNT`] extension.
 const OUTPUT_EXTENSION_ACCOUNT_LEN: usize = 4;
 
-/// Parse an output-metadata extension block: `tag u8 · len u8 · value[len]` entries up to the end
-/// of the packet, returning the destination account it declares.
+/// Parse `tag u8 · len u8 · value[len]` output extensions, returning the declared account.
 ///
-/// Strict on purpose: an extension this parser does not understand may change what the output
-/// means, so skipping it would show the user something the host did not describe. An unknown or
-/// repeated tag, a length that does not match its tag and a truncated value are all refused.
+/// Strict: an unknown extension may change the output's meaning, so any unknown, repeated,
+/// mis-sized or truncated entry is refused.
 fn parse_output_extensions(reader: &mut ByteReader<'_>) -> Result<Option<u32>, ParserError> {
     let mut account = None;
 
@@ -291,8 +287,7 @@ fn parse_output_extensions(reader: &mut ByteReader<'_>) -> Result<Option<u32>, P
                     .read_exact(&mut value)
                     .map_err(|_| ParserError::from_str("Truncated PCZT output extension"))?;
                 let index = u32::from_le_bytes(value);
-                // The device hardens the index itself; a host passing it hardened already is
-                // describing some other path than the one this field names.
+                // The device hardens the index itself; a pre-hardened one names another path.
                 if index & !UNHARDENED_MASK != 0 {
                     return Err(ParserError::from_str("Hardened PCZT output account index"));
                 }
@@ -310,12 +305,8 @@ fn parse_output_extensions(reader: &mut ByteReader<'_>) -> Result<Option<u32>, P
     Ok(account)
 }
 
-/// The ZIP 32 account path of another account of the seed, built from the path being spent.
-///
-/// Purpose and coin type are taken from the source path rather than from a default, so a
-/// transaction on one network cannot reach a key of the other. The source account itself is
-/// refused: its outputs are change or payments the device already recognizes, and naming it here
-/// would let a declaration relabel them.
+/// Another seed account's ZIP 32 path, keeping the source's purpose and coin type (no cross-network
+/// keys); the source account is refused so a declaration cannot relabel its outputs.
 fn own_account_path(source: &Bip32Path, account: u32) -> Result<Bip32Path, ParserError> {
     const HARDENED: u32 = 0x8000_0000;
 
@@ -350,12 +341,8 @@ fn own_account_path(source: &Bip32Path, account: u32) -> Result<Bip32Path, Parse
     Ok(path)
 }
 
-/// Record an output proven to pay another account of the seed.
-///
-/// It is a payment like any other for every rule but its rendering: never change, never hidden,
-/// counted against both output budgets before anything is allocated for it, and shown with its
-/// memo. No address is encoded — the account is what the user recognizes, and an internal address
-/// is one no wallet shows.
+/// Record an output proven to pay another seed account; shown by account, as no wallet displays
+/// its internal address.
 fn push_own_account_output(
     tx_info: &mut TxInfo,
     output: DecipheredOrchardOutput,
@@ -390,7 +377,7 @@ fn push_own_account_output(
     Ok(())
 }
 
-/// Drop the viewing keys of the other accounts, wiping them, and release their storage.
+/// Wipe the other accounts' viewing keys and release their storage.
 fn discard_own_account_keys(tx_info: &mut TxInfo) {
     tx_info.own_account_keys = Vec::new();
 }
@@ -539,7 +526,7 @@ struct PcztCurrentActionState {
     alpha: Option<[u8; 32]>,
     path: Option<Bip32Path>,
     note_plaintext_version: u8,
-    /// Account the host declared the output pays, through the output-metadata extension block.
+    /// Account declared by the output-metadata extension block.
     output_account: Option<u32>,
 }
 
@@ -619,7 +606,7 @@ pub struct PcztParser {
     orchard_spending_key_path: Option<Bip32Path>,
     // Shared by both pools under orchard_spending_key_path; wiped before review or on reset.
     orchard_fvk: Option<RetainedOrchardFvk>,
-    // Normalized scalar under the same account path. Wiped before review or on reset.
+    // Normalized scalar for the same path; wiped before review or on reset.
     orchard_validation_key: Option<OrchardValidationKey>,
     is_v6_tx: bool,
     has_orchard_bundle: bool,
@@ -1063,12 +1050,8 @@ impl PcztParser {
         self.reset_on_error(result)
     }
 
-    /// Derive, once per transaction, the viewing keys of another account an output declares.
-    ///
-    /// Runs while the output metadata is parsed, at the shallowest point that knows the account,
-    /// rather than inside the output's validation where the derivation would stack on top of note
-    /// decryption. The derivation draws on the per-run budget like any other, and the full viewing
-    /// key is dropped as soon as its two IVKs are taken.
+    /// Derive once the IVKs of a declared account, during metadata parsing so the derivation's
+    /// stack does not add to note decryption's.
     #[inline(never)]
     fn prepare_own_account_keys(
         &self,
@@ -1111,12 +1094,8 @@ impl PcztParser {
         Ok(())
     }
 
-    /// Recognize the current action's output as a note of the account it declares.
-    ///
-    /// The declaration is a claim, and this is the only way it is accepted: the note has to decrypt
-    /// under that account's internal or external IVK and pass the full note validation. Any other
-    /// outcome refuses the action — falling back to the undeclared paths would let a declaration
-    /// that fails to prove itself still reach the review.
+    /// Accept a declared account only if the note decrypts under its IVK and fully validates;
+    /// otherwise refuse, never falling back to the undeclared paths.
     #[inline(never)]
     fn recognize_own_account_output(
         &self,
@@ -1358,7 +1337,6 @@ mod tests {
         parse_output_extensions(&mut ByteReader::new(block)).map_err(|_| ())
     }
 
-    /// An empty block declares nothing; one well-formed entry declares its account.
     #[test_case]
     const OUTPUT_EXTENSIONS_ACCEPT_THE_ACCOUNT_TAG: TestType = TestType {
         modname: module_path!(),
@@ -1374,7 +1352,6 @@ mod tests {
         },
     };
 
-    /// Unknown, repeated, mis-sized, truncated, hardened and out-of-range entries are all refused.
     #[test_case]
     const OUTPUT_EXTENSIONS_REFUSE_MALFORMED_BLOCKS: TestType = TestType {
         modname: module_path!(),
@@ -1414,8 +1391,6 @@ mod tests {
         Bip32Path::from_dpath(3, &encoded).unwrap_or_default()
     }
 
-    /// The destination path keeps the source's prefix, hardens the index, and never names the
-    /// account being spent.
     #[test_case]
     const OWN_ACCOUNT_PATH_IS_BUILT_FROM_THE_SOURCE: TestType = TestType {
         modname: module_path!(),
@@ -1432,8 +1407,6 @@ mod tests {
         },
     };
 
-    /// A source path on the other network's coin type builds no destination: a mainnet build
-    /// never reaches a testnet account's keys, nor the reverse.
     #[test_case]
     const OWN_ACCOUNT_PATH_STAYS_ON_THE_BUILD_NETWORK: TestType = TestType {
         modname: module_path!(),

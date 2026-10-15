@@ -3,7 +3,6 @@ from application_client.zcash_response_unpacker import unpack_get_app_and_versio
 from ragger.navigator import NavInsID
 
 
-# The home screen of the testnet build names the app and says it is testnet-only.
 def test_app_mainmenu_testnet(device, navigator, test_name, default_screenshot_path):
     if device.is_nano:
         instructions = [NavInsID.RIGHT_CLICK, NavInsID.RIGHT_CLICK]
@@ -20,8 +19,7 @@ def test_app_mainmenu_testnet(device, navigator, test_name, default_screenshot_p
     )
 
 
-# BOLOS answers with the name recorded in the binary's install parameters, so this shows the build
-# variant's name reached the binary and not only the home screen.
+# BOLOS reports the name from the install parameters, so this checks the binary, not only the home screen.
 def test_app_name_is_testnet(backend):
     client = ZcashCommandSender(backend)
 

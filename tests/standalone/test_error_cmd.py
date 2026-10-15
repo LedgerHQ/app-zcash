@@ -77,7 +77,7 @@ def test_wrong_data_length(backend, apdu):
 
 def test_empty_apdu_header_forms(backend):
     expected = backend.exchange(cla=CLA, ins=InsType.GET_VERSION).data
-    # io_new accepts both ISO's four-byte form and the existing zero-Lc form.
+    # Both the ISO four-byte form and the zero-Lc form are accepted.
     for apdu in ("e0c40000", "e0c4000000"):
         assert backend.exchange_raw(bytes.fromhex(apdu)).data == expected
 

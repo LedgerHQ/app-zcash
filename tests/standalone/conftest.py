@@ -1,4 +1,4 @@
-# Importing the module applies its git-worktree patch; the imported fixture is registered here.
+# The import applies the git-worktree patch and registers the fixture.
 from suite_conftest import deterministic_rng_fixture, supported_devices  # noqa: F401
 
 # Pull all features from the base ragger conftest using the overridden configuration
