@@ -3,7 +3,7 @@ members = ["ledger_zcash_crypto"]
 default-members = ["."]
 
 [workspace.dependencies]
-ledger_device_sdk = { version = "1.41.0", features = ["sys", "io_new"] }
+ledger_device_sdk = { version = "1.42.0", features = ["sys", "io_new"] }
 zeroize = { version = "1.6.0", default-features = false }
 
 [package]
@@ -19,12 +19,12 @@ corez = { version = "0.1.1", default-features = false, features = ["alloc"] }
 arrayvec = { version = "0.7.6", default-features = false }
 bs58 = { version = "0.5.1", default-features = false }
 
-zcash_primitives = { version = "=0.31.0-pre.0", default-features = false }
-zcash_protocol = { version = "=0.11.0-pre.0", default-features = false }
+zcash_primitives = { version = "=0.31.0-pre.2", default-features = false }
+zcash_protocol = { version = "=0.11.0-pre.1", default-features = false }
 # zcash_{primitives,transparent,address} all resolve 0.5, so moving it alone would double-link.
 zcash_encoding = { version = "0.5", default-features = false }
-zcash_transparent = { version = "=0.11.0-pre.0", default-features = false }
-zcash_address = { version = "=0.14.0-pre.0", default-features = false }
+zcash_transparent = { version = "=0.11.0-pre.2", default-features = false }
+zcash_address = { version = "=0.14.0-pre.2", default-features = false }
 
 orchard = { path = "./vendor/orchard", default-features = false, features = ["ledger"] }
 num_enum = { version = "0.7.5", default-features = false }

@@ -11,9 +11,9 @@ publish = false
 orchard = { version = "=0.16.0", default-features = false, features = ["std"] }
 pasta_curves = "0.6"
 zip32 = "0.3"
-zcash_address = "=0.14.0-pre.0"
-zcash_protocol = "=0.11.0-pre.0"
-transparent = { package = "zcash_transparent", version = "=0.11.0-pre.0", features = ["transparent-inputs"] }
+zcash_address = "=0.14.0-pre.2"
+zcash_protocol = "=0.11.0-pre.1"
+transparent = { package = "zcash_transparent", version = "=0.11.0-pre.2", features = ["transparent-inputs"] }
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 sha2 = "0.10"
 hex = "0.4"
