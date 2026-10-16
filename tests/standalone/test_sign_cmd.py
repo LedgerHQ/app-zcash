@@ -336,6 +336,100 @@ def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: Navi
         )
 
 
+# A swap memo of the kind THORChain and Maya read from an OP_RETURN output: 52 bytes, one direct push.
+OP_RETURN_TEXT_MEMO = b"=:BTC.BTC:bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"
+_OP_RETURN_PREVOUT_TX_BYTES = bytes.fromhex(
+    "050000800a27a726b4d0d6c200000000f9081a000198cd6cd9559cd98109ad0622f899bc38805f11648e4f985ebe344b8238f87b13010000006b48304502210095104ae9d53a95105be4ba5a31caddff2ae83ced24b21ab4aec6d735d568fad102206e054b158047529bb736c810902ea7fc8d92f3f604c1b2a8bb0b92f0e6c016a8012102010a560c7325827df0212bca20f5cf6556b1345991b6b64b469c616e758230a5ffffffff021595dd04000000001976a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88aca245117c140000001976a914c8b56e00740e62449a053c15bdd4809f720b5cb588ac000000"
+)
+_OP_RETURN_INPUT = {
+    "prev_txid": bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+    "prev_vout": 0,
+    "script": bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+    "sequence": 0,
+}
+_OP_RETURN_RECIPIENT = {
+    "value": 81628565,
+    "script": bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+}
+
+
+def _op_return_script(data: bytes) -> bytes:
+    push = bytes([len(data)]) if len(data) < 0x4C else bytes([0x4C, len(data)])
+    return b"\x6a" + push + data
+
+
+def _sign_with_op_return(backend, scenario_navigator, op_return_output: dict) -> None:
+    path = "m/44'/133'/0'/0/2"
+    tx_bytes = _build_transparent_tx_v5(0, 0, [_OP_RETURN_INPUT], [_OP_RETURN_RECIPIENT, op_return_output], NU5_BRANCH_ID)
+
+    client = ZcashCommandSender(backend)
+    trusted_input = client.get_trusted_input(_OP_RETURN_PREVOUT_TX_BYTES, 0).data
+    public_key, _, _ = unpack_get_public_key_response(client.get_public_key(path=path).data)
+
+    client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input])
+
+    with client.hash_sign_header(locktime=0, expiry=0, sighash_type=0x01):
+        scenario_navigator.review_approve()
+
+    resp = client.hash_sign(path=path, locktime=0, expiry=0, sighash_type=0x01).data
+
+    assert check_tx_v5_signature_validity(public_key, resp[:-1], tx_bytes, input_index=0, input_amounts=[81630485])
+
+
+def test_sign_tx_v5_op_return_text_memo(backend, scenario_navigator):
+    """A zero-value OP_RETURN of printable ASCII is reviewed as a "Memo" field, after the outputs."""
+    _sign_with_op_return(backend, scenario_navigator, {"value": 0, "script": _op_return_script(OP_RETURN_TEXT_MEMO)})
+
+
+def test_sign_tx_v5_op_return_hex_memo(backend, scenario_navigator):
+    """Data that is not printable ASCII is reviewed in full as hexadecimal, never as text: a NUL
+    byte would cut the string the review hands to the C layer. 80 bytes, the relay limit, behind
+    OP_PUSHDATA1."""
+    data = bytes(range(80))
+    _sign_with_op_return(backend, scenario_navigator, {"value": 0, "script": _op_return_script(data)})
+
+
+@pytest.mark.parametrize(
+    "outputs",
+    [
+        # An OP_RETURN output is unspendable, so a value on it would be burned.
+        pytest.param(
+            [_OP_RETURN_RECIPIENT, {"value": 1, "script": _op_return_script(OP_RETURN_TEXT_MEMO)}],
+            id="op_return_with_value",
+        ),
+        # The network relays one per transaction, and the review shows one.
+        pytest.param(
+            [
+                _OP_RETURN_RECIPIENT,
+                {"value": 0, "script": _op_return_script(b"first")},
+                {"value": 0, "script": _op_return_script(b"second")},
+            ],
+            id="two_op_returns",
+        ),
+        # Past the 83-byte script the network relays.
+        pytest.param(
+            [_OP_RETURN_RECIPIENT, {"value": 0, "script": _op_return_script(bytes(81))}],
+            id="op_return_over_relay_limit",
+        ),
+        # A second push after the first would be signed without being shown.
+        pytest.param(
+            [_OP_RETURN_RECIPIENT, {"value": 0, "script": _op_return_script(b"memo") + b"\x01\x41"}],
+            id="op_return_two_pushes",
+        ),
+    ],
+)
+def test_sign_tx_v5_op_return_refused(backend, outputs):
+    tx_bytes = _build_transparent_tx_v5(0, 0, [_OP_RETURN_INPUT], outputs, NU5_BRANCH_ID)
+
+    client = ZcashCommandSender(backend)
+    trusted_input = client.get_trusted_input(_OP_RETURN_PREVOUT_TX_BYTES, 0).data
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input])
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
 def test_sign_tx_v5_change(backend, scenario_navigator):
     LOCKTIME = 0x00
     EXPIRY = 0x00

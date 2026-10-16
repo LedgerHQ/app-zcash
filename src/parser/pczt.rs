@@ -42,7 +42,7 @@ use crate::parser::orchard_decipher::{
     ORCHARD_OUT_CIPHERTEXT_SIZE, ORCHARD_RAW_ADDRESS_SIZE, OrchardActionCiphertext,
     OrchardCompactAction, OrchardDecipherKeys, decipher_compact_value, decipher_value_with_ovk,
 };
-use crate::parser::{HASH_SIZE, ORCHARD_MEMO_SIZE};
+use crate::parser::{HASH_SIZE, ORCHARD_MEMO_SIZE, is_displayable_memo_text};
 use crate::tx::{Hashers, TransferType, TxInfo, TxOutput, TxOutputMemo, TxPool, TxSigningState};
 use crate::utils::blake2b_256_pers::{AsWriter as _, Blake2b256Personalization as _};
 use crate::utils::{
@@ -179,7 +179,7 @@ fn memo_display(tx_info: &mut TxInfo, memo: &[u8]) -> Result<Option<TxOutputMemo
     if memo[0] <= ZCASH_MEMO_TEXT_MAX_TAG
         && memo_len <= budget
         && let Ok(text) = core::str::from_utf8(&memo[..memo_len])
-        && is_displayable_memo_text(text)
+        && is_displayable_memo_text(text.as_bytes())
     {
         let retained = try_retain(text)?;
         tx_info.retained_memo_bytes += memo_len;
@@ -207,16 +207,6 @@ fn memo_display(tx_info: &mut TxInfo, memo: &[u8]) -> Result<Option<TxOutputMemo
     tx_info.retained_memo_bytes += MEMO_HASH_DISPLAY_LEN;
 
     Ok(Some(TxOutputMemo::hash(retained)))
-}
-
-/// Whether a memo can be shown as text rather than hashed.
-///
-/// Printable ASCII only. This is also what keeps a NUL byte out of the retained text: the review
-/// hands each value to the C layer as a NUL-terminated string, and an interior NUL panics the
-/// build of it — an app exit the host would choose. Widening this to non-ASCII UTF-8 would have to
-/// keep excluding it.
-fn is_displayable_memo_text(text: &str) -> bool {
-    text.bytes().all(|byte| matches!(byte, 0x20..=0x7E))
 }
 
 /// Copy a string onto the heap without the infallible path's panic on exhaustion.

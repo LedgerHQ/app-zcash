@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Accept one zero-value OP_RETURN output per transaction, holding a single push of 1 to 80
+  bytes, on both the legacy and the PCZT paths, and review its data after the outputs: as text
+  when every byte is printable ASCII, as hexadecimal otherwise. This is the memo THORChain and
+  Maya read from a transparent swap deposit, which the app refused outright. An OP_RETURN with a
+  value, past the relay limit, holding anything but one push, or sent under swap is still refused
+
 ## 3.9.3
 
 Security release addressing the findings of an external code security scan of 3.9.2.

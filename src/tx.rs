@@ -188,6 +188,9 @@ pub struct TxInfo {
     /// made. Change outputs are excluded — only one is ever accepted, and it is kept off the review.
     pub displayed_shielded_outputs: usize,
     pub is_change_found: bool,
+    /// Data of the transparent OP_RETURN output, rendered for the review. At most one per
+    /// transaction, as the network relays no more.
+    pub op_return: Option<TxOutputMemo>,
     pub change_pk_hash: Option<[u8; 20]>,
     /// Account component of the change path the host declared, hardening bit included.
     ///

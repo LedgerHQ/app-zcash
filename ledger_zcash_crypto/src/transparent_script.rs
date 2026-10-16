@@ -3,6 +3,13 @@ use ledger_device_sdk::log::debug;
 // The parsers hand over a bare script body, so the OP_RETURN opcode is its first byte.
 const OP_RETURN_OPCODE_INDEX: usize = 0;
 const OP_RETURN_OPCODE: u8 = 0x6A;
+const OP_PUSHDATA1: u8 = 0x4C;
+// The largest direct push opcode: it pushes the 75 bytes that follow it.
+const OP_PUSH_MAX_DIRECT: u8 = 0x4B;
+/// The largest OP_RETURN script the network relays: zcashd's `MAX_OP_RETURN_RELAY`, which Zebra's
+/// `DEFAULT_MAX_DATACARRIER_BYTES` matches. OP_RETURN, OP_PUSHDATA1 and its length byte leave 80
+/// bytes of data.
+pub const MAX_OP_RETURN_SCRIPT_LEN: usize = 83;
 const REGULAR_OUTPUT_SCRIPT_LEN: usize = 25;
 const REGULAR_OUTPUT_PREFIX: [u8; 3] = [0x76, 0xA9, 0x14];
 const REGULAR_OUTPUT_POSTFIX: [u8; 2] = [0x88, 0xAC];
@@ -19,6 +26,31 @@ pub fn output_script_is_op_return(script_pubkey: &[u8]) -> bool {
     }
 
     script_pubkey[OP_RETURN_OPCODE_INDEX] == OP_RETURN_OPCODE
+}
+
+/// Where the data of an OP_RETURN script starts, if the script is exactly OP_RETURN followed by
+/// one push of at least one byte, within the relay limit.
+///
+/// The data runs to the end of the script, so what the review shows is everything the output
+/// carries: a second push, a non-push opcode or bytes past the declared length are refused rather
+/// than left off the screen.
+pub fn op_return_data_offset(script_pubkey: &[u8]) -> Option<usize> {
+    if script_pubkey.len() > MAX_OP_RETURN_SCRIPT_LEN || !output_script_is_op_return(script_pubkey)
+    {
+        return None;
+    }
+
+    let (data_offset, data_len) = match *script_pubkey.get(1)? {
+        len @ 1..=OP_PUSH_MAX_DIRECT => (2, usize::from(len)),
+        OP_PUSHDATA1 => (3, usize::from(*script_pubkey.get(2)?)),
+        _ => return None,
+    };
+
+    if data_len == 0 || script_pubkey.len() != data_offset + data_len {
+        return None;
+    }
+
+    Some(data_offset)
 }
 
 pub fn output_script_is_regular(script_pubkey: &[u8]) -> bool {
@@ -55,6 +87,10 @@ pub enum CheckDispOutput {
     None,
     Displayable,
     Change,
+    /// A zero-value OP_RETURN carrying one push of data, which starts at `data_offset`.
+    OpReturn {
+        data_offset: usize,
+    },
 }
 
 pub fn check_output_displayable(
@@ -69,11 +105,16 @@ pub fn check_output_displayable(
         return CheckDispOutput::None;
     }
 
-    if amount == 0 {
-        return CheckDispOutput::None;
+    // An OP_RETURN output is unspendable: any value it carries is burned, so only a zero-value
+    // one is accepted, and only in the single-push form whose data the review can show in full.
+    if output_script_is_op_return(script_pubkey) {
+        return match op_return_data_offset(script_pubkey) {
+            Some(data_offset) if amount == 0 => CheckDispOutput::OpReturn { data_offset },
+            _ => CheckDispOutput::None,
+        };
     }
 
-    if output_script_is_op_return(script_pubkey) {
+    if amount == 0 {
         return CheckDispOutput::None;
     }
 
@@ -190,15 +231,67 @@ mod tests {
         },
     };
 
-    #[test_case]
-    const OP_RETURN_IS_NEVER_DISPLAYABLE: TestType = TestType {
-        modname: module_path!(),
-        name: "op_return_is_never_displayable",
-        f: || {
-            let script = [OP_RETURN_OPCODE, 0x04, 0xDE, 0xAD, 0xBE, 0xEF];
+    /// OP_RETURN, OP_PUSHDATA1, then `N` data bytes.
+    const fn op_return_pushdata1<const LEN: usize>(data_len: u8) -> [u8; LEN] {
+        let mut script = [0x41u8; LEN];
+        script[0] = OP_RETURN_OPCODE;
+        script[1] = OP_PUSHDATA1;
+        script[2] = data_len;
+        script
+    }
 
-            if check_output_displayable(&script, 1, None) != CheckDispOutput::None {
+    /// A zero-value OP_RETURN holding exactly one push is a memo, whether the push is direct or
+    /// goes through OP_PUSHDATA1, up to the 80 bytes (83 in all) the network relays.
+    #[test_case]
+    const OP_RETURN_SINGLE_PUSH_IS_A_MEMO: TestType = TestType {
+        modname: module_path!(),
+        name: "op_return_single_push_is_a_memo",
+        f: || {
+            let direct = [OP_RETURN_OPCODE, 0x04, 0xDE, 0xAD, 0xBE, 0xEF];
+            let short_pushdata1 = op_return_pushdata1::<8>(5);
+            let largest = op_return_pushdata1::<MAX_OP_RETURN_SCRIPT_LEN>(80);
+            let cases: [(&[u8], usize); 3] = [(&direct, 2), (&short_pushdata1, 3), (&largest, 3)];
+
+            for (script, data_offset) in cases {
+                if check_output_displayable(script, 0, None)
+                    != (CheckDispOutput::OpReturn { data_offset })
+                {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
+
+    /// Refused: an OP_RETURN carrying value (it would be burned), a script past the relay limit,
+    /// and anything but exactly one non-empty push of the declared length: no data, an empty
+    /// push, a push shorter or longer than the script, two pushes, a non-push opcode.
+    #[test_case]
+    const OP_RETURN_OTHER_FORMS_ARE_REFUSED: TestType = TestType {
+        modname: module_path!(),
+        name: "op_return_other_forms_are_refused",
+        f: || {
+            let memo = [OP_RETURN_OPCODE, 0x04, 0xDE, 0xAD, 0xBE, 0xEF];
+            if check_output_displayable(&memo, 1, None) != CheckDispOutput::None {
                 return Err(());
+            }
+
+            let too_long = op_return_pushdata1::<{ MAX_OP_RETURN_SCRIPT_LEN + 1 }>(81);
+            let cases: [&[u8]; 8] = [
+                &too_long,
+                &[OP_RETURN_OPCODE],
+                &[OP_RETURN_OPCODE, 0x00],
+                &[OP_RETURN_OPCODE, OP_PUSHDATA1, 0x00],
+                &[OP_RETURN_OPCODE, OP_PUSHDATA1],
+                &[OP_RETURN_OPCODE, 0x05, 0x41, 0x41, 0x41, 0x41],
+                &[OP_RETURN_OPCODE, 0x01, 0x41, 0x01, 0x41],
+                &[OP_RETURN_OPCODE, 0x51],
+            ];
+
+            for script in cases {
+                if check_output_displayable(script, 0, None) != CheckDispOutput::None {
+                    return Err(());
+                }
             }
             Ok(())
         },

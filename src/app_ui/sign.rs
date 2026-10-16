@@ -23,7 +23,7 @@ use crate::{
 use alloc::{format, string::String, vec::Vec};
 use ledger_device_sdk::nbgl::{Field, NbglReview};
 
-use crate::tx::{TransferType, TxOutput};
+use crate::tx::{TransferType, TxOutput, TxOutputMemo};
 
 fn format_zec_amount(amount: u64) -> String {
     // ZEC has 8 decimal places
@@ -38,12 +38,16 @@ fn format_zec_amount(amount: u64) -> String {
 /// or mixed) and is shown as the review subtitle so the user can tell apart the
 /// involved value pools.
 ///
+/// `op_return` is the data of the transaction's OP_RETURN output, shown after the outputs: it has
+/// no address or amount of its own, so it belongs to the transaction rather than to an output.
+///
 /// `expiry_height` is always shown, including when it is zero: zero means the
 /// transaction never expires, which is the widest possible window for it to be
 /// broadcast and therefore the case the user most needs to see. `locktime` is
 /// shown only when set, since zero constrains nothing.
 pub fn ui_display_tx(
     outputs: &[TxOutput],
+    op_return: Option<&TxOutputMemo>,
     fees: u64,
     transfer_type: TransferType,
     locktime: u32,
@@ -109,6 +113,13 @@ pub fn ui_display_tx(
                 value: memo.value.as_str(),
             });
         }
+    }
+
+    if let Some(op_return) = op_return {
+        my_fields.push(Field {
+            name: op_return.label,
+            value: op_return.value.as_str(),
+        });
     }
 
     my_fields.push(Field {

@@ -139,8 +139,9 @@ Packet sequence:
      - if present, seed fingerprint `[u8; 32]`
      - if present, derivation path as `Bip32Path`
 
-Accepted `script_pubkey` forms are P2PKH and P2SH. OP_RETURN and any other
-form are refused.
+Accepted `script_pubkey` forms are P2PKH, P2SH, and a zero-value OP_RETURN
+holding exactly one push of 1 to 80 bytes (at most one per transaction, none
+under swap). Any other form is refused.
 
 ## PCZT_ORCHARD_ACTION
 

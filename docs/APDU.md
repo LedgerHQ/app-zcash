@@ -89,6 +89,11 @@ Zcash deviations:
   transaction but refuses to sign it, with `ConditionsOfUseNotSatisfied` (`0x6986`) on the
   `0x48` that asks for the signature. Change is filtered out of the review, so an output
   returning to another account would otherwise be paid without ever being displayed.
+- An output's script must be P2PKH, P2SH, or a zero-value OP_RETURN holding exactly one push of
+  1 to 80 bytes; anything else returns `IncorrectData` (`0x6A80`). At most one OP_RETURN is
+  accepted per transaction, and none under swap, where the Exchange approval names no memo. Its
+  data is reviewed after the outputs, as `Memo` when every byte is printable ASCII and as
+  `Memo (hex)` otherwise, always in full.
 - **The review runs on the first `HASH_SIGN`, not at the end of `HASH_INPUT_FINALIZE_FULL`.**
   `locktime` and `expiry_height` only reach the device with the eleven-byte header that
   `HASH_SIGN` carries, so reviewing earlier would ask the user to approve a transaction whose
@@ -257,8 +262,12 @@ that case the payload contains only CompactSize output count `0`. See
 [PCZT_APDU.md](./PCZT_APDU.md#pczt_transparent_output) for the exact payload
 layout.
 
-An output's `script_pubkey` must be a standard P2PKH or P2SH script. Any other
-form, including OP_RETURN, is refused with `IncorrectData`.
+An output's `script_pubkey` must be a standard P2PKH or P2SH script, or a
+zero-value OP_RETURN holding exactly one push of 1 to 80 bytes (83 bytes of
+script at most, the relay limit). At most one OP_RETURN is accepted per
+transaction, and none under swap. Its data is shown after the outputs, as
+`Memo` when every byte is printable ASCII and as `Memo (hex)` otherwise. Any
+other form is refused with `IncorrectData`.
 
 ## INS_PCZT_ORCHARD_ACTION
 

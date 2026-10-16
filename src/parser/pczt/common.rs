@@ -163,6 +163,7 @@ impl PcztParser {
             ));
         } else if !ok!(ui_display_tx(
             &ctx.tx_info.outputs,
+            ctx.tx_info.op_return.as_ref(),
             fees,
             transfer_type,
             ctx.tx_info.locktime,
