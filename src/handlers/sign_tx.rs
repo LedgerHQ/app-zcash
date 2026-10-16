@@ -129,6 +129,12 @@ pub fn handler_hash_input_finalize_full<'a>(
     }
 
     if is_change_info {
+        // A later declaration would replace the account an already hidden output was matched to.
+        if ctx.tx_info.change_pk_hash.is_some() {
+            error!("Change already declared for this transaction");
+            return Err(AppSW::ConditionsOfUseNotSatisfied);
+        }
+
         let path: Bip32Path = data.try_into()?;
 
         // A change hash removes an output from the review screen, so it is installed only from a

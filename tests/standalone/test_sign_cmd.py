@@ -1367,6 +1367,31 @@ def test_legacy_change_info_accepts_the_vector_change_path(backend):
     assert sw == 0x9000
 
 
+@pytest.mark.parametrize(
+    "second_path",
+    [
+        pytest.param(_LEGACY_VALID_CHANGE_PATH, id="same_path"),
+        # Account 1', a change path of another account.
+        pytest.param("058000002c80000085800000010000000100000000", id="other_account"),
+    ],
+)
+def test_legacy_change_info_refuses_a_second_declaration(backend, second_path):
+    """One change declaration per transaction: a second one is refused, whatever its path."""
+    transport = ZcashCommandSender(backend)
+
+    _open_legacy_change_info_state(transport)
+
+    sw, _ = transport.exchange_raw(
+        "e04aff00" + f"{len(bytes.fromhex(_LEGACY_VALID_CHANGE_PATH)):02x}" + _LEGACY_VALID_CHANGE_PATH
+    )
+    assert sw == 0x9000
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw("e04aff00" + f"{len(bytes.fromhex(second_path)):02x}" + second_path)
+
+    assert e.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
+
+
 def test_legacy_continuation_rejects_a_round_before_the_review(backend):
     """A signing continuation must not restart hashing while the review round is still open.
 
