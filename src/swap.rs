@@ -341,11 +341,9 @@ fn check_address(params: &CheckAddressParams) -> Result<bool, SwapAppErrorCode> 
     )
     .map_err(|_e| SwapAppErrorCode::FailedToDeriveAddress)?;
 
-    // Same prefix restriction the APDU key-export path applies. Exchange is a trusted caller, so
-    // this is defense in depth — but the path it forwards originates with the host, and refusing an
-    // out-of-prefix one here costs nothing.
-    if !check_bip44_compliance(&bip32_path, Bip44CheckMode::PrefixOnly) {
-        error!("Swap check_address path outside the app's derivation prefixes");
+    // Only an address this app can later sign from is certified as the user's.
+    if !check_bip44_compliance(&bip32_path, Bip44CheckMode::TransparentSigning) {
+        error!("Swap check_address path is not a transparent signing path");
         return Err(SwapAppErrorCode::FailedToDeriveAddress);
     }
 
@@ -410,11 +408,14 @@ fn get_printable_amount(
 
 #[cfg(test)]
 mod tests {
-    use super::check_swap_params;
+    use super::{check_address, check_swap_params};
     use crate::tx::{TxOutput, TxPool};
+    use crate::utils::base58_address::{Base58Address, ToBase58Address};
+    use crate::utils::bip32_path::Bip32Path;
+    use crate::utils::extended_public_key::ExtendedPublicKey;
     use alloc::string::String;
     use alloc::vec;
-    use ledger_device_sdk::libcall::swap::CreateTxParams;
+    use ledger_device_sdk::libcall::swap::{CheckAddressParams, CreateTxParams};
     use ledger_device_sdk::testing::TestType;
 
     const AMOUNT: u64 = 100_000;
@@ -476,6 +477,70 @@ mod tests {
         f: || {
             if check_swap_params(&params(""), &vec![output("", None)], FEE).is_ok() {
                 return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    const H: u32 = 0x8000_0000;
+    const COIN: u32 = crate::consts::ZCASH_BIP44_COIN_TYPE | H;
+
+    fn check_address_params(path: &[u32], reference: &str) -> CheckAddressParams {
+        let mut params = CheckAddressParams::default();
+        for (i, component) in path.iter().enumerate() {
+            params.dpath[4 * i..4 * i + 4].copy_from_slice(&component.to_be_bytes());
+        }
+        params.dpath_len = path.len();
+        params.ref_address[..reference.len()].copy_from_slice(reference.as_bytes());
+        params.ref_address_len = reference.len();
+        params
+    }
+
+    fn address_at(path: &[u32]) -> Result<Base58Address, ()> {
+        let mut dpath = [0u8; 40];
+        for (i, component) in path.iter().enumerate() {
+            dpath[4 * i..4 * i + 4].copy_from_slice(&component.to_be_bytes());
+        }
+        let path = Bip32Path::from_dpath(path.len(), &dpath[..4 * path.len()]).map_err(|_| ())?;
+        let key = ExtendedPublicKey::try_from(&path).map_err(|_| ())?;
+        let hash = key.compressed_public_key_hash160().map_err(|_| ())?;
+        Base58Address::from_public_key_hash(&hash).map_err(|_| ())
+    }
+
+    #[test_case]
+    const CHECK_ADDRESS_ACCEPTS_SIGNING_PATH: TestType = TestType {
+        modname: module_path!(),
+        name: "check_address_accepts_signing_path",
+        f: || {
+            let path = [44 | H, COIN, H, 0, 0];
+            let address = address_at(&path)?;
+            match check_address(&check_address_params(&path, address.as_str())) {
+                Ok(true) => {}
+                _ => return Err(()),
+            }
+            match check_address(&check_address_params(&path, DESTINATION)) {
+                Ok(false) => Ok(()),
+                _ => Err(()),
+            }
+        },
+    };
+
+    #[test_case]
+    const CHECK_ADDRESS_REFUSES_UNSPENDABLE_PATHS: TestType = TestType {
+        modname: module_path!(),
+        name: "check_address_refuses_unspendable_paths",
+        f: || {
+            let paths: [&[u32]; 4] = [
+                &[44 | H, COIN],
+                &[44 | H, COIN, H],
+                &[32 | H, COIN, H],
+                &[44 | H, COIN, 0, 0, 0],
+            ];
+            for path in paths {
+                let address = address_at(path)?;
+                if check_address(&check_address_params(path, address.as_str())).is_ok() {
+                    return Err(());
+                }
             }
             Ok(())
         },
