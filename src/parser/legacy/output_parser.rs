@@ -1,3 +1,4 @@
+use crate::parser::accept_op_return;
 use crate::parser::personalization::ZCASH_OUTPUTS_HASH_PERSONALIZATION;
 
 use super::*;
@@ -221,6 +222,13 @@ impl LegacyOutputParser {
                             if is_change {
                                 ctx.tx_info.is_change_found = true;
                             }
+                        }
+                        CheckDispOutput::OpReturn { data_offset } => {
+                            accept_op_return(
+                                ctx.tx_info,
+                                &script.0.0[data_offset..],
+                                ctx.swap_params.is_some(),
+                            )?;
                         }
                         CheckDispOutput::None => {
                             return Err(ParserError::from_str(

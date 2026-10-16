@@ -382,6 +382,55 @@ def test_pczt_sign_tx_v5_p2sh_output(
     )
 
 
+def test_pczt_sign_tx_v5_op_return_memo(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The PCZT path reviews a zero-value OP_RETURN as the legacy one does."""
+    PCZT_GLOBAL = PcztGlobal()
+    PATH = "m/44'/133'/0'/0/2"
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path=PATH,
+    )
+    memo = b"=:BTC.BTC:bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"
+    TRANSPARENT_OUTPUTS = [
+        PcztTransparentOutput(
+            value=81628565,
+            script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+        ),
+        PcztTransparentOutput(value=0, script_pubkey=b"\x6a" + bytes([len(memo)]) + memo),
+    ]
+    TX_BYTES = pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], TRANSPARENT_OUTPUTS)
+
+    client = ZcashCommandSender(backend)
+
+    response = client.get_public_key(path=PATH).data
+    public_key, _, _ = unpack_get_public_key_response(response)
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=TRANSPARENT_OUTPUTS,
+    ):
+        _review_approve(scenario_navigator, "test_pczt_sign_tx_v5_op_return_memo")
+
+    resp = client.pczt_sign_transparent(input_index=0).data
+    signature = resp[:-1]
+
+    assert check_tx_v5_signature_validity(
+        public_key,
+        signature,
+        TX_BYTES,
+        input_index=0,
+        input_amounts=[TRANSPARENT_INPUT.value],
+    )
+
+
 def test_pczt_sign_tx_v5_old(
     backend,
     scenario_navigator: NavigateWithScenario,

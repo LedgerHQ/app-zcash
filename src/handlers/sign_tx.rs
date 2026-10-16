@@ -263,6 +263,7 @@ pub fn handler_hash_sign(comm: &mut Comm, ctx: &mut TxContext) -> Result<(), App
             let transfer_type = TransferType::classify(true, false, &ctx.tx_info.outputs);
             if !ui_display_tx(
                 &ctx.tx_info.outputs,
+                ctx.tx_info.op_return.as_ref(),
                 ctx.tx_info.fees,
                 transfer_type,
                 locktime,

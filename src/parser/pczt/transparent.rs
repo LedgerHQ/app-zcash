@@ -1,4 +1,5 @@
 use super::*;
+use crate::parser::accept_op_return;
 
 #[derive(Debug, Clone, Copy)]
 enum TransparentScriptKind {
@@ -82,6 +83,7 @@ impl PcztParser {
         self.pczt_finished = false;
         ctx.tx_info.outputs.clear();
         ctx.tx_info.is_change_found = false;
+        ctx.tx_info.op_return = None;
 
         if output_count == 0 {
             self.finalize_transparent_outputs(ctx)?;
@@ -764,6 +766,13 @@ impl PcztParser {
                 if is_change {
                     ctx.tx_info.is_change_found = true;
                 }
+            }
+            CheckDispOutput::OpReturn { data_offset } => {
+                accept_op_return(
+                    ctx.tx_info,
+                    &self.script_bytes[data_offset..],
+                    ctx.swap_params.is_some(),
+                )?;
             }
             CheckDispOutput::None => {
                 return Err(ParserError::from_str(
