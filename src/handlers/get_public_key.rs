@@ -55,10 +55,15 @@ pub fn handler_get_public_key<'a>(
     let bip32_path: Bip32Path = command.get_data().try_into()?;
     debug!("path {:?}", bip32_path);
 
-    // Answers with no screen when `display` is false, so the app restricts its own prefixes and
-    // reports an out-of-prefix request as a status word.
-    if !check_bip44_compliance(&bip32_path, Bip44CheckMode::PrefixOnly) {
-        error!("Public key path outside the app's derivation prefixes");
+    // A confirmed address must be one this app can sign from; silent export also serves
+    // account-level paths.
+    let mode = if display {
+        Bip44CheckMode::TransparentSigning
+    } else {
+        Bip44CheckMode::PrefixOnly
+    };
+    if !check_bip44_compliance(&bip32_path, mode) {
+        error!("Public key path not accepted for this request");
         return Err(AppSW::IncorrectData);
     }
 

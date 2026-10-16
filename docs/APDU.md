@@ -147,10 +147,11 @@ Zcash deviations:
   - `0x00`: derive without displaying the address
   - `0x01`: display the transparent address for user approval
 - P2: `0x00`
-- Data: BIP32 path. Only the prefix is constrained — purpose `44'` or `32'`
+- Data: BIP32 path. With `P1 = 0x00`, only the prefix is constrained — purpose `44'` or `32'`
   followed by the Zcash coin type, both hardened — so the host may request the
-  two-component prefix itself, an account-level path, or any deeper one. A path
-  outside the two prefixes, or one whose prefix components are not hardened,
+  two-component prefix itself, an account-level path, or any deeper one. With `P1 = 0x01`, the
+  path must be one the app signs from: a five-component BIP-44 path with purpose, coin type and
+  account hardened. A path outside these rules, or one whose prefix components are not hardened,
   returns `IncorrectData`. The hardening bit is part of the comparison: the app
   declares `44'/133'` and `32'/133'`, so an unhardened prefix is a path the OS
   will not derive, and it answers that by taking the app down rather than with a
