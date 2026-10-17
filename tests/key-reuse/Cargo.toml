@@ -10,7 +10,7 @@ publish = false
 ledger_device_sdk = { version = "1.42.0", features = ["sys", "unit_test"] }
 ledger_zcash_crypto = { path = "../../ledger_zcash_crypto" }
 orchard = { path = "../../vendor/orchard", default-features = false, features = ["ledger"] }
-pasta_curves = { version = "0.6", default-features = false, features = ["alloc", "repr-c"] }
+pasta_curves = { version = "=0.6.0", default-features = false, features = ["alloc", "repr-c"] }
 ff = { version = "0.14", default-features = false }
 
 [patch.crates-io]

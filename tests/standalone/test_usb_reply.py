@@ -93,7 +93,7 @@ def test_usb_reply_overlap_preserves_review(backend, scenario_navigator, usb_str
                 assert not rejected.value.data
             with pytest.raises(ExceptionRAPDU) as malformed:
                 backend.exchange_raw(bytes.fromhex("e0c400000201"))
-            assert malformed.value.status == Errors.SW_WRONG_APDU_LENGTH
+            assert malformed.value.status == 0x6901
             assert not malformed.value.data
             assert backend.exchange_raw(bytes.fromhex("b001000000")).status == 0x9000
             scenario = NavigationScenarioData(

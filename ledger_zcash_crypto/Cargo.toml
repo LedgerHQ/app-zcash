@@ -21,7 +21,8 @@ bs58 = { version = "0.5.1", default-features = false }
 # `repr-c` is load-bearing, not cosmetic: `projective_point` transmutes into `pallas::Point`, whose
 # `repr(C)` is behind this feature (`#[cfg_attr(feature = "repr-c", repr(C))]`). Without it the field
 # order is unspecified and that transmute is unsound.
-pasta_curves = { version = "0.6", default-features = false, features = ["alloc", "repr-c"] }
+# 0.6.1 adds about 7 KB of flash, past what Nano X has.
+pasta_curves = { version = "=0.6.0", default-features = false, features = ["alloc", "repr-c"] }
 zeroize = { workspace = true }
 
 [features]

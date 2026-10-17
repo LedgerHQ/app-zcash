@@ -47,7 +47,8 @@ GET_VERSION, which is answered so that a host can still identify the app.
 
 An APDU whose payload length differs from its declared length, in the short or the
 extended form, is refused by the SDK before it reaches the app, with `0x6E03`
-`BadLen`, a word distinct from the app's own `0x6700` length error. A command with
+`BadLen`, a word distinct from the app's own `0x6700` length error. While a command
+is in flight it gets `0x6901` `CmdNotAccepted` instead, like any other frame. A command with
 no data may use either the four-byte form or an explicit `Lc = 0x00`.
 
 Because such a frame never reaches the app, it leaves a signing session in progress
