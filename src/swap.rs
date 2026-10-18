@@ -110,6 +110,16 @@ impl SwapAppErrorCodeTrait for SwapAppErrorCode {
     }
 }
 
+/// Refusal of an output paying another account of the seed, which a swap never sends to.
+pub fn own_account_destination_error() -> SwapError<SwapAppErrorCode> {
+    error!("Swap output pays another account of the seed");
+    SwapError::with_message(
+        SwapErrorCommonCode::ErrorWrongDestination,
+        SwapAppErrorCode::OwnAccountDestination,
+        "Destination is another account of the seed".to_string(),
+    )
+}
+
 /// Validates the transaction to be signed against the Exchange's reference parameters: the amount and
 /// the fee must match exactly, and the single external output must pay the swap destination. Only one
 /// transaction type exists, so the type check is implicit.
@@ -158,12 +168,7 @@ pub fn check_swap_params(
 
     // An own-account output has no address, so it would match an empty destination.
     if output.own_account.is_some() {
-        error!("Swap output pays another account of the seed");
-        return Err(SwapError::with_message(
-            SwapErrorCommonCode::ErrorWrongDestination,
-            SwapAppErrorCode::OwnAccountDestination,
-            "Destination is another account of the seed".to_string(),
-        ));
+        return Err(own_account_destination_error());
     }
 
     // Validate amount

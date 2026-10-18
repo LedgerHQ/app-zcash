@@ -307,16 +307,19 @@ Undeclared outputs are handled exactly as before; an undeclared output the
 source account cannot recover is still refused.
 
 The proof runs while the action is parsed, before any review, so its status word
-is visible to the host whether or not the user ever sees the transaction. A host
-that has observed an Orchard or Ironwood receiver can therefore build a note to
-it, declare an account, and learn from `0x9000` or `IncorrectData` whether that
-receiver belongs to that account of the seed, then abort. Diversified addresses of
-one account are meant to be unlinkable, and this answer links them without the
-user's approval. The probe is bounded: only accounts `0` to `100` can be named,
-and each probe costs at least one of the 50 Orchard derivations the app
-allows per run, after which it answers `NotEnoughMemorySpace` until restarted.
-The host holding a viewing key of the account learns nothing it could not
-already compute.
+reaches the host whether or not the user ever sees the transaction. The first
+declaration of an account in a PCZT session therefore shows a confirmation,
+`Check Account index <n>?`, before that account's keys are derived:
+
+- It comes after the checks that do not depend on ownership — the path built
+  from the source account, and the 4-account bound — so a declaration they
+  refuse is refused without asking.
+- `Reject` answers `Deny` before any derivation, whether or not the note belongs
+  to the account, and ends the PCZT session like a rejected review.
+- `Allow` lasts until the account's keys are wiped, so later outputs to the same
+  account in that session do not ask again; a new `PCZT_HEADER` does.
+- Under swap no confirmation is shown: a declared output is refused with
+  `IncorrectData`, as the swap check would refuse it.
 
 ## PCZT_IRONWOOD_ACTION
 

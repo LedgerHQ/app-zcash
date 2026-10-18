@@ -258,7 +258,7 @@ impl PcztParser {
         self.current_action.output_account = parse_output_extensions(reader)?;
         Self::ensure_orchard_apdu_group_end(reader)?;
         if let Some(account) = self.current_action.output_account {
-            self.prepare_own_account_keys(ctx.tx_info, account)?;
+            self.prepare_own_account_keys(ctx, account)?;
         }
         self.finish_current_orchard_action(ctx)
     }

@@ -32,6 +32,7 @@ from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavInsID, NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
+from .own_account_consent import own_account_consent
 from .own_account_vectors import (
     IRONWOOD_ACCOUNT_1_EXTERNAL_EXTERNAL_OVK,
     IRONWOOD_ACCOUNT_1_EXTERNAL_INTERNAL_OVK,
@@ -2458,15 +2459,18 @@ def _assert_own_account_ironwood_refused(
 def test_pczt_ironwood_own_account_transfer_signs(backend, scenario_navigator: NavigateWithScenario, vector):
     """Every OVK policy and address scope draws the same screens: amount and account, no address."""
     client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
 
     with _send_own_account_ironwood(client, _own_account_ironwood_bundle(own_account_ironwood_action(vector))):
         _review_approve(scenario_navigator, "test_pczt_ironwood_own_account_transfer")
 
+    assert client.own_account_prompts == [1]
     assert len(client.pczt_sign_ironwood(action_index=0).data) == 64
 
 
 def test_pczt_ironwood_own_account_transfer_shows_its_memo(backend, scenario_navigator: NavigateWithScenario):
     client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
 
     with _send_own_account_ironwood(client, _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_MEMO))):
         _review_approve(scenario_navigator, "test_pczt_ironwood_own_account_transfer_shows_its_memo")
@@ -2480,6 +2484,7 @@ def test_pczt_ironwood_own_account_transfer_beside_change_keeps_change_hidden(
 ):
     """The transfer counts as external, so nothing reveals the change note as a self-transfer."""
     client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
     bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_MEMO), change=True)
 
     with _send_own_account_ironwood(client, bundle):
@@ -2516,6 +2521,7 @@ def _review_reject_up_to_the_choice(scenario_navigator: NavigateWithScenario, sn
 
 def test_pczt_ironwood_own_account_transfer_rejected_by_user(backend, scenario_navigator: NavigateWithScenario):
     client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
     bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK))
 
     with pytest.raises(ExceptionRAPDU) as error:
@@ -2539,41 +2545,110 @@ def test_pczt_ironwood_own_account_output_undeclared_is_refused(backend, vector)
     _assert_own_account_ironwood_refused(client, bundle)
 
 
-def test_pczt_ironwood_own_account_declared_for_a_recipient_outside_the_seed_is_refused(backend):
+def test_pczt_ironwood_own_account_declared_for_a_recipient_outside_the_seed_is_refused(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
     """A failed declaration must not fall back to recovery by account 0's external OVK."""
     action = _external_recipient_ironwood_action()
     action.output_extensions = output_account_extension(1)
     action.note_plaintext_version = 0x03
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
 
-    _assert_own_account_ironwood_refused(ZcashCommandSender(backend), _own_account_ironwood_bundle(action))
+    _assert_own_account_ironwood_refused(client, _own_account_ironwood_bundle(action))
+    assert client.own_account_prompts == [1]
 
 
-def test_pczt_ironwood_own_account_declared_for_another_account_is_refused(backend):
+def test_pczt_ironwood_own_account_declared_for_another_account_is_refused(backend, scenario_navigator: NavigateWithScenario):
     """Refused even though account 0's external OVK would recover it as an ordinary payment."""
     client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
     bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK, declared=2))
 
     _assert_own_account_ironwood_refused(client, bundle)
+    assert client.own_account_prompts == [2]
 
 
-def test_pczt_ironwood_own_account_declaring_the_source_account_is_refused(backend):
+def test_pczt_ironwood_own_account_declaring_the_source_account_is_refused(backend, scenario_navigator: NavigateWithScenario):
+    """Refused before the consent screen: no answer of the user could make it valid."""
     client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
     bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, declared=0))
 
     _assert_own_account_ironwood_refused(client, bundle)
+    assert not client.own_account_prompts
 
 
 @pytest.mark.parametrize("extensions", MALFORMED_OUTPUT_EXTENSIONS.values(), ids=MALFORMED_OUTPUT_EXTENSIONS.keys())
-def test_pczt_ironwood_own_account_malformed_extension_is_refused(backend, extensions: bytes):
+def test_pczt_ironwood_own_account_malformed_extension_is_refused(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    extensions: bytes,
+):
     client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
     bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, extensions=extensions))
 
     _assert_own_account_ironwood_refused(client, bundle)
+    assert not client.own_account_prompts
 
 
-def test_pczt_ironwood_own_account_extension_without_version_byte_is_refused(backend):
+def test_pczt_ironwood_own_account_extension_without_version_byte_is_refused(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
     """Without the notePlaintextVersion byte, the extension tag is read as the version and refused."""
     client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
     action = own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, note_plaintext_version=None)
 
     _assert_own_account_ironwood_refused(client, _own_account_ironwood_bundle(action))
+    assert not client.own_account_prompts
+
+
+def test_pczt_ironwood_own_account_consent_rejected_by_user(backend, scenario_navigator: NavigateWithScenario):
+    """Rejecting the consent denies the transaction and ends the session."""
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator, approve=False)
+    bundle = _own_account_ironwood_bundle(own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK))
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with _send_own_account_ironwood(client, bundle):
+            pass
+    assert error.value.status == Errors.SW_DENY
+    assert not error.value.data
+    assert client.own_account_prompts == [1]
+    # The rejection status screen holds off every command until it returns home.
+    backend.wait_for_home_screen()
+
+    trailer = client._build_pczt_ironwood_action_packets(bundle)[-1]  # pylint: disable=protected-access
+    with pytest.raises(ExceptionRAPDU) as trailer_error:
+        backend.exchange(cla=CLA, ins=InsType.PCZT_IRONWOOD_ACTION, p1=P1.P1_LAST, data=trailer)
+    assert trailer_error.value.status == Errors.SW_BAD_STATE
+    with pytest.raises(ExceptionRAPDU):
+        client.pczt_sign_ironwood(action_index=0)
+    assert client.get_version().status == 0x9000
+
+
+_OWN_ACCOUNT_IRONWOOD_PROBES = {
+    "matching_note": own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK),
+    "note_of_another_account": own_account_ironwood_action(IRONWOOD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK, declared=2),
+}
+
+
+@pytest.mark.parametrize("probe", _OWN_ACCOUNT_IRONWOOD_PROBES.values(), ids=_OWN_ACCOUNT_IRONWOOD_PROBES.keys())
+def test_pczt_ironwood_own_account_consent_rejection_reveals_no_ownership(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    probe: PcztIronwoodAction,
+):
+    """Without consent, a note the declared account owns and one it does not draw the same answer."""
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator, approve=False)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with _send_own_account_ironwood(client, _own_account_ironwood_bundle(probe)):
+            pass
+    assert error.value.status == Errors.SW_DENY
+    assert not error.value.data

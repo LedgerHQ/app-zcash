@@ -3,6 +3,7 @@ use ledger_device_sdk::nbgl::NbglGlyph;
 
 pub mod address;
 pub mod menu;
+pub mod own_account;
 pub mod sign;
 
 // Distinct testnet glyphs; `include_gif!` needs a literal path, hence a macro.

@@ -29,6 +29,7 @@ use zcash_protocol::value::Zatoshis;
 use zcash_transparent::bundle::OutPoint;
 
 use crate::AppSW;
+use crate::app_ui::own_account::ui_confirm_own_account_check;
 use crate::app_ui::sign::ui_display_tx;
 use crate::consts::MAX_PCZT_IRONWOOD_ACTIONS_NUMBER;
 use crate::consts::SHIELDED_ACTIONS_HEAP_HEADROOM;
@@ -1052,18 +1053,27 @@ impl PcztParser {
 
     /// Derive once the IVKs of a declared account, during metadata parsing so the derivation's
     /// stack does not add to note decryption's.
+    ///
+    /// Whether the note then decrypts is answered to the host before any review, so the first
+    /// declaration of an account asks the user; the presence of its keys is that approval.
     #[inline(never)]
     fn prepare_own_account_keys(
         &self,
-        tx_info: &mut TxInfo,
+        ctx: &mut PcztParserCtx<'_>,
         account: u32,
     ) -> Result<(), ParserError> {
-        if tx_info
+        if ctx
+            .tx_info
             .own_account_keys
             .iter()
             .any(|keys| keys.account == account)
         {
             return Ok(());
+        }
+
+        // Exchange drives the flow without interaction, and refuses an own-account output anyway.
+        if ctx.swap_params.is_some() {
+            ok!(Err::<(), _>(crate::swap::own_account_destination_error()));
         }
 
         let source = self
@@ -1072,24 +1082,28 @@ impl PcztParser {
             .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
         let path = own_account_path(source, account)?;
 
-        if tx_info.own_account_keys.len() >= MAX_PCZT_OWN_ACCOUNTS {
+        if ctx.tx_info.own_account_keys.len() >= MAX_PCZT_OWN_ACCOUNTS {
             error!("Own-account budget exhausted");
             return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
         }
         // Reserved whole on first use, so a later account never regrows the vector mid-parse.
-        let missing = MAX_PCZT_OWN_ACCOUNTS - tx_info.own_account_keys.len();
-        tx_info
+        let missing = MAX_PCZT_OWN_ACCOUNTS - ctx.tx_info.own_account_keys.len();
+        ctx.tx_info
             .own_account_keys
             .try_reserve_exact(missing)
             .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
         ensure_heap_headroom(SHIELDED_ACTIONS_HEAP_HEADROOM).map_err(ParserError::from_sw)?;
+
+        if !ok!(ui_confirm_own_account_check(ctx.comm, account)) {
+            return Err(ParserError::user());
+        }
 
         let keys = {
             let fvk =
                 RetainedOrchardFvk::new(derive_orchard_fvk(&path).map_err(ParserError::from_sw)?);
             OwnAccountKeys::from_fvk(account, &fvk).map_err(ParserError::from_sw)?
         };
-        tx_info.own_account_keys.push(keys);
+        ctx.tx_info.own_account_keys.push(keys);
 
         Ok(())
     }

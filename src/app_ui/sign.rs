@@ -34,7 +34,7 @@ use ledger_device_sdk::sys::nbgl_contentTagValue_t;
 const REVIEW_TITLES_HEAP: usize = 160;
 
 /// Like `format!`, but fails instead of exiting the app when the heap cannot serve it.
-fn try_format(args: fmt::Arguments<'_>) -> Result<String, AppSW> {
+pub(super) fn try_format(args: fmt::Arguments<'_>) -> Result<String, AppSW> {
     struct Length(usize);
     impl fmt::Write for Length {
         fn write_str(&mut self, text: &str) -> fmt::Result {

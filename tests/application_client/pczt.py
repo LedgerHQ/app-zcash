@@ -334,3 +334,10 @@ PCZT_OUTPUT_EXTENSION_ACCOUNT: int = 0x01
 def output_account_extension(account: int, tag: int = PCZT_OUTPUT_EXTENSION_ACCOUNT, length: int = 4) -> bytes:
     """Output-metadata extension declaring the unhardened ZIP 32 account an output pays."""
     return bytes([tag, length]) + account.to_bytes(4, byteorder="little")
+
+
+def declared_output_account(extensions: bytes) -> int | None:
+    """Account named by a leading account block, however the device then judges it."""
+    if len(extensions) < 6 or extensions[0] != PCZT_OUTPUT_EXTENSION_ACCOUNT or extensions[1] != 4:
+        return None
+    return int.from_bytes(extensions[2:6], byteorder="little")

@@ -21,6 +21,7 @@ from application_client.pczt import (
     PcztOrchardBundle,
     PcztTransparentInput,
     PcztTransparentOutput,
+    declared_output_account,
     pczt_orchard_bundle_from_raw_tx,
 )
 from application_client.zcash_transaction import (
@@ -184,6 +185,11 @@ class ZcashCommandSender:
         self.pczt_transparent_inputs: list[PcztTransparentInput] = []
         self.pczt_transparent_outputs: list[PcztTransparentOutput] = []
         self.last_response: ApduResponse | RAPDU | None = None
+        # Answers the device's consent screen for checking an output against another account of the
+        # seed, shown on the first declaration of each account in a PCZT session.
+        self.own_account_consent: Callable[[int], None] | None = None
+        self.own_account_prompts: list[int] = []
+        self._consented_accounts: set[int] = set()
 
     def exchange_raw(self, data: str) -> tuple[int, bytes]:
         data_bytes = bytes.fromhex(data)
@@ -604,6 +610,7 @@ class ZcashCommandSender:
         self,
         orchard_bundle: PcztOrchardBundle,
         include_rcv: bool = True,
+        declarations: dict[int, int] | None = None,
     ) -> list[bytes]:
         # pylint: disable=too-many-branches
         packets = [
@@ -664,6 +671,9 @@ class ZcashCommandSender:
             if include_rcv:
                 output_metadata += action.rcv
             output_metadata += action.output_extensions
+            account = declared_output_account(action.output_extensions)
+            if declarations is not None and account is not None:
+                declarations[len(packets)] = account
             packets.append(
                 self._checked_pczt_packet(
                     output_metadata,
@@ -685,6 +695,7 @@ class ZcashCommandSender:
         self,
         ironwood_bundle: PcztIronwoodBundle,
         include_rcv: bool = True,
+        declarations: dict[int, int] | None = None,
     ) -> list[bytes]:
         # pylint: disable=too-many-branches
         packets = [
@@ -747,6 +758,9 @@ class ZcashCommandSender:
             if action.note_plaintext_version is not None:
                 output_metadata += bytes([action.note_plaintext_version])
             output_metadata += action.output_extensions
+            account = declared_output_account(action.output_extensions)
+            if declarations is not None and account is not None:
+                declarations[len(packets)] = account
             packets.append(
                 self._checked_pczt_packet(
                     output_metadata,
@@ -763,6 +777,24 @@ class ZcashCommandSender:
         packets.append(self._checked_pczt_packet(bytes(trailer), "ironwood bundle trailer"))
 
         return packets
+
+    def _exchange_pczt_action_packet(
+        self,
+        ins: InsType,
+        p1: P1,
+        p2: P2,
+        packet: bytes,
+        declared_account: int | None,
+    ) -> None:
+        # pylint: disable=too-many-arguments,too-many-positional-arguments
+        if declared_account is None or self.own_account_consent is None or declared_account in self._consented_accounts:
+            self.backend.exchange(cla=CLA, ins=ins, p1=p1, p2=p2, data=packet)
+            return
+
+        with self.backend.exchange_async(cla=CLA, ins=ins, p1=p1, p2=p2, data=packet):
+            self.own_account_consent(declared_account)
+            self.own_account_prompts.append(declared_account)
+        self._consented_accounts.add(declared_account)
 
     def _pczt_chunk_p1(self, idx: int, total_chunks: int) -> P1:
         if idx == 0:
@@ -781,6 +813,7 @@ class ZcashCommandSender:
         pczt_global: PcztGlobal,
         pczt_version: int | None = None,
     ) -> None:
+        self._consented_accounts = set()
         self.backend.exchange(
             cla=CLA,
             ins=InsType.PCZT_HEADER,
@@ -855,18 +888,20 @@ class ZcashCommandSender:
         orchard_bundle: PcztOrchardBundle,
         include_rcv: bool = True,
     ) -> None:
+        declarations: dict[int, int] = {}
         packets = self._build_pczt_orchard_action_packets(
             orchard_bundle,
             include_rcv=include_rcv,
+            declarations=declarations,
         )
 
         for idx, packet in enumerate(packets):
-            self.backend.exchange(
-                cla=CLA,
-                ins=InsType.PCZT_ORCHARD_ACTION,
-                p1=self._pczt_chunk_p1(idx, len(packets)),
-                p2=P2.P2_NONE,
-                data=packet,
+            self._exchange_pczt_action_packet(
+                InsType.PCZT_ORCHARD_ACTION,
+                self._pczt_chunk_p1(idx, len(packets)),
+                P2.P2_NONE,
+                packet,
+                declarations.get(idx),
             )
 
     @contextmanager
@@ -876,18 +911,20 @@ class ZcashCommandSender:
         pczt_finished: bool = False,
         include_rcv: bool = True,
     ) -> Generator[None, None, None]:
+        declarations: dict[int, int] = {}
         packets = self._build_pczt_orchard_action_packets(
             orchard_bundle,
             include_rcv=include_rcv,
+            declarations=declarations,
         )
 
         for idx, packet in enumerate(packets[:-1]):
-            self.backend.exchange(
-                cla=CLA,
-                ins=InsType.PCZT_ORCHARD_ACTION,
-                p1=self._pczt_chunk_p1(idx, len(packets)),
-                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
-                data=packet,
+            self._exchange_pczt_action_packet(
+                InsType.PCZT_ORCHARD_ACTION,
+                self._pczt_chunk_p1(idx, len(packets)),
+                self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                packet,
+                declarations.get(idx),
             )
 
         with self.backend.exchange_async(
@@ -906,18 +943,20 @@ class ZcashCommandSender:
         pczt_finished: bool = False,
         include_rcv: bool = True,
     ) -> Generator[None, None, None]:
+        declarations: dict[int, int] = {}
         packets = self._build_pczt_ironwood_action_packets(
             ironwood_bundle,
             include_rcv=include_rcv,
+            declarations=declarations,
         )
 
         for idx, packet in enumerate(packets[:-1]):
-            self.backend.exchange(
-                cla=CLA,
-                ins=InsType.PCZT_IRONWOOD_ACTION,
-                p1=self._pczt_chunk_p1(idx, len(packets)),
-                p2=self._pczt_chunk_p2(idx, len(packets), pczt_finished),
-                data=packet,
+            self._exchange_pczt_action_packet(
+                InsType.PCZT_IRONWOOD_ACTION,
+                self._pczt_chunk_p1(idx, len(packets)),
+                self._pczt_chunk_p2(idx, len(packets), pczt_finished),
+                packet,
+                declarations.get(idx),
             )
 
         with self.backend.exchange_async(

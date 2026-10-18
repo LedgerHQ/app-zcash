@@ -52,6 +52,7 @@ from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 
+from .own_account_consent import own_account_consent
 from .own_account_vectors import (
     IRONWOOD_ACCOUNT_1_EXTERNAL_NO_OVK,
     IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK,
@@ -992,6 +993,7 @@ def _review_own_account_shield(
 ) -> tuple[ZcashCommandSender, HeapProbe | None]:
     """Approve, then sample the heap before signing: on some devices the post-signing screen refuses the probe."""
     client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
     inputs, bundle = _own_account_shield(vectors, input_count)
     with client.send_pczt(
         pczt_global=PCZT_V6_GLOBAL,
@@ -1019,12 +1021,14 @@ def test_pczt_own_account_outputs_to_one_account_cost_one_derivation(
         pytest.skip("application built without the heap_probe feature")
     vectors = [IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, IRONWOOD_ACCOUNT_1_EXTERNAL_NO_OVK]
 
-    _, first = _review_own_account_shield(backend, scenario_navigator, vectors)
+    first_client, first = _review_own_account_shield(backend, scenario_navigator, vectors)
+    assert first_client.own_account_prompts == [1]
     assert first is not None
     assert first.orchard_derivations - before.orchard_derivations == 2
     _report(record_property, len(vectors), Shape.OWN_ACCOUNTS, first)
 
     client, second = _review_own_account_shield(backend, scenario_navigator, vectors)
+    assert client.own_account_prompts == [1]
     assert second is not None
     assert second.orchard_derivations - first.orchard_derivations == 2
     _sign_transparent_inputs(client, 1)
@@ -1039,16 +1043,47 @@ def test_pczt_own_account_outputs_to_four_accounts_sign(
     vectors = [IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, IRONWOOD_ACCOUNT_2, IRONWOOD_ACCOUNT_3, IRONWOOD_ACCOUNT_4]
 
     client, probe = _review_own_account_shield(backend, scenario_navigator, vectors)
+    assert client.own_account_prompts == [1, 2, 3, 4]
     _report(record_property, len(vectors), Shape.OWN_ACCOUNTS, probe)
     _sign_transparent_inputs(client, 1)
 
 
-def test_pczt_own_account_outputs_to_a_fifth_account_are_refused(backend):
+def test_pczt_own_account_consent_asked_once_per_account(backend, scenario_navigator: NavigateWithScenario):
+    """Two outputs to account 1 and one to account 2 draw one consent screen per account."""
+    vectors = [IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, IRONWOOD_ACCOUNT_2, IRONWOOD_ACCOUNT_1_EXTERNAL_NO_OVK]
+
+    client, _ = _review_own_account_shield(backend, scenario_navigator, vectors)
+    assert client.own_account_prompts == [1, 2]
+    _sign_transparent_inputs(client, 1)
+
+
+def test_pczt_own_account_consent_asked_again_after_a_new_header(backend, scenario_navigator: NavigateWithScenario):
+    """The consent lasts one PCZT session: a new header asks again."""
+    vectors = [IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK]
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
+    inputs, bundle = _own_account_shield(vectors)
+
+    for _ in range(2):
+        with client.send_pczt(
+            pczt_global=PCZT_V6_GLOBAL,
+            transparent_inputs=inputs,
+            transparent_outputs=[],
+            ironwood_bundle=bundle,
+        ):
+            _approve_review(scenario_navigator)
+
+    assert client.own_account_prompts == [1, 1]
+    _sign_transparent_inputs(client, 1)
+
+
+def test_pczt_own_account_outputs_to_a_fifth_account_are_refused(backend, scenario_navigator: NavigateWithScenario):
     """Account 4's note declared as account 5: past the bound it would fail with IncorrectData instead."""
     four = [IRONWOOD_ACCOUNT_1_INTERNAL_NO_OVK, IRONWOOD_ACCOUNT_2, IRONWOOD_ACCOUNT_3, IRONWOOD_ACCOUNT_4]
     inputs, bundle = _own_account_shield([*four, IRONWOOD_ACCOUNT_4])
     bundle.actions[-1] = own_account_ironwood_action(IRONWOOD_ACCOUNT_4, declared=5)
     client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
 
     with pytest.raises(ExceptionRAPDU) as error:
         with client.send_pczt(
@@ -1061,6 +1096,7 @@ def test_pczt_own_account_outputs_to_a_fifth_account_are_refused(backend):
 
     assert error.value.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
     assert not error.value.data
+    assert client.own_account_prompts == [1, 2, 3, 4]
     with pytest.raises(ExceptionRAPDU):
         client.pczt_sign_transparent(input_index=0)
     _assert_still_answering(client)
