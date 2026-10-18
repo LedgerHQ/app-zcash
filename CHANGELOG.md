@@ -25,6 +25,7 @@ Performance and hardening release.
   is over
 - Move to the `zcash_protocol` 0.11 crate set and re-base the vendored `orchard`,
   `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1
+- Security fixes
 
 ## 3.9.4
 
