@@ -166,7 +166,7 @@ pub fn check_swap_params(
 
     let output = external_outputs[0];
 
-    // An own-account output has no address, so it would match an empty destination.
+    // A swap pays the Exchange destination, never another account of the seed.
     if output.own_account.is_some() {
         return Err(own_account_destination_error());
     }

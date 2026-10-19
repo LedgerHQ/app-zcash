@@ -2375,12 +2375,13 @@ def _assert_own_account_orchard_refused(client: ZcashCommandSender, own_action: 
 
 
 @pytest.mark.parametrize(
-    "vector",
-    _OWN_ACCOUNT_ORCHARD_TRANSFER_VECTORS.values(),
+    "name, vector",
+    _OWN_ACCOUNT_ORCHARD_TRANSFER_VECTORS.items(),
     ids=_OWN_ACCOUNT_ORCHARD_TRANSFER_VECTORS.keys(),
 )
-def test_pczt_orchard_own_account_transfer_signs(backend, scenario_navigator: NavigateWithScenario, vector):
-    """Every OVK policy and address scope signs and draws the same `Account index 1` screens."""
+def test_pczt_orchard_own_account_transfer_signs(backend, scenario_navigator: NavigateWithScenario, name, vector):
+    """Every OVK policy signs and draws the same screens for one address scope: `Account index 2` and that address."""
+    scope = name.split("_address")[0]
     client = ZcashCommandSender(backend)
     client.own_account_consent = own_account_consent(scenario_navigator)
 
@@ -2390,7 +2391,7 @@ def test_pczt_orchard_own_account_transfer_signs(backend, scenario_navigator: Na
         transparent_outputs=[],
         orchard_bundle=_own_account_orchard_bundle(own_account_orchard_action(vector)),
     ):
-        _review_approve(scenario_navigator, "test_pczt_orchard_own_account_transfer")
+        _review_approve(scenario_navigator, f"test_pczt_orchard_own_account_transfer_{scope}")
 
     assert client.own_account_prompts == [1]
     assert len(client.pczt_sign_orchard(action_index=0).data) == 64

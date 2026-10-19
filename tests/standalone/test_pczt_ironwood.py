@@ -2455,14 +2455,15 @@ def _assert_own_account_ironwood_refused(
     assert client.get_version().status == 0x9000
 
 
-@pytest.mark.parametrize("vector", _OWN_ACCOUNT_TRANSFER_VECTORS.values(), ids=_OWN_ACCOUNT_TRANSFER_VECTORS.keys())
-def test_pczt_ironwood_own_account_transfer_signs(backend, scenario_navigator: NavigateWithScenario, vector):
-    """Every OVK policy and address scope draws the same screens: amount and account, no address."""
+@pytest.mark.parametrize("name, vector", _OWN_ACCOUNT_TRANSFER_VECTORS.items(), ids=_OWN_ACCOUNT_TRANSFER_VECTORS.keys())
+def test_pczt_ironwood_own_account_transfer_signs(backend, scenario_navigator: NavigateWithScenario, name, vector):
+    """Every OVK policy draws the same screens for one address scope: amount, account and that address."""
+    scope = name.split("_address")[0]
     client = ZcashCommandSender(backend)
     client.own_account_consent = own_account_consent(scenario_navigator)
 
     with _send_own_account_ironwood(client, _own_account_ironwood_bundle(own_account_ironwood_action(vector))):
-        _review_approve(scenario_navigator, "test_pczt_ironwood_own_account_transfer")
+        _review_approve(scenario_navigator, f"test_pczt_ironwood_own_account_transfer_{scope}")
 
     assert client.own_account_prompts == [1]
     assert len(client.pczt_sign_ironwood(action_index=0).data) == 64

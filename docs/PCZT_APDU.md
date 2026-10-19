@@ -295,11 +295,12 @@ before it shows it:
   is a derivation past the per-run budget or one the heap cannot serve.
 - A recognized output is an external transfer for every other rule: never change,
   never hidden, and counted against both the displayed and the retained output
-  budgets. Change notes beside it stay hidden. Under swap it carries no address
-  to compare with the approved destination, so the transaction is refused.
+  budgets. Change notes beside it stay hidden. Under swap the transaction is
+  refused: a swap never pays another account of the seed.
 - The review shows its amount, then `Output #i account` with the value
-  `Account index <n>` — the ZIP 32 index, which starts at 0 — then its memo if it
-  has one. No address is shown.
+  `Account index <n + 1>` — the ZIP 32 index numbered from 1 — then
+  `Output #i address` with the output's unified address, then its memo if it
+  has one.
 - The destination account's viewing keys are wiped on a new `PCZT_HEADER`, on
   any parse error, and before the review, like the source account's.
 
@@ -309,7 +310,7 @@ source account cannot recover is still refused.
 The proof runs while the action is parsed, before any review, so its status word
 reaches the host whether or not the user ever sees the transaction. The first
 declaration of an account in a PCZT session therefore shows a confirmation,
-`Check Account index <n>?`, before that account's keys are derived:
+`Check Account index <n + 1>?`, before that account's keys are derived:
 
 - It comes after the checks that do not depend on ownership — the path built
   from the source account, and the 4-account bound — so a declaration they

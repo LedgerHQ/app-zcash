@@ -105,7 +105,7 @@ fn ui_display_fvk(
         shorten_fvk_to_display(fvk, SHORTENED_DISPLAY_LEN, PREFIX_LEN, ELLIPSIS)
     };
 
-    let account_str = format!("#{account}");
+    let account_str = format!("#{}", u64::from(account) + 1);
     let account_field = [Field {
         name: "Account",
         value: account_str.as_str(),

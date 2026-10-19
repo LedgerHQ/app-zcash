@@ -134,12 +134,11 @@ pub fn ui_display_tx(
         let idx = idx + 1;
         name_strs.push((
             try_format(format_args!("Output #{idx} amount"))?,
-            // An own-account output shows its ZIP 32 account index instead of an address.
-            if output.own_account.is_some() {
-                try_format(format_args!("Output #{idx} account"))?
-            } else {
-                try_format(format_args!("Output #{idx} address"))?
-            },
+            try_format(format_args!("Output #{idx} address"))?,
+            output
+                .own_account
+                .map(|_| try_format(format_args!("Output #{idx} account")))
+                .transpose()?,
             // The memo carries the index of its output, and is shown right after it below. Grouped
             // at the end under a label naming only the kind, a memo could not be traced back to a
             // recipient — an output without one contributes no field, so position identifies
@@ -155,15 +154,20 @@ pub fn ui_display_tx(
             format_zec_amount(output.amount)?,
             output
                 .own_account
-                .map(|account| try_format(format_args!("Account index {account}")))
+                .map(|account| try_format(format_args!("Account index {}", u64::from(account) + 1)))
                 .transpose()?,
         ));
     }
 
-    // Two per output, its memo, then fees, lock time and expiry.
+    let own_accounts = outputs
+        .iter()
+        .filter(|output| !output.is_change && output.own_account.is_some())
+        .count();
+
+    // Two per output, its account and memo, then fees, lock time and expiry.
     let mut my_fields = Vec::new();
     my_fields
-        .try_reserve_exact(2 * displayed + memos + 3)
+        .try_reserve_exact(2 * displayed + own_accounts + memos + 3)
         .map_err(|_| AppSW::NotEnoughMemorySpace)?;
 
     // Only display non-change outputs
@@ -176,15 +180,20 @@ pub fn ui_display_tx(
             name: name_strs[idx].0.as_str(),
             value: value_strs[idx].0.as_str(),
         });
+        if let (Some(label), Some(account)) =
+            (name_strs[idx].2.as_ref(), value_strs[idx].1.as_ref())
+        {
+            my_fields.push(Field {
+                name: label.as_str(),
+                value: account.as_str(),
+            });
+        }
         my_fields.push(Field {
             name: name_strs[idx].1.as_str(),
-            value: value_strs[idx]
-                .1
-                .as_deref()
-                .unwrap_or(output.address.as_str()),
+            value: output.address.as_str(),
         });
 
-        if let (Some(label), Some(memo)) = (name_strs[idx].2.as_ref(), output.memo.as_ref()) {
+        if let (Some(label), Some(memo)) = (name_strs[idx].3.as_ref(), output.memo.as_ref()) {
             my_fields.push(Field {
                 name: label.as_str(),
                 value: memo.value.as_str(),

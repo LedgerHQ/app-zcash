@@ -356,19 +356,25 @@ fn push_own_account_output(
         .outputs
         .try_reserve(1)
         .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
+    let address = UnifiedAddress::try_from_items(
+        Revision::R0,
+        alloc::vec![Uitem::Data(Receiver::Orchard(output.raw_address))],
+    )
+    .map(|address| address.encode(&ZCASH_NETWORK))
+    .map_err(|_| ParserError::from_str("Cannot encode PCZT own-account output address"))?;
     let memo = match output.memo.as_ref() {
         Some(memo) => memo_display(tx_info, memo)?,
         None => None,
     };
 
     debug!(
-        "PCZT own-account output: account {}, amount {}",
-        account, output.value
+        "PCZT own-account output: account {}, address {}, amount {}",
+        account, address, output.value
     );
 
     tx_info.outputs.push(TxOutput {
         amount: output.value,
-        address: String::new(),
+        address,
         is_change: false,
         memo,
         pool: TxPool::Orchard,

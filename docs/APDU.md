@@ -215,7 +215,8 @@ P1 `0x80` with empty data until the full response has been collected. For UFVK,
 the first two response bytes encode the total UTF-8 string length.
 
 The command displays the requested viewing key on the device before returning
-the first response chunk, naming the account the key belongs to alongside it.
+the first response chunk, naming the account the key belongs to alongside it,
+numbered from 1.
 User rejection returns `Deny` with an empty response.
 
 Both P2 modes derive an Orchard key, so this command draws on the same
