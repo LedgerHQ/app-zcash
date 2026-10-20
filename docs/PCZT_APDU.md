@@ -254,7 +254,7 @@ lives in the PCZT metadata only; no extension enters any digest the device signs
 A packet without the block is unchanged — 115 bytes for Orchard, 115 or 116 for
 Ironwood — so a host that never sends one is unaffected, and an app that predates
 the block refuses a longer packet rather than misreading it. The block is accepted
-from app version 3.9.5: a host sends it only to that version or a later one.
+from app version 3.10.0: a host sends it only to that version or a later one.
 
 | Tag | `len` | Value |
 | --- | --- | --- |

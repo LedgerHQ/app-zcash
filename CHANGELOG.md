@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.9.5
+## 3.10.0
 
 Performance and hardening release.
 
