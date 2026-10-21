@@ -6,6 +6,7 @@ Performance and hardening release.
 
 - Accept the NU7 consensus branch id, and refuse a transaction version its consensus branch
   cannot carry
+- Refuse, from NU6.3, a transaction that moves value into the Orchard pool (ZIP 258)
 - Accept a shielded change split across several notes of the account being spent
 - Recognize a shielded transfer to another account of the same seed, declared by the host and
   shown only if the output decrypts under that account's keys

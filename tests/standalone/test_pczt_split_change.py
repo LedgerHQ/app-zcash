@@ -129,14 +129,14 @@ def test_pczt_orchard_split_change_in_another_account_yields_no_signature(
 
 
 def test_pczt_split_change_across_both_pools_counts_against_one_budget(backend):
-    """Four Orchard and three Ironwood outputs exceed the budget although neither pool alone does."""
+    """Three Orchard and four Ironwood outputs exceed the budget although neither pool alone does."""
     error = _refused(
         ZcashCommandSender(backend),
         pczt_global=PCZT_V6_GLOBAL,
         transparent_inputs=[_TRANSPARENT_INPUT_100K],
         transparent_outputs=[],
-        orchard_bundle=_orchard_split_change_bundle(3),
-        ironwood_bundle=_ironwood_change_bundle(3),
+        orchard_bundle=_orchard_split_change_bundle(2),
+        ironwood_bundle=_ironwood_change_bundle(4),
     )
     assert error.status == Errors.SW_NOT_ENOUGH_MEMORY_SPACE
 

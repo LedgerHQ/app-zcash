@@ -243,6 +243,9 @@ action is accepted:
   action nullifier used as `rho`, and output `rseed`, and compares it with
   `cmx`. Validated dummy outputs are omitted from the clear-sign review list.
 - Non-zero undecryptable outputs are rejected.
+- The trailer's `value_sum` must equal the spends minus the outputs. Under a
+  consensus branch at or after NU6.3, in V5 as in V6, it must also be
+  nonnegative: ZIP 258 lets no value enter the Orchard pool.
 
 Dummy spends are not represented by this compact APDU subset.
 

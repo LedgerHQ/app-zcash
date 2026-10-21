@@ -375,7 +375,11 @@ impl PcztParser {
             self.current_action.value_sum_magnitude
         );
 
-        self.finish_orchard_value_sum_sign(ok!(reader.read_u8()))?;
+        let branch_id = ctx
+            .tx_info
+            .branch_id
+            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+        self.finish_orchard_value_sum_sign(ok!(reader.read_u8()), branch_id)?;
 
         let mut anchor = [0u8; 32];
         ok!(reader.read_exact(&mut anchor));
@@ -965,7 +969,11 @@ impl PcztParser {
         Ok(())
     }
 
-    fn finish_orchard_value_sum_sign(&mut self, sign_byte: u8) -> Result<(), ParserError> {
+    fn finish_orchard_value_sum_sign(
+        &mut self,
+        sign_byte: u8,
+        branch_id: BranchId,
+    ) -> Result<(), ParserError> {
         let magnitude = i64::try_from(self.current_action.value_sum_magnitude)
             .map_err(|_| ParserError::from_str("PCZT orchard value_sum out of range"))?;
 
@@ -987,6 +995,13 @@ impl PcztParser {
                 self.orchard_value_balance
             );
             return Err(ParserError::from_str("PCZT orchard value_sum mismatch"));
+        }
+
+        // ZIP 258: from NU6.3 the Orchard pool can only be spent from, whatever the tx version.
+        if self.orchard_value_balance < 0 && orchard_pool_closed_to_deposits(branch_id) {
+            return Err(ParserError::from_str(
+                "PCZT orchard value_sum enters the Orchard pool",
+            ));
         }
 
         Ok(())
@@ -1288,5 +1303,21 @@ impl PcztParser {
         }
 
         Ok(())
+    }
+}
+
+fn orchard_pool_closed_to_deposits(branch_id: BranchId) -> bool {
+    match branch_id {
+        BranchId::Sprout
+        | BranchId::Overwinter
+        | BranchId::Sapling
+        | BranchId::Blossom
+        | BranchId::Heartwood
+        | BranchId::Canopy
+        | BranchId::Nu5
+        | BranchId::Nu6
+        | BranchId::Nu6_1
+        | BranchId::Nu6_2 => false,
+        BranchId::Nu6_3 | BranchId::Nu7 => true,
     }
 }
