@@ -11,22 +11,24 @@ use blake2b_simd::{Hash as Blake2bHash, Params};
 use fpe::ff1::{BinaryNumeralString, FF1};
 use group::{
     ff::{Field, PrimeField},
-    prime::PrimeCurveAffine,
-    Curve, GroupEncoding,
+    Curve, CurveAffine, GroupEncoding,
 };
 use pasta_curves::glv::{Decomposed, Table};
 use pasta_curves::pallas;
-use rand::RngCore;
+use rand::Rng;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 use zcash_note_encryption::EphemeralKeyBytes;
-use zeroize::{Zeroize as _, Zeroizing};
+#[cfg(feature = "ledger")]
+use zeroize::Zeroizing;
+#[cfg(feature = "zeroize")]
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{
     address::Address,
     primitives::redpallas::{self, SpendAuth},
     spec::{
         commit_ivk, diversify_hash, extract_p, ka_orchard, ka_orchard_prepared, prf_nf, to_base,
-        to_scalar, NonIdentityPallasPoint, NonZeroPallasBase, NonZeroPallasScalar,
+        to_scalar, zeroize_secret, NonIdentityPallasPoint, NonZeroPallasBase, NonZeroPallasScalar,
         PreparedNonIdentityBase, PreparedNonZeroScalar, PrfExpand,
     },
     zip32::{self, ExtendedSpendingKey},
@@ -41,22 +43,33 @@ const ZIP32_PURPOSE: u32 = 32;
 ///
 /// $\mathsf{sk}$ as defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
 ///
+/// If the `zeroize` feature is enabled, the key material is zeroized on drop.
+///
 /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
-/// Deliberately not `Copy`: this is the master Orchard spending key, and an implicit copy would
-/// leave a duplicate behind that the `Drop` below cannot reach. `Debug` is implemented by hand so
-/// that no `{:?}` can print the key material.
 #[derive(Clone)]
 pub struct SpendingKey([u8; 32]);
 
 impl fmt::Debug for SpendingKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("SpendingKey").field(&"<redacted>").finish()
+        // Deliberately redacted: do not print secret key material.
+        f.debug_struct("SpendingKey").finish_non_exhaustive()
     }
 }
 
+#[cfg(feature = "zeroize")]
+impl Zeroize for SpendingKey {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+#[cfg(feature = "zeroize")]
+impl ZeroizeOnDrop for SpendingKey {}
+
+#[cfg(feature = "zeroize")]
 impl Drop for SpendingKey {
     fn drop(&mut self) {
-        self.0.zeroize();
+        self.zeroize();
     }
 }
 
@@ -74,11 +87,12 @@ impl SpendingKey {
     ///
     /// [ZIP 32]: https://zips.z.cash/zip-0032
     #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
-    pub(crate) fn random(rng: &mut impl RngCore) -> Self {
+    pub(crate) fn random(rng: &mut impl Rng) -> Self {
         loop {
             let mut bytes = [0; 32];
             rng.fill_bytes(&mut bytes);
             let sk = SpendingKey::from_bytes(bytes);
+            zeroize_secret(&mut bytes);
             if sk.is_some().into() {
                 break sk.unwrap();
             }
@@ -88,20 +102,25 @@ impl SpendingKey {
     /// Constructs an Orchard spending key from uniformly-random bytes.
     ///
     /// Returns `None` if the bytes do not correspond to a valid Orchard spending key.
+    ///
+    /// The argument is copied into the returned key; the caller is responsible for
+    /// zeroizing its own copy once it is no longer needed.
     pub fn from_bytes(sk: [u8; 32]) -> CtOption<Self> {
         let sk = SpendingKey(sk);
         // If ask = 0, discard this key. We call `derive_inner` rather than
         // `SpendAuthorizingKey::from` here because we only need to know
         // whether ask = 0; the adjustment to potentially negate ask is not
         // needed. Also, `from` would panic on ask = 0.
-        let ask = SpendAuthorizingKey::derive_inner(&sk);
+        let mut ask = SpendAuthorizingKey::derive_inner(&sk);
+        let ask_is_zero = ask.is_zero();
+        zeroize_secret(&mut ask);
         // If ivk is 0 or ⊥, discard this key.
         let fvk = (&sk).into();
         let external_ivk = KeyAgreementPrivateKey::derive_inner(&fvk);
         let internal_ivk = KeyAgreementPrivateKey::derive_inner(&fvk.derive_internal());
         CtOption::new(
             sk,
-            !(ask.is_zero() | external_ivk.is_none() | internal_ivk.is_none()),
+            !(ask_is_zero | external_ivk.is_none() | internal_ivk.is_none()),
         )
     }
 
@@ -153,15 +172,80 @@ impl SpendingKey {
 ///
 /// $\mathsf{ask}$ as defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
 ///
+/// If the `zeroize` feature is enabled, the key material is zeroized on drop.
+///
 /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
 #[derive(Clone, Debug)]
 pub struct SpendAuthorizingKey(redpallas::SigningKey<SpendAuth>);
 
+/// A normalized authorizing key retained for Ledger transaction validation.
+/// The scalar is wiped on drop. This type does not clone or expose its secret.
+#[cfg(feature = "ledger")]
+pub struct LedgerValidationKey(Zeroizing<[u8; 32]>);
+
+#[cfg(feature = "ledger")]
+impl core::fmt::Debug for LedgerValidationKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LedgerValidationKey")
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "ledger")]
+impl LedgerValidationKey {
+    /// Computes a typed compressed verification key with the Ledger backend,
+    /// without constructing an intermediate curve point.
+    pub fn randomized_verification_key_bytes(
+        &self,
+        randomizer: &pallas::Scalar,
+    ) -> Result<redpallas::VerificationKeyBytes<SpendAuth>, ledger_zcash_crypto::Error> {
+        let randomizer_bytes = Zeroizing::new(randomizer.to_repr());
+        Ok(
+            ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
+                &self.0,
+                &randomizer_bytes,
+            )?
+            .into(),
+        )
+    }
+}
+
+#[cfg(feature = "zeroize")]
+impl Zeroize for SpendAuthorizingKey {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+// The inner `redpallas::SigningKey` zeroizes itself on drop.
+#[cfg(feature = "zeroize")]
+impl ZeroizeOnDrop for SpendAuthorizingKey {}
+
 impl SpendAuthorizingKey {
+    /// Retains the normalized scalar for repeated Ledger validation, wiping it on drop.
+    /// The caller must bind reuse to its account and discard it before user review.
+    #[cfg(feature = "ledger")]
+    pub fn ledger_validation_key(&self) -> LedgerValidationKey {
+        LedgerValidationKey(Zeroizing::new(self.0.to_bytes()))
+    }
+
     /// Derives ask from sk. Internal use only, does not enforce all constraints.
     #[cfg_attr(feature = "unstable-voting-circuits", visibility::make(pub))]
     pub(crate) fn derive_inner(sk: &SpendingKey) -> pallas::Scalar {
-        to_scalar(PrfExpand::ORCHARD_ASK.with(&sk.0))
+        let mut prf = PrfExpand::ORCHARD_ASK.with(&sk.0);
+        let ask = to_scalar(&prf);
+        zeroize_secret(&mut prf);
+        ask
+    }
+
+    /// Builds the key from a scalar, wiping the scalar's byte encoding once consumed.
+    fn from_scalar(ask: &pallas::Scalar) -> Self {
+        let mut repr = ask.to_repr();
+        let key = SpendAuthorizingKey(
+            redpallas::SigningKey::try_from(repr).expect("scalar encodings are valid signing keys"),
+        );
+        zeroize_secret(&mut repr);
+        key
     }
 
     /// Derives ask from sk, using the same logic as `derive_inner` but with additional checks to ensure that the resulting ask is valid.
@@ -190,7 +274,7 @@ impl SpendAuthorizingKey {
         self.0.randomize_ledger(randomizer)
     }
 
-    /// Computes only the bytes of the randomized spend-auth verification key
+    /// Computes a typed compressed randomized spend-auth verification key
     /// (`rk = [(ask + randomizer) mod q]·G`) for this key, without constructing
     /// the intermediate curve point. Used to verify a PCZT action's `rk` with a
     /// smaller BN/point footprint than `randomize_ledger` + key conversion.
@@ -198,15 +282,9 @@ impl SpendAuthorizingKey {
     pub fn randomized_verification_key_bytes(
         &self,
         randomizer: &pallas::Scalar,
-    ) -> Result<[u8; 32], ledger_zcash_crypto::Error> {
-        let scalar_bytes: Zeroizing<[u8; 32]> = Zeroizing::new((&self.0).into());
-        let randomizer_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(randomizer.to_repr());
-        Ok(
-            ledger_zcash_crypto::redpallas::spendauth_randomized_verification_key_bytes(
-                &scalar_bytes,
-                &randomizer_bytes,
-            )?,
-        )
+    ) -> Result<redpallas::VerificationKeyBytes<SpendAuth>, ledger_zcash_crypto::Error> {
+        self.ledger_validation_key()
+            .randomized_verification_key_bytes(randomizer)
     }
 
     /// Creates a RedPallas spend authorization signing key from the given ledger signing key.
@@ -245,17 +323,20 @@ impl SpendAuthorizingKey {
 
 impl From<&SpendingKey> for SpendAuthorizingKey {
     fn from(sk: &SpendingKey) -> Self {
-        let ask = Self::derive_inner(sk);
+        let mut ask = Self::derive_inner(sk);
         // SpendingKey cannot be constructed such that this assertion would fail.
         assert!(!bool::from(ask.is_zero()));
         // TODO: Add TryFrom<S::Scalar> for SpendAuthorizingKey.
-        let ret = SpendAuthorizingKey(ask.to_repr().try_into().unwrap());
+        let ret = Self::from_scalar(&ask);
         // If the last bit of repr_P(ak) is 1, negate ask.
-        if (<[u8; 32]>::from(SpendValidatingKey::from(&ret).0)[31] >> 7) == 1 {
-            SpendAuthorizingKey((-ask).to_repr().try_into().unwrap())
+        let ret = if (<[u8; 32]>::from(SpendValidatingKey::from(&ret).0)[31] >> 7) == 1 {
+            ask = -ask;
+            Self::from_scalar(&ask)
         } else {
             ret
-        }
+        };
+        zeroize_secret(&mut ask);
+        ret
     }
 }
 
@@ -349,7 +430,10 @@ impl NullifierDerivingKey {
 
 impl From<&SpendingKey> for NullifierDerivingKey {
     fn from(sk: &SpendingKey) -> Self {
-        NullifierDerivingKey(to_base(PrfExpand::ORCHARD_NK.with(&sk.0)))
+        let mut prf = PrfExpand::ORCHARD_NK.with(&sk.0);
+        let nk = NullifierDerivingKey(to_base(&prf));
+        zeroize_secret(&mut prf);
+        nk
     }
 }
 
@@ -394,7 +478,10 @@ pub(crate) struct CommitIvkRandomness(pallas::Scalar);
 
 impl From<&SpendingKey> for CommitIvkRandomness {
     fn from(sk: &SpendingKey) -> Self {
-        CommitIvkRandomness(to_scalar(PrfExpand::ORCHARD_RIVK.with(&sk.0)))
+        let mut prf = PrfExpand::ORCHARD_RIVK.with(&sk.0);
+        let rivk = CommitIvkRandomness(to_scalar(&prf));
+        zeroize_secret(&mut prf);
+        rivk
     }
 }
 
@@ -468,15 +555,26 @@ impl From<FullViewingKey> for SpendValidatingKey {
 }
 
 impl FullViewingKey {
-    /// Derives the internal full viewing key corresponding to this full viewing key.
+    /// Derives the full viewing key using Ledger primitives.
     #[cfg(feature = "ledger")]
     pub fn ledger_try_from(sk: &SpendingKey) -> Result<Self, ledger_zcash_crypto::Error> {
+        Self::ledger_try_from_with_ask(sk).map(|(fvk, _)| fvk)
+    }
+
+    /// Derives a full viewing key and its normalized spend authorizing key together.
+    /// The returned authorizing key is the same one used to construct `ak`;
+    /// callers can use it immediately without repeating its scalar multiplication.
+    #[cfg(feature = "ledger")]
+    pub fn ledger_try_from_with_ask(
+        sk: &SpendingKey,
+    ) -> Result<(Self, SpendAuthorizingKey), ledger_zcash_crypto::Error> {
         let ask = SpendAuthorizingKey::ledger_try_from(sk)?;
-        Ok(FullViewingKey {
+        let fvk = FullViewingKey {
             ak: (&ask).into(),
             nk: NullifierDerivingKey::ledger_try_from(sk)?,
             rivk: CommitIvkRandomness::ledger_try_from(sk)?,
-        })
+        };
+        Ok((fvk, ask))
     }
 
     /// Returns the nullifier deriving key for this full viewing key.
@@ -495,7 +593,7 @@ impl FullViewingKey {
                 let ak = self.ak.to_bytes();
                 let nk = self.nk.to_bytes();
                 CommitIvkRandomness(to_scalar(
-                    PrfExpand::ORCHARD_RIVK_INTERNAL.with(&k, &ak, &nk),
+                    &PrfExpand::ORCHARD_RIVK_INTERNAL.with(&k, &ak, &nk),
                 ))
             }
         }
@@ -1389,7 +1487,7 @@ mod tests {
             let sk = SpendingKey::from_bytes(tv.sk).unwrap();
 
             let ask: SpendAuthorizingKey = (&sk).into();
-            assert_eq!(<[u8; 32]>::from(&ask.0), tv.ask);
+            assert_eq!(ask.0.to_bytes(), tv.ask);
 
             let ak: SpendValidatingKey = (&ask).into();
             assert_eq!(<[u8; 32]>::from(ak.0), tv.ak);
@@ -1438,5 +1536,39 @@ mod tests {
             let internal_ovk = fvk.to_ovk(Scope::Internal);
             assert_eq!(internal_ovk.0, tv.internal_ovk);
         }
+    }
+}
+
+#[cfg(all(test, feature = "zeroize"))]
+mod zeroize_tests {
+    use zeroize::Zeroize;
+
+    use super::{SpendAuthorizingKey, SpendingKey};
+
+    fn spending_key() -> SpendingKey {
+        SpendingKey::from_bytes([7; 32]).expect("[7; 32] is a valid Orchard spending key")
+    }
+
+    #[test]
+    fn spending_key_zeroizes() {
+        let mut sk = spending_key();
+        assert_ne!(sk.to_bytes(), &[0; 32]);
+
+        sk.zeroize();
+        assert_eq!(sk.to_bytes(), &[0; 32]);
+    }
+
+    #[test]
+    fn spending_key_debug_is_redacted() {
+        assert_eq!(alloc::format!("{:?}", spending_key()), "SpendingKey { .. }");
+    }
+
+    #[test]
+    fn spend_authorizing_key_zeroizes() {
+        let mut ask = SpendAuthorizingKey::from(&spending_key());
+        assert_ne!(ask.0.to_bytes(), [0; 32]);
+
+        ask.zeroize();
+        assert_eq!(ask.0.to_bytes(), [0; 32]);
     }
 }

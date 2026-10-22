@@ -49,6 +49,9 @@ impl PcztParser {
         self.orchard_signing_records
             .try_reserve_exact(action_count)
             .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
+        if action_count != 0 {
+            ensure_heap_headroom(SHIELDED_ACTIONS_HEAP_HEADROOM).map_err(ParserError::from_sw)?;
+        }
 
         if action_count == 0 {
             self.finalize_orchard_actions(ctx)?;
@@ -204,11 +207,12 @@ impl PcztParser {
         const OUTPUT_METADATA_WITHOUT_RCV_LEN: usize = ORCHARD_RAW_ADDRESS_SIZE + 8 + 32;
         const OUTPUT_METADATA_WITH_RCV_LEN: usize = OUTPUT_METADATA_WITHOUT_RCV_LEN + 32;
 
+        // Orchard carries no version byte, so an extension block follows `rcv` directly.
         match reader.remaining_len() {
             OUTPUT_METADATA_WITHOUT_RCV_LEN => {
                 return Err(ParserError::from_str("Missing PCZT orchard rcv"));
             }
-            OUTPUT_METADATA_WITH_RCV_LEN => {}
+            len if len >= OUTPUT_METADATA_WITH_RCV_LEN => {}
             _ => {
                 return Err(ParserError::from_str(
                     "Bad PCZT orchard output metadata length",
@@ -251,7 +255,11 @@ impl PcztParser {
         );
         self.current_action.rcv = Some(rcv);
 
+        self.current_action.output_account = parse_output_extensions(reader)?;
         Self::ensure_orchard_apdu_group_end(reader)?;
+        if let Some(account) = self.current_action.output_account {
+            self.prepare_own_account_keys(ctx, account)?;
+        }
         self.finish_current_orchard_action(ctx)
     }
 
@@ -367,7 +375,11 @@ impl PcztParser {
             self.current_action.value_sum_magnitude
         );
 
-        self.finish_orchard_value_sum_sign(ok!(reader.read_u8()))?;
+        let branch_id = ctx
+            .tx_info
+            .branch_id
+            .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+        self.finish_orchard_value_sum_sign(ok!(reader.read_u8()), branch_id)?;
 
         let mut anchor = [0u8; 32];
         ok!(reader.read_exact(&mut anchor));
@@ -423,6 +435,11 @@ impl PcztParser {
             }
 
             let offset = self.pool_field_bytes.len();
+            // Reserved whole and fallibly: per-packet growth over-allocates, holds both blocks at
+            // once, and exits the app on failure.
+            self.pool_field_bytes
+                .try_reserve_exact(missing)
+                .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
             self.pool_field_bytes.resize(offset + to_read, 0);
             ok!(reader.read_exact(&mut self.pool_field_bytes[offset..]));
         }
@@ -452,10 +469,10 @@ impl PcztParser {
         self.current_action.enc_ciphertext.clear();
         self.current_action.alpha = None;
         self.current_action.path = None;
-        self.current_action.fvk = None;
         {
             self.current_action.note_plaintext_version = NOTE_VERSION_ORCHARD;
         }
+        self.current_action.output_account = None;
     }
 
     pub(super) fn reset_orchard_bundle_state(&mut self, action_count: usize) {
@@ -564,11 +581,15 @@ impl PcztParser {
         let is_real_spend = self.current_action.spend_value != 0;
         if is_real_spend {
             let orchard_fvk = self
-                .current_action
-                .fvk
+                .orchard_fvk
                 .as_ref()
                 .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
-            self.verify_current_orchard_spend_nullifier(orchard_fvk)?;
+            let keys = ctx
+                .tx_info
+                .orchard_decipher_keys
+                .as_mut()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
+            self.verify_current_orchard_spend_nullifier(orchard_fvk, keys)?;
             // Real spend: the device will be asked to sign this action.
             self.orchard_real_spend_count = self.orchard_real_spend_count.saturating_add(1);
         }
@@ -697,6 +718,19 @@ impl PcztParser {
         enc_ciphertext: &[u8],
         out_ciphertext: &[u8; ORCHARD_OUT_CIPHERTEXT_SIZE],
     ) -> Result<(), ParserError> {
+        if let Some(account) = self.current_action.output_account {
+            let output = self.recognize_own_account_output(
+                ctx.tx_info,
+                account,
+                enc_ciphertext,
+                out_ciphertext,
+                NOTE_VERSION_ORCHARD,
+                "PCZT orchard output does not belong to the declared account",
+            )?;
+            self.validate_deciphered_orchard_output(&output)?;
+            return push_own_account_output(ctx.tx_info, output, account);
+        }
+
         if self.try_decipher_current_orchard_output(ctx, enc_ciphertext, out_ciphertext)? {
             return Ok(());
         }
@@ -800,11 +834,15 @@ impl PcztParser {
         network: NetworkType,
         is_change: bool,
     ) -> Result<(), ParserError> {
+        // Transparent outputs parse first, so the flag can only be a transparent change.
         if is_change && ctx.tx_info.is_change_found {
-            return Err(ParserError::from_str("Multiple change outputs detected"));
+            return Err(ParserError::from_str(
+                "Transparent and shielded change outputs detected",
+            ));
         }
 
-        // Claimed before the address below is encoded: the budget bounds that allocation.
+        // Claimed before the address is encoded, since the budgets bound that allocation.
+        claim_retained_shielded_output(ctx.tx_info)?;
         if !is_change {
             claim_displayed_shielded_output(ctx.tx_info)?;
         } else {
@@ -819,12 +857,18 @@ impl PcztParser {
             record_hidden_shielded_change_account(ctx.tx_info, path)?;
         }
 
-        let address =
-            UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(output.raw_address)])
-                .map(|address| address.encode(&network))
-                // No fallback string: a recipient the user cannot check against their own
-                // wallet is worse than refusing to sign.
-                .map_err(|_| ParserError::from_str("Cannot encode PCZT orchard output address"))?;
+        ctx.tx_info
+            .outputs
+            .try_reserve(1)
+            .map_err(|_| ParserError::from_sw(AppSW::NotEnoughMemorySpace))?;
+        let address = UnifiedAddress::try_from_items(
+            Revision::R0,
+            alloc::vec![Uitem::Data(Receiver::Orchard(output.raw_address))],
+        )
+        .map(|address| address.encode(&network))
+        // No fallback string: a recipient the user cannot check against their own
+        // wallet is worse than refusing to sign.
+        .map_err(|_| ParserError::from_str("Cannot encode PCZT orchard output address"))?;
         let memo = Self::orchard_output_memo_display(ctx.tx_info, &output, is_change)?;
 
         debug!(
@@ -838,11 +882,8 @@ impl PcztParser {
             is_change,
             memo,
             pool: TxPool::Orchard,
+            own_account: None,
         });
-
-        if is_change {
-            ctx.tx_info.is_change_found = true;
-        }
 
         Ok(())
     }
@@ -880,26 +921,24 @@ impl PcztParser {
     }
 
     #[inline(never)]
-    fn verify_current_orchard_spend_nullifier(&self, fvk: &OrchardFvk) -> Result<(), ParserError> {
-        let mut diversifier = [0u8; 11];
-        diversifier.copy_from_slice(&self.current_action.spend_recipient[..11]);
+    fn verify_current_orchard_spend_nullifier(
+        &self,
+        fvk: &OrchardFvk,
+        keys: &mut OrchardDecipherKeys,
+    ) -> Result<(), ParserError> {
+        let recipient = self.validated_spend_recipient(fvk, keys)?.ok_or_else(|| {
+            ParserError::from_str("PCZT orchard spend does not belong to signing key")
+        })?;
 
-        let mut claimed_pk_d = [0u8; 32];
-        claimed_pk_d.copy_from_slice(&self.current_action.spend_recipient[11..]);
-
-        if !self.is_current_orchard_spend_recipient_in_fvk(fvk, &diversifier, &claimed_pk_d)? {
-            return Err(ParserError::from_str(
-                "PCZT orchard spend does not belong to signing key",
-            ));
-        }
-
-        let fvk_bytes = fvk.to_bytes();
-        let nk: [u8; 32] = fvk_bytes[32..64]
-            .try_into()
-            .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-        let expected_nullifier = ledger_zcash_crypto::orchard_spend_nullifier_bytes(
+        let fvk_bytes = zeroize::Zeroizing::new(fvk.to_bytes());
+        let nk: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+            fvk_bytes[32..64]
+                .try_into()
+                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?,
+        );
+        let expected_nullifier = ledger_zcash_crypto::orchard::spend_nullifier_for_recipient(
             &nk,
-            &self.current_action.spend_recipient,
+            &recipient,
             self.current_action.spend_value,
             &self.current_action.spend_rho,
             &self.current_action.spend_rseed,
@@ -930,35 +969,11 @@ impl PcztParser {
         Ok(())
     }
 
-    fn is_current_orchard_spend_recipient_in_fvk(
-        &self,
-        fvk: &OrchardFvk,
-        diversifier: &[u8; 11],
-        claimed_pk_d: &[u8; 32],
-    ) -> Result<bool, ParserError> {
-        let g_d = ledger_zcash_crypto::diversify_hash_ledger(diversifier)
-            .map_err(|_| ParserError::from_str("Bad PCZT orchard spend recipient"))?;
-
-        for scope in [OrchardScope::External, OrchardScope::Internal] {
-            let ivk = fvk
-                .to_ivk_ledger(scope)
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-            let ivk_bytes = ivk.to_bytes();
-            let ivk_bytes: [u8; 32] = ivk_bytes[32..64]
-                .try_into()
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-            let expected_pk_d = ledger_zcash_crypto::orchard_pk_d(&ivk_bytes, &g_d)
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
-
-            if &expected_pk_d == claimed_pk_d {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
-
-    fn finish_orchard_value_sum_sign(&mut self, sign_byte: u8) -> Result<(), ParserError> {
+    fn finish_orchard_value_sum_sign(
+        &mut self,
+        sign_byte: u8,
+        branch_id: BranchId,
+    ) -> Result<(), ParserError> {
         let magnitude = i64::try_from(self.current_action.value_sum_magnitude)
             .map_err(|_| ParserError::from_str("PCZT orchard value_sum out of range"))?;
 
@@ -982,10 +997,17 @@ impl PcztParser {
             return Err(ParserError::from_str("PCZT orchard value_sum mismatch"));
         }
 
+        // ZIP 258: from NU6.3 the Orchard pool can only be spent from, whatever the tx version.
+        if self.orchard_value_balance < 0 && orchard_pool_closed_to_deposits(branch_id) {
+            return Err(ParserError::from_str(
+                "PCZT orchard value_sum enters the Orchard pool",
+            ));
+        }
+
         Ok(())
     }
 
-    fn verify_current_orchard_rk(&self, ask: &OrchardAsk) -> Result<(), ParserError> {
+    fn verify_current_orchard_rk(&self, ask: &OrchardValidationKey) -> Result<(), ParserError> {
         let alpha = self
             .current_action
             .alpha
@@ -995,13 +1017,13 @@ impl PcztParser {
             .map_err(|_| ParserError::from_str("Bad PCZT orchard alpha"))?;
 
         // Compute rk bytes directly (no intermediate curve-point construction)
-        // to keep the BN/point footprint low: real Orchard spends run this on a
-        // BN pool already near capacity from the fvk/ask derivation.
+        // to keep the BN/point footprint low: the first real spend runs this right
+        // after the fvk/ask derivation, on a BN pool already near capacity.
         let expected_rk = ask
             .randomized_verification_key_bytes(&alpha)
             .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?;
 
-        if expected_rk != self.current_action.rk {
+        if <[u8; 32]>::from(expected_rk) != self.current_action.rk {
             return Err(ParserError::from_str(
                 "PCZT orchard rk does not match alpha and signing key",
             ));
@@ -1099,7 +1121,7 @@ impl PcztParser {
                 .map_err(|_| ParserError::from_str("Bad PCZT orchard zip32 derivation path"))?;
         let seed_fingerprint = &derivation[..ZIP32_SEED_FINGERPRINT_SIZE];
 
-        if !check_bip44_compliance(&path, Bip44CheckMode::OnlyCoinType) {
+        if !check_bip44_compliance(&path, Bip44CheckMode::Zip32Only) {
             return Err(ParserError::from_str(
                 "PCZT orchard signing path not compliant",
             ));
@@ -1115,34 +1137,20 @@ impl PcztParser {
             self.orchard_action_parsed_count, path
         );
 
-        // Derive FVK (and ASK for real spends) from the session-cached account
-        // spending key, so the exhausting zip32_orchard_derive syscall runs at
-        // most once for the whole transaction rather than once per action.
-        let spend_value = self.current_action.spend_value;
-        let sk = ok!(self.orchard_spending_key(&path));
-        let (orchard_fvk, ask_for_rk) = if spend_value != 0 {
-            let (fvk, ask) =
-                derive_orchard_fvk_and_ask_from_sk(sk).map_err(ParserError::from_sw)?;
-            (fvk, Some(ask))
-        } else {
-            // Dummy spend: throwaway key, rk check skipped.
-            (ok!(derive_orchard_fvk_from_sk(sk)), None)
-        };
-        if let Some(ref ask) = ask_for_rk {
+        self.prepare_shielded_account_keys(ctx, &path)?;
+        if self.current_action.spend_value != 0 {
+            let ask = self
+                .orchard_validation_key
+                .as_ref()
+                .ok_or_else(|| ParserError::from_sw(AppSW::BadState))?;
             self.verify_current_orchard_rk(ask)?;
         }
-        let network = orchard_network(&path);
-        ctx.tx_info.orchard_decipher_keys = Some(
-            OrchardDecipherKeys::from_fvk(&orchard_fvk, network)
-                .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?,
-        );
         debug!(
             "PCZT orchard action #{} decipher keys prepared",
             self.orchard_action_parsed_count
         );
 
         self.current_action.path = Some(path);
-        self.current_action.fvk = Some(orchard_fvk);
         self.state = PcztParserState::WaitOrchardOutput;
 
         Ok(())
@@ -1295,5 +1303,21 @@ impl PcztParser {
         }
 
         Ok(())
+    }
+}
+
+fn orchard_pool_closed_to_deposits(branch_id: BranchId) -> bool {
+    match branch_id {
+        BranchId::Sprout
+        | BranchId::Overwinter
+        | BranchId::Sapling
+        | BranchId::Blossom
+        | BranchId::Heartwood
+        | BranchId::Canopy
+        | BranchId::Nu5
+        | BranchId::Nu6
+        | BranchId::Nu6_1
+        | BranchId::Nu6_2 => false,
+        BranchId::Nu6_3 | BranchId::Nu7 => true,
     }
 }

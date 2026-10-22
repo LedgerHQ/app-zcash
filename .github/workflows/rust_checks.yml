@@ -1,7 +1,6 @@
 name: Rust checks
 
-# Two checks `RUST.instructions.md` asks for that no reusable workflow provides: auditing the
-# dependency tree, and running the unit tests of both crates.
+# Checks `RUST.instructions.md` asks for that no reusable workflow provides.
 
 permissions:
   contents: read
@@ -43,7 +42,7 @@ jobs:
         run: cargo audit
 
   unit_tests:
-    name: Run the unit tests
+    name: Run the unit tests and I/O regressions
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-dev-tools:latest
@@ -57,10 +56,44 @@ jobs:
       - name: Cargo test (ledger_zcash_crypto)
         # These are SDK `TestType` cases executed by `sdk_test_runner` under Speculos, so they
         # need a device target rather than the host; the runner comes from .cargo/config.toml.
-        run: cargo test --locked -p ledger_zcash_crypto --features unit_test --target apex_p
+        # Release: unoptimised, the test binary with its software references does not fit in flash.
+        run: cargo test --release --locked -p ledger_zcash_crypto --features unit_test --target apex_p
 
       - name: Cargo test (zcash)
         # Same harness on the application crate. A crash in a case under test takes the whole
         # Speculos run down rather than failing one case, so this step is also what catches a
         # memory fault reached from parsing.
         run: cargo test --locked -p zcash --features unit_test --target apex_p
+
+      - name: Cargo test (zcash, testnet variant)
+        # Network constants differ in this build.
+        run: cargo test --locked -p zcash --features unit_test,variant_testnet --target apex_p
+
+      - name: I/O boundary regressions
+        run: python3 tests/io-regression/run.py
+
+  key_reuse_vectors:
+    name: Check the key derivation against public vectors
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ledgerhq/ledger-app-builder/ledger-app-dev-tools:latest
+    env:
+      # Speculos brings up a Qt window otherwise.
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Build and run the vectors under Speculos
+        # Outside the workspace so its SDK unit-test feature cannot unify into the app build.
+        # ELF path from cargo's JSON: a glob would also match the `-rodata-reloc` sibling.
+        run: |
+          export LEDGER_SDK_PATH="$FLEX_SDK"
+          elf=$(cargo test --manifest-path tests/key-reuse/Cargo.toml --lib --no-run --release --target flex --locked --message-format=json \
+            | python3 -c 'import sys, json
+          for line in sys.stdin:
+              msg = json.loads(line)
+              if msg.get("executable"):
+                  print(msg["executable"])')
+          test -n "$elf"
+          speculos --model flex --display headless "$elf"

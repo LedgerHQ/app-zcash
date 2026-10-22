@@ -1,17 +1,17 @@
 use orchard::keys::Scope;
-use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver};
+use zcash_address::unified::{Address as UnifiedAddress, Encoding, Receiver, Revision, Uitem};
 
-use ledger_device_sdk::io::Comm;
+use ledger_device_sdk::io::{Command, CommandResponse};
 use ledger_device_sdk::log::{error, info};
 
-use crate::consts::UNHARDENED_MASK;
+use crate::consts::{UNHARDENED_MASK, ZCASH_NETWORK};
 
 use crate::app_ui::address::ui_display_shielded_address;
 use crate::utils::base58_address::{Base58Address, ToBase58Address};
 use crate::utils::bip32_path::Bip32Path;
 use crate::utils::hashers::ToHash160;
 use crate::utils::{Bip44CheckMode, HexSlice, check_bip44_compliance, encode_string_response};
-use crate::zip32::{derive_transparent_account_pubkey, map_ledger_crypto_error, orchard_network};
+use crate::zip32::{derive_transparent_account_pubkey, map_ledger_crypto_error};
 use crate::{AppSW, P2ShieldedAddrMode, zip32::derive_orchard_fvk};
 
 const TRANSPARENT_ACCOUNT_CHAIN_CODE_LEN: usize = 32;
@@ -41,11 +41,11 @@ fn parse_shielded_paths(
     }
 }
 
-pub fn handler_get_shielded_addr(
-    comm: &mut Comm,
+pub fn handler_get_shielded_addr<'a>(
+    command: Command<'a>,
     mode: P2ShieldedAddrMode,
     display: bool,
-) -> Result<(), AppSW> {
+) -> Result<CommandResponse<'a>, AppSW> {
     // A raw Orchard receiver is thirty-odd bytes with no encoding the user could read back against
     // their wallet, so this mode has no screen to show. The dispatcher accepts the display P1 for
     // it all the same, and the handler used to answer by returning the receiver with no review at
@@ -56,7 +56,7 @@ pub fn handler_get_shielded_addr(
         return Err(AppSW::WrongP1P2);
     }
 
-    let data = comm.get_data().map_err(|_| AppSW::WrongApduLength)?;
+    let data = command.get_data();
 
     let (path, transparent_path) = parse_shielded_paths(data, mode)?;
 
@@ -86,6 +86,7 @@ pub fn handler_get_shielded_addr(
 
     let orchard_fvk = derive_orchard_fvk(&path)?;
 
+    let comm = command.into_comm();
     let resp = match mode {
         P2ShieldedAddrMode::OrchardAddress => {
             let ivk = orchard_fvk
@@ -113,11 +114,14 @@ pub fn handler_get_shielded_addr(
                 .address_at_ledger(0u32)
                 .map_err(map_ledger_crypto_error)?;
 
-            let network = orchard_network(&path);
+            let network = ZCASH_NETWORK;
 
-            let orchard_address = UnifiedAddress::try_from_items(alloc::vec![Receiver::Orchard(
-                orchard_address.to_raw_address_bytes(),
-            )])
+            let orchard_address = UnifiedAddress::try_from_items(
+                Revision::R0,
+                alloc::vec![Uitem::Data(Receiver::Orchard(
+                    orchard_address.to_raw_address_bytes(),
+                ))],
+            )
             .map_err(|_| AppSW::TechnicalProblem)?;
 
             let orchard_address_str = orchard_address.encode(&network);
@@ -128,7 +132,7 @@ pub fn handler_get_shielded_addr(
                 let transparent_address = transparent_account_address(transparent_path)?;
                 info!("Transparent address: {}", transparent_address);
 
-                if !ui_display_shielded_address(&orchard_address_str, &transparent_address)? {
+                if !ui_display_shielded_address(comm, &orchard_address_str, &transparent_address)? {
                     return Err(AppSW::Deny);
                 }
             }
@@ -137,7 +141,5 @@ pub fn handler_get_shielded_addr(
         }
     };
 
-    comm.append(&resp);
-
-    Ok(())
+    Ok(comm.begin_response().extend(&resp)?)
 }

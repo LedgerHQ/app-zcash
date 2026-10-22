@@ -11,7 +11,7 @@ use chacha20::{
     ChaCha20,
     cipher::{KeyIvInit, StreamCipher, StreamCipherSeek},
 };
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::AeadInPlace};
+use chacha20poly1305::{AeadInOut, ChaCha20Poly1305, KeyInit};
 use ff::{Field, PrimeField};
 use ledger_device_sdk::hash::{
     HashInit as _,
@@ -20,12 +20,14 @@ use ledger_device_sdk::hash::{
 use pasta_curves::pallas;
 use zeroize::Zeroizing;
 
+use crate::points::{Basepoint, ValidatedPoint};
+
 use crate::{
     Error, ORCHARD_ESK_DOMAIN_SEPARATOR, ORCHARD_PSI_DOMAIN_SEPARATOR,
     ORCHARD_RCM_DOMAIN_SEPARATOR, PRF_EXPAND_BYTES,
     bytes::reverse_copy,
-    pallas_base_from_repr, pallas_basepoint_mul, pallas_point_from_bytes, pallas_point_to_bytes,
-    pallas_scalar_from_repr, prf_expand_with_domain_separator_and_inputs,
+    pallas_base_from_repr, pallas_basepoint_mul, pallas_point_to_bytes, pallas_scalar_from_repr,
+    prf_expand_with_domain_separator_and_inputs,
     redpallas::point_from_sdk_point,
     sinsemilla::{extract_p_pallas, sinsemilla_short_commit, sinsemilla_short_commit_point},
     to_pallas_base_bytes, to_pallas_scalar_bytes,
@@ -52,10 +54,6 @@ const NOTE_COMMITMENT_MESSAGE_BITS: usize = 32 * 8 + 32 * 8 + 64 + L_ORCHARD_BAS
 const PRF_OCK_ORCHARD_PERSONALIZATION: [u8; 16] = *b"Zcash_Orchardock";
 const KDF_ORCHARD_PERSONALIZATION: [u8; 16] = *b"Zcash_OrchardKDF";
 const NOTE_COMMITMENT_PERSONALIZATION: &str = "z.cash:Orchard-NoteCommit";
-const ORCHARD_NULLIFIER_K_BASEPOINT_BYTES: [u8; HASH_SIZE] = [
-    0x75, 0xca, 0x47, 0xe4, 0xa7, 0x6a, 0x6f, 0xd3, 0x9b, 0xdb, 0xb5, 0xcc, 0x92, 0xb1, 0x7e, 0x5e,
-    0xcf, 0xc9, 0xf4, 0xfa, 0x71, 0x55, 0x37, 0x2e, 0x8d, 0x19, 0xa8, 0x9c, 0x16, 0xaa, 0xe7, 0x25,
-];
 
 #[derive(Clone, Copy, Debug)]
 pub struct OrchardCompactAction {
@@ -98,6 +96,53 @@ pub fn decipher_compact_value(
     try_compact_note_decryption_with_ivk(ivk, compact, expected_note_version)
 }
 
+/// Full incoming decryption, validated as [`decipher_value_with_ovk`] (AEAD, `esk` from `rseed`,
+/// `epk = [esk]·g_d`, `cmx`). `Ok(None)`: the action is not a note for this key.
+pub fn decipher_value_with_ivk(
+    ivk: &[u8; HASH_SIZE],
+    action: &OrchardActionCiphertext<'_>,
+    expected_note_version: u8,
+) -> Result<Option<DecipheredOrchardOutput>, Error> {
+    try_note_decryption_with_ivk(ivk, action, expected_note_version)
+}
+
+/// Canonical nonidentity `g_d` and `pk_d`; private fields keep unchecked encodings out.
+#[derive(Clone, Copy)]
+pub struct ValidatedRecipient {
+    g_d: [u8; HASH_SIZE],
+    pk_d: [u8; HASH_SIZE],
+}
+
+impl ValidatedRecipient {
+    /// `None` unless `claimed_pk_d` derives from `base` and `ivk`. The caller binds `base` to the
+    /// note's diversifier and `ivk` to its account.
+    pub fn from_ivk(
+        ivk: &[u8; HASH_SIZE],
+        base: &crate::DiversifiedBase,
+        claimed_pk_d: &[u8; HASH_SIZE],
+    ) -> Result<Option<Self>, Error> {
+        let pk_d = crate::orchard_pk_d_from_base(ivk, base)?;
+        Ok(bytes_eq(&pk_d, claimed_pk_d).then(|| Self {
+            g_d: base.to_bytes(),
+            pk_d,
+        }))
+    }
+
+    fn from_raw(raw: &[u8; ORCHARD_RAW_ADDRESS_SIZE]) -> Result<Self, Error> {
+        let mut diversifier = [0u8; DIVERSIFIER_SIZE];
+        diversifier.copy_from_slice(&raw[..DIVERSIFIER_SIZE]);
+        let mut pk_d = [0u8; HASH_SIZE];
+        pk_d.copy_from_slice(&raw[DIVERSIFIER_SIZE..]);
+        if !is_valid_nonidentity_pallas_point(&pk_d)? {
+            return Err(Error::MalformedPallasPoint);
+        }
+        Ok(Self {
+            g_d: crate::diversify_hash_ledger(&diversifier)?,
+            pk_d,
+        })
+    }
+}
+
 #[inline(never)]
 pub fn spend_nullifier_bytes(
     nk: &[u8; HASH_SIZE],
@@ -106,50 +151,12 @@ pub fn spend_nullifier_bytes(
     rho: &[u8; HASH_SIZE],
     rseed: &[u8; HASH_SIZE],
 ) -> Result<[u8; HASH_SIZE], Error> {
-    let rho = pallas_base_from_repr(*rho)?;
-    let _esk = orchard_esk(rseed, &rho)?;
-
-    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
-    diversifier.copy_from_slice(&raw_address[..DIVERSIFIER_SIZE]);
-
-    let mut pk_d = [0u8; HASH_SIZE];
-    pk_d.copy_from_slice(&raw_address[DIVERSIFIER_SIZE..]);
-    if !is_valid_nonidentity_pallas_point(&pk_d)? {
-        return Err(Error::MalformedPallasPoint);
-    }
-
-    let g_d = crate::diversify_hash_ledger(&diversifier)?;
-    let cm = note_commitment_point(&g_d, &pk_d, value, &rho, rseed)?;
-    let psi = pallas_base_from_repr(*orchard_psi(rseed, &rho)?)?;
-    let nk = pallas_base_from_repr(*nk)?;
-    let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
-    let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
-
-    let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
-        cm
-    } else {
-        // The commitment `cm` is already a pure-Rust point, so converting the
-        // scalar-mul result and adding in software keeps exactly one SDK point
-        // alive here; adding with SDK points would hold three at once (cm, the
-        // scalar-mul result, the sum). The `cx_bn` pool is a small shared budget
-        // with no documented ceiling, and Speculos does not model it, so this
-        // path keeps its footprint minimal by construction rather than against a
-        // measured limit.
-        let nullifier_k_ec = pallas_basepoint_mul(
-            &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
-            &scalar_bytes_be(&nullifier_scalar),
-        )?;
-        point_from_sdk_point(&nullifier_k_ec)? + cm
-    };
-
-    Ok(extract_p_pallas(&nullifier_point).to_repr())
+    spend_nullifier_inner(nk, value, rho, rseed, false, || {
+        ValidatedRecipient::from_raw(raw_address)
+    })
 }
 
 /// V3 (ZIP 2005 / Ironwood) variant of [`spend_nullifier_bytes`].
-///
-/// Uses [`note_commitment_v3_point`] instead of [`note_commitment_point`] so
-/// that the commitment matches the on-chain V3 note and the derived nullifier
-/// agrees with the value in the PCZT.
 #[inline(never)]
 pub fn spend_nullifier_bytes_v3(
     nk: &[u8; HASH_SIZE],
@@ -158,35 +165,65 @@ pub fn spend_nullifier_bytes_v3(
     rho: &[u8; HASH_SIZE],
     rseed: &[u8; HASH_SIZE],
 ) -> Result<[u8; HASH_SIZE], Error> {
+    spend_nullifier_inner(nk, value, rho, rseed, true, || {
+        ValidatedRecipient::from_raw(raw_address)
+    })
+}
+
+/// [`spend_nullifier_bytes`] over an already validated recipient.
+#[inline(never)]
+pub fn spend_nullifier_for_recipient(
+    nk: &[u8; HASH_SIZE],
+    recipient: &ValidatedRecipient,
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    spend_nullifier_inner(nk, value, rho, rseed, false, || Ok(*recipient))
+}
+
+/// V3 (Ironwood) variant of [`spend_nullifier_for_recipient`].
+#[inline(never)]
+pub fn spend_nullifier_v3_for_recipient(
+    nk: &[u8; HASH_SIZE],
+    recipient: &ValidatedRecipient,
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+) -> Result<[u8; HASH_SIZE], Error> {
+    spend_nullifier_inner(nk, value, rho, rseed, true, || Ok(*recipient))
+}
+
+#[inline(never)]
+fn spend_nullifier_inner(
+    nk: &[u8; HASH_SIZE],
+    value: u64,
+    rho: &[u8; HASH_SIZE],
+    rseed: &[u8; HASH_SIZE],
+    ironwood: bool,
+    recipient: impl FnOnce() -> Result<ValidatedRecipient, Error>,
+) -> Result<[u8; HASH_SIZE], Error> {
     let rho = pallas_base_from_repr(*rho)?;
     let _esk = orchard_esk(rseed, &rho)?;
-
-    let mut diversifier = [0u8; DIVERSIFIER_SIZE];
-    diversifier.copy_from_slice(&raw_address[..DIVERSIFIER_SIZE]);
-
-    let mut pk_d = [0u8; HASH_SIZE];
-    pk_d.copy_from_slice(&raw_address[DIVERSIFIER_SIZE..]);
-    if !is_valid_nonidentity_pallas_point(&pk_d)? {
-        return Err(Error::MalformedPallasPoint);
-    }
-
-    let g_d = crate::diversify_hash_ledger(&diversifier)?;
-    let cm = note_commitment_v3_point(&g_d, &pk_d, value, &rho, rseed)?;
+    let recipient = recipient()?;
+    let cm = if ironwood {
+        note_commitment_v3_point(&recipient.g_d, &recipient.pk_d, value, &rho, rseed)?
+    } else {
+        note_commitment_point(&recipient.g_d, &recipient.pk_d, value, &rho, rseed)?
+    };
     let psi = pallas_base_from_repr(*orchard_psi(rseed, &rho)?)?;
     let nk = pallas_base_from_repr(*nk)?;
     let prf_nf = crate::poseidon::p128pow5t3_hash_len2(nk, rho);
     let nullifier_scalar = pallas_scalar_from_repr((prf_nf + psi).to_repr())?;
-
     let nullifier_point = if bool::from(nullifier_scalar.is_zero()) {
         cm
     } else {
-        let nullifier_k_ec = pallas_basepoint_mul(
-            &ORCHARD_NULLIFIER_K_BASEPOINT_BYTES,
-            &scalar_bytes_be(&nullifier_scalar),
-        )?;
+        // Adding in software keeps one SDK point alive instead of three: the `cx_bn` pool is
+        // small, has no documented ceiling, and Speculos does not model it.
+        let nullifier_k_ec =
+            pallas_basepoint_mul(Basepoint::Nullifier, &scalar_bytes_be(&nullifier_scalar))?;
         point_from_sdk_point(&nullifier_k_ec)? + cm
     };
-
     Ok(extract_p_pallas(&nullifier_point).to_repr())
 }
 
@@ -227,36 +264,39 @@ fn try_output_recovery_with_ovk(
         return Ok(None);
     }
 
-    let ock = prf_ock_orchard(
+    let ock = Zeroizing::new(prf_ock_orchard(
         ovk,
         &action.cv_net,
         &action.compact.cmx,
         &action.compact.ephemeral_key,
-    )?;
+    )?);
 
-    let mut out_plaintext = [0u8; ORCHARD_OUT_PLAINTEXT_SIZE];
+    let mut out_plaintext = Zeroizing::new([0u8; ORCHARD_OUT_PLAINTEXT_SIZE]);
     if !chacha20poly1305_decrypt(&ock, &action.out_ciphertext, &mut out_plaintext) {
         return Ok(None);
     }
 
     let mut pk_d = [0u8; HASH_SIZE];
-    let mut esk = [0u8; HASH_SIZE];
+    let mut esk = Zeroizing::new([0u8; HASH_SIZE]);
     pk_d.copy_from_slice(&out_plaintext[..HASH_SIZE]);
     esk.copy_from_slice(&out_plaintext[HASH_SIZE..ORCHARD_OUT_PLAINTEXT_SIZE]);
 
-    if !is_valid_nonidentity_pallas_point(&pk_d)? || !is_valid_nonzero_pallas_scalar(&esk) {
+    let Some(pk_d_point) = validated_nonidentity_pallas_point(&pk_d)? else {
+        return Ok(None);
+    };
+    if !is_valid_nonzero_pallas_scalar(&esk) {
         return Ok(None);
     }
 
-    let shared_secret = key_agreement(&esk, &pk_d)?;
-    let k_enc = kdf_orchard(&shared_secret, &action.compact.ephemeral_key)?;
+    let shared_secret = Zeroizing::new(key_agreement_with_point(&esk, pk_d_point)?);
+    let k_enc = Zeroizing::new(kdf_orchard(&shared_secret, &action.compact.ephemeral_key)?);
 
-    let mut note_plaintext = [0u8; ORCHARD_NOTE_PLAINTEXT_SIZE];
+    let mut note_plaintext = Zeroizing::new([0u8; ORCHARD_NOTE_PLAINTEXT_SIZE]);
     if !chacha20poly1305_decrypt(&k_enc, action.enc_ciphertext, &mut note_plaintext) {
         return Ok(None);
     }
 
-    let mut note_plaintext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
+    let mut note_plaintext_prefix = Zeroizing::new([0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
     note_plaintext_prefix.copy_from_slice(&note_plaintext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
     let mut memo = Vec::new();
     memo.try_reserve_exact(ORCHARD_MEMO_SIZE)
@@ -268,10 +308,11 @@ fn try_output_recovery_with_ovk(
         &action.compact,
         &note_plaintext_prefix,
         &pk_d,
-        Some(&esk),
+        Some(&*esk),
         &rho,
         Some(memo),
         expected_note_version,
+        None,
     )
 }
 
@@ -290,18 +331,18 @@ fn try_compact_note_decryption_with_ivk(
     }
 
     let ivk = match pallas_base_from_repr(*ivk) {
-        Ok(ivk) if !bool::from(ivk.is_zero()) => ivk,
+        Ok(ivk) if !bool::from(ivk.is_zero()) => Zeroizing::new(ivk.to_repr()),
         _ => return Ok(None),
     };
 
-    if !is_valid_nonidentity_pallas_point(&compact.ephemeral_key)? {
+    let Some(ephemeral_point) = validated_nonidentity_pallas_point(&compact.ephemeral_key)? else {
         return Ok(None);
-    }
+    };
 
-    let shared_secret = key_agreement(&ivk.to_repr(), &compact.ephemeral_key)?;
-    let k_enc = kdf_orchard(&shared_secret, &compact.ephemeral_key)?;
+    let shared_secret = Zeroizing::new(key_agreement_with_point(&ivk, ephemeral_point)?);
+    let k_enc = Zeroizing::new(kdf_orchard(&shared_secret, &compact.ephemeral_key)?);
 
-    let mut note_plaintext_prefix = compact.enc_ciphertext_prefix;
+    let mut note_plaintext_prefix = Zeroizing::new(compact.enc_ciphertext_prefix);
     chacha20_decrypt_compact(&k_enc, &mut note_plaintext_prefix);
 
     let Some(diversifier) =
@@ -310,11 +351,11 @@ fn try_compact_note_decryption_with_ivk(
         return Ok(None);
     };
 
-    let g_d = match crate::diversify_hash_ledger(&diversifier) {
+    let g_d = match crate::DiversifiedBase::derive(&diversifier) {
         Ok(g_d) => g_d,
         Err(_) => return Ok(None),
     };
-    let pk_d = crate::orchard_pk_d(&ivk.to_repr(), &g_d)?;
+    let pk_d = crate::orchard_pk_d_from_base(&ivk, &g_d)?;
 
     parse_and_validate_note_plaintext(
         compact,
@@ -324,9 +365,79 @@ fn try_compact_note_decryption_with_ivk(
         &rho,
         None,
         expected_note_version,
+        Some(&g_d),
     )
 }
 
+#[inline(never)]
+fn try_note_decryption_with_ivk(
+    ivk: &[u8; HASH_SIZE],
+    action: &OrchardActionCiphertext<'_>,
+    expected_note_version: u8,
+) -> Result<Option<DecipheredOrchardOutput>, Error> {
+    let compact = &action.compact;
+    let rho = match pallas_base_from_repr(compact.nullifier) {
+        Ok(rho) => rho,
+        Err(_) => return Ok(None),
+    };
+
+    if pallas_base_from_repr(compact.cmx).is_err() {
+        return Ok(None);
+    }
+
+    let ivk = match pallas_base_from_repr(*ivk) {
+        Ok(ivk) if !bool::from(ivk.is_zero()) => Zeroizing::new(ivk.to_repr()),
+        _ => return Ok(None),
+    };
+
+    let Some(ephemeral_point) = validated_nonidentity_pallas_point(&compact.ephemeral_key)? else {
+        return Ok(None);
+    };
+
+    let shared_secret = Zeroizing::new(key_agreement_with_point(&ivk, ephemeral_point)?);
+    let k_enc = Zeroizing::new(kdf_orchard(&shared_secret, &compact.ephemeral_key)?);
+
+    let mut note_plaintext = Zeroizing::new([0u8; ORCHARD_NOTE_PLAINTEXT_SIZE]);
+    if !chacha20poly1305_decrypt(&k_enc, action.enc_ciphertext, &mut note_plaintext) {
+        return Ok(None);
+    }
+
+    let mut note_plaintext_prefix = Zeroizing::new([0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
+    note_plaintext_prefix.copy_from_slice(&note_plaintext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
+
+    let Some(diversifier) =
+        parse_note_plaintext_diversifier(&note_plaintext_prefix, expected_note_version)
+    else {
+        return Ok(None);
+    };
+    let g_d = match crate::DiversifiedBase::derive(&diversifier) {
+        Ok(g_d) => g_d,
+        Err(_) => return Ok(None),
+    };
+    let pk_d = crate::orchard_pk_d_from_base(&ivk, &g_d)?;
+
+    let mut memo = Vec::new();
+    memo.try_reserve_exact(ORCHARD_MEMO_SIZE)
+        .map_err(|_| Error::OutOfMemory)?;
+    memo.extend_from_slice(&note_plaintext[ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE..]);
+
+    parse_and_validate_note_plaintext(
+        compact,
+        &note_plaintext_prefix,
+        &pk_d,
+        None,
+        &rho,
+        Some(memo.into_boxed_slice()),
+        expected_note_version,
+        Some(&g_d),
+    )
+}
+
+/// `known_g_d` must come from the same plaintext prefix; `None` derives it here.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep note fields and optional reuse material in one validation pass"
+)]
 fn parse_and_validate_note_plaintext(
     compact: &OrchardCompactAction,
     plaintext: &[u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE],
@@ -335,6 +446,7 @@ fn parse_and_validate_note_plaintext(
     rho: &pallas::Base,
     memo: Option<Box<[u8]>>,
     expected_note_version: u8,
+    known_g_d: Option<&crate::DiversifiedBase>,
 ) -> Result<Option<DecipheredOrchardOutput>, Error> {
     let Some(note_plaintext) = parse_note_plaintext_prefix(plaintext, expected_note_version) else {
         return Ok(None);
@@ -347,12 +459,16 @@ fn parse_and_validate_note_plaintext(
         return Ok(None);
     }
 
-    let g_d = match crate::diversify_hash_ledger(&note_plaintext.diversifier) {
-        Ok(g_d) => g_d,
-        Err(_) => return Ok(None),
+    let g_d = match known_g_d {
+        Some(g_d) => *g_d,
+        None => match crate::DiversifiedBase::derive(&note_plaintext.diversifier) {
+            Ok(g_d) => g_d,
+            Err(_) => return Ok(None),
+        },
     };
 
-    let derived_epk = key_agreement(&derived_esk, &g_d)?;
+    let derived_epk = key_agreement_with_point(&derived_esk, g_d.to_validated_point()?)?;
+    let g_d = g_d.to_bytes();
     if !bytes_eq(&derived_epk, &compact.ephemeral_key) {
         return Ok(None);
     }
@@ -431,7 +547,12 @@ fn chacha20poly1305_decrypt<const PLAINTEXT_SIZE: usize>(
     };
 
     ChaCha20Poly1305::new(key.into())
-        .decrypt_in_place_detached((&[0u8; 12]).into(), &[], plaintext, tag.into())
+        .decrypt_inout_detached(
+            (&[0u8; 12]).into(),
+            &[],
+            (&mut plaintext[..]).into(),
+            tag.into(),
+        )
         .is_ok()
 }
 
@@ -445,12 +566,12 @@ fn chacha20_decrypt_compact(
     chacha.apply_keystream(plaintext);
 }
 
-fn key_agreement(
+fn key_agreement_with_point(
     scalar_bytes_le: &[u8; HASH_SIZE],
-    point_bytes: &[u8; HASH_SIZE],
+    point: ValidatedPoint,
 ) -> Result<[u8; HASH_SIZE], Error> {
     let scalar_bytes_be = canonical_scalar_bytes_be(scalar_bytes_le)?;
-    let mut point = pallas_point_from_bytes(point_bytes)?;
+    let mut point = point.into_point();
     point.rnd_scalarmul(&scalar_bytes_be[..])?;
     pallas_point_to_bytes(&point)
 }
@@ -478,20 +599,13 @@ fn is_valid_nonzero_pallas_scalar(bytes: &[u8; HASH_SIZE]) -> bool {
 }
 
 fn is_valid_nonidentity_pallas_point(bytes: &[u8; HASH_SIZE]) -> Result<bool, Error> {
-    if *bytes == [0u8; HASH_SIZE] {
-        return Ok(false);
-    }
+    Ok(validated_nonidentity_pallas_point(bytes)?.is_some())
+}
 
-    let point = match pallas_point_from_bytes(bytes) {
-        Ok(point) => point,
-        Err(_) => return Ok(false),
-    };
-
-    if point.is_at_infinity()? {
-        return Ok(false);
-    }
-
-    Ok(pallas_point_to_bytes(&point)? == *bytes)
+fn validated_nonidentity_pallas_point(
+    bytes: &[u8; HASH_SIZE],
+) -> Result<Option<ValidatedPoint>, Error> {
+    ValidatedPoint::from_external(bytes)
 }
 
 fn orchard_esk(
@@ -535,7 +649,7 @@ fn prf_expand_rseed_with_rho(
 struct OrchardNotePlaintextPrefix {
     diversifier: [u8; DIVERSIFIER_SIZE],
     value: u64,
-    rseed: [u8; HASH_SIZE],
+    rseed: Zeroizing<[u8; HASH_SIZE]>,
 }
 
 fn parse_note_plaintext_diversifier(
@@ -563,7 +677,7 @@ fn parse_note_plaintext_prefix(
     value_bytes.copy_from_slice(&plaintext[NOTE_VALUE_OFFSET..RSEED_OFFSET]);
     let value = u64::from_le_bytes(value_bytes);
 
-    let mut rseed = [0u8; HASH_SIZE];
+    let mut rseed = Zeroizing::new([0u8; HASH_SIZE]);
     rseed.copy_from_slice(
         &plaintext[RSEED_OFFSET..RSEED_OFFSET + ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE - RSEED_OFFSET],
     );
@@ -803,6 +917,270 @@ mod tests {
     ];
     // `_DUMMY_CHANGE_VALUE` from test_pczt_ironwood.py
     const VALUE: u64 = 10000;
+
+    const fn hex<const N: usize>(text: &[u8]) -> [u8; N] {
+        const fn nibble(c: u8) -> u8 {
+            match c {
+                b'0'..=b'9' => c - b'0',
+                b'a'..=b'f' => c - b'a' + 10,
+                _ => panic!("bad hex digit"),
+            }
+        }
+        assert!(text.len() == 2 * N);
+        let mut out = [0u8; N];
+        let mut i = 0;
+        while i < N {
+            out[i] = (nibble(text[2 * i]) << 4) | nibble(text[2 * i + 1]);
+            i += 1;
+        }
+        out
+    }
+
+    // Ironwood note to account 1 (Speculos seed), internal address, no outgoing record.
+    // Regenerate with `gen_own_account_unit_vectors` in vendor/orchard/src/note_encryption.rs.
+    const OWN_ACCOUNT_1_INTERNAL_IVK: [u8; 32] =
+        hex(b"66ad6732f0136edd61e83ff257e0195d18cd0e52d4946c7ef368eecb8f79a93b");
+    const OWN_ACCOUNT_1_EXTERNAL_IVK: [u8; 32] =
+        hex(b"eb6164fa95c9660e293da2b5634cc36c2cacfa30ac62e6cd0fafc56298192915");
+    const OWN_RECIPIENT: [u8; 43] = hex(
+        b"0ed3bc206df2c6d3043b6683e150acff6b2f21ab08e4aa3846ab996e249aa800185fb493faed41f65a8d3b",
+    );
+    const OWN_NULLIFIER: [u8; 32] =
+        hex(b"5700000000000000000000000000000000000000000000000000000000000000");
+    const OWN_CMX: [u8; 32] =
+        hex(b"0ba81d457871e70b4046089d36e75c2bb11474e1e5a60ff0d2c5fd3a8149c60e");
+    const OWN_EPK: [u8; 32] =
+        hex(b"b56a2f603c1ffd4cc8c3faa69d385b0c1a6a7dcba4b10672e16d5b00691fca97");
+    const OWN_ENC_CIPHERTEXT: [u8; 580] = hex(b"1935fb26b3de60b04618b2e49e32d9f5857f57d7a6cc07b4c3033a359af541b523d7b5afce86cc46bd4d10ac2566f102d9f2cf5d26d75631d47501cf502b715d3cda030a81b8e73efc192888148283fbbacdf01fa292ba47272c379108aa35af5df7d60d8b1254421ffa51b4fca1594d31464bb86ad45ac71b1bfebabcd0c96dd30bce41f51d27a88096e577fc87cada264c79ca3c30189786563a8f04e2ddf3891d33de5aba96845889f5413dffc555a02d94e38def18cba0dce24da72118b5db77e37e16d68a1a5d3f489df3b9617e4537ce53dbec4a7a005efb29f34afd5e72306ec7e708f20c4a3f5da304da926bc86e497a069167a0d95585a0d3f9843f6be4bc1802558e9973b2ba55e7961ed75371f00837c858c2cdb7346ac4927f768fc31eb0c24581719b47183d59e87c1176a425b6015d93417e008b4f2687f3a56e2cbfa004c6f328dd1529b575d27674a22f1f6054834a4dec236215b13bb792e7c441507ee22e40a81700ad3fa66e05d28b982d2c2201fc40802b9342c39ae3e2d7608aaa662f7dae0977417fd90ccce749c0c7f86cfafc90e4b68024f3d72ad47766ae0fe2779a12f3fbb5b752c93cb4755bcadc35153ce52a549724622a679ca00591fed9d194563d45349e9b06c8408dfc0584d1acc983b1a891f212f8affcc1b34a793de26be01cf5c61547cb6f88e7ec83c80bf1d21058bc1b0c18d05dc37db425ded14dd2a9410f3e3e3c3ad076347307c8a30b1505a657af0c45f9f70b1de4382f27da74eaf7181553ac67118cfb7c6bd2dfd754d82faed4cdcbe3ec973c6bfb");
+    const OWN_VALUE: u64 = 280_000;
+    const OWN_MEMO: &[u8] = b"Savings top-up";
+    // Same note under another note's `esk`: decrypts, but `epk` does not derive from its `rseed`.
+    const OWN_FOREIGN_ESK_EPK: [u8; 32] =
+        hex(b"be70bd899026c4d8ca4367d19b1c3818a1baf0cc461866cb333a9bed9ab79039");
+    const OWN_FOREIGN_ESK_ENC_CIPHERTEXT: [u8; 580] = hex(b"930dcf668d5b4d9feae9995613ee915ab7e0e25ad1d24f857639bee1751e0458ea9bd35b78757531494cc8121de193ed1bdfddf5908f054b4f86628a65a8ddf7338bac5f5134a2dfc254ef5a251500b4bee8299bca078680e28fa81b668d8bd39d73fc046c1e0eabac7cdb5532129ae57b6e8f1137395d5816528387ccf403f845dd822de35b9e3292cd9c5b5e7c5077af37204f3bc44e86e25d0549c2083661f9dd924de432152c61b0a97d9110ec08ee1665394fa6125c7bd177891d31e5358bcc00670bd28b38980ad7ad3f1973d713239f5ea0f9196890a1fa0d5a51295289b9f1977aa9d16d3ede70a5ac66f272cc2f5f7d478bd795309cbb24961b9860c7070c1ddbdf0c6e975b91f839b3b6879d714fa205261c815ebca8ec2412252bd318f01075dc01b8904ef54051c218bb85da515c0ecc4420dfa4b4d08a992d8c3d00d86d03600f237c814d695102b58a3827dade84b3326169cc35f78a0705e11601671406819780a72d535f1678001851ec20a3fce6b1f6ccc314ee636154b3ad5b762e088baa9a3bf6a898062dbe745aff55846ca870bf22be608c6ba25edd2be99db0f1ef16fb3aa65f32f9892e5c84308aace1db56f7f378d2bfb5ff7b4aa00b4b3d1203e3e959391f2e77800d08b2cf91442240dac2d9faa34d60f7dd3bec58391589335282e38e4e34ed553addb994800953d9b47eb2eb66c2d17f5df171565b91a7f0afd913403477c1b3b07857e72e95bbf8e6973fc0ce1389ab32f8b8954bfb0da6dafebc0a1768507040346e31d3eb3bfecf1883357c8e4386d25ade8e26d2");
+
+    fn own_account_action<'a>(
+        cmx: [u8; 32],
+        ephemeral_key: [u8; 32],
+        enc_ciphertext: &'a [u8],
+    ) -> OrchardActionCiphertext<'a> {
+        let mut enc_ciphertext_prefix = [0u8; ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE];
+        enc_ciphertext_prefix
+            .copy_from_slice(&enc_ciphertext[..ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE]);
+        OrchardActionCiphertext {
+            compact: OrchardCompactAction {
+                nullifier: OWN_NULLIFIER,
+                cmx,
+                ephemeral_key,
+                enc_ciphertext_prefix,
+            },
+            rk: [0; HASH_SIZE],
+            cv_net: [0; HASH_SIZE],
+            enc_ciphertext,
+            out_ciphertext: [0; ORCHARD_OUT_CIPHERTEXT_SIZE],
+        }
+    }
+
+    fn is_not_recognized(
+        ivk: &[u8; HASH_SIZE],
+        action: &OrchardActionCiphertext<'_>,
+    ) -> Result<(), ()> {
+        match decipher_value_with_ivk(ivk, action, NOTE_VERSION_IRONWOOD) {
+            Ok(None) => Ok(()),
+            _ => Err(()),
+        }
+    }
+
+    #[test_case]
+    const IVK_DECRYPTION_RECOVERS_VALUE_RECIPIENT_AND_MEMO: TestType = TestType {
+        modname: module_path!(),
+        name: "ivk_decryption_recovers_value_recipient_and_memo",
+        f: || {
+            let action = own_account_action(OWN_CMX, OWN_EPK, &OWN_ENC_CIPHERTEXT);
+            let output = decipher_value_with_ivk(
+                &OWN_ACCOUNT_1_INTERNAL_IVK,
+                &action,
+                NOTE_VERSION_IRONWOOD,
+            )
+            .map_err(|_| ())?
+            .ok_or(())?;
+            let memo = output.memo.as_ref().ok_or(())?;
+            if output.value != OWN_VALUE
+                || output.raw_address != OWN_RECIPIENT
+                || memo.len() != ORCHARD_MEMO_SIZE
+                || &memo[..OWN_MEMO.len()] != OWN_MEMO
+                || memo[OWN_MEMO.len()..].iter().any(|byte| *byte != 0)
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const IVK_DECRYPTION_REFUSES_ANOTHER_KEY_OR_POOL: TestType = TestType {
+        modname: module_path!(),
+        name: "ivk_decryption_refuses_another_key_or_pool",
+        f: || {
+            let action = own_account_action(OWN_CMX, OWN_EPK, &OWN_ENC_CIPHERTEXT);
+            is_not_recognized(&OWN_ACCOUNT_1_EXTERNAL_IVK, &action)?;
+            match decipher_value_with_ivk(&OWN_ACCOUNT_1_INTERNAL_IVK, &action, 0x02) {
+                Ok(None) => Ok(()),
+                _ => Err(()),
+            }
+        },
+    };
+
+    #[test_case]
+    const IVK_DECRYPTION_REFUSES_A_TAMPERED_CIPHERTEXT: TestType = TestType {
+        modname: module_path!(),
+        name: "ivk_decryption_refuses_a_tampered_ciphertext",
+        f: || {
+            for offset in [
+                0,
+                ORCHARD_NOTE_PLAINTEXT_PREFIX_SIZE + 3,
+                ORCHARD_ENC_CIPHERTEXT_SIZE - 1,
+            ] {
+                let mut tampered = OWN_ENC_CIPHERTEXT;
+                tampered[offset] ^= 0x01;
+                let action = own_account_action(OWN_CMX, OWN_EPK, &tampered);
+                is_not_recognized(&OWN_ACCOUNT_1_INTERNAL_IVK, &action)?;
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const IVK_DECRYPTION_REFUSES_A_FOREIGN_EPHEMERAL_KEY: TestType = TestType {
+        modname: module_path!(),
+        name: "ivk_decryption_refuses_a_foreign_ephemeral_key",
+        f: || {
+            let action = own_account_action(
+                OWN_CMX,
+                OWN_FOREIGN_ESK_EPK,
+                &OWN_FOREIGN_ESK_ENC_CIPHERTEXT,
+            );
+            is_not_recognized(&OWN_ACCOUNT_1_INTERNAL_IVK, &action)
+        },
+    };
+
+    #[test_case]
+    const IVK_DECRYPTION_REFUSES_A_CMX_MISMATCH: TestType = TestType {
+        modname: module_path!(),
+        name: "ivk_decryption_refuses_a_cmx_mismatch",
+        f: || {
+            let mut cmx = OWN_CMX;
+            cmx[0] ^= 0x01;
+            let action = own_account_action(cmx, OWN_EPK, &OWN_ENC_CIPHERTEXT);
+            is_not_recognized(&OWN_ACCOUNT_1_INTERNAL_IVK, &action)
+        },
+    };
+
+    #[test_case]
+    const RECIPIENT_REUSE_MATCHES_RAW_NULLIFIERS: TestType = TestType {
+        modname: module_path!(),
+        name: "recipient_reuse_matches_raw_nullifiers",
+        f: || {
+            let base = crate::DiversifiedBase::derive(&INTERNAL_DIVERSIFIER).map_err(|_| ())?;
+            let ivk = pallas::Base::from(7).to_repr();
+            let pk_d = crate::orchard_pk_d_from_base(&ivk, &base).map_err(|_| ())?;
+            let recipient = ValidatedRecipient::from_ivk(&ivk, &base, &pk_d)
+                .map_err(|_| ())?
+                .ok_or(())?;
+            let mut raw = [0u8; ORCHARD_RAW_ADDRESS_SIZE];
+            raw[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+            raw[DIVERSIFIER_SIZE..].copy_from_slice(&pk_d);
+            let nk = pallas::Base::from(11).to_repr();
+            let v2 = spend_nullifier_bytes(&nk, &raw, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .map_err(|_| ())?;
+            let v3 = spend_nullifier_bytes_v3(&nk, &raw, VALUE, &DUMMY_NULLIFIER, &DUMMY_RSEED)
+                .map_err(|_| ())?;
+            if v2
+                != spend_nullifier_for_recipient(
+                    &nk,
+                    &recipient,
+                    VALUE,
+                    &DUMMY_NULLIFIER,
+                    &DUMMY_RSEED,
+                )
+                .map_err(|_| ())?
+                || v3
+                    != spend_nullifier_v3_for_recipient(
+                        &nk,
+                        &recipient,
+                        VALUE,
+                        &DUMMY_NULLIFIER,
+                        &DUMMY_RSEED,
+                    )
+                    .map_err(|_| ())?
+                || v2 == v3
+            {
+                return Err(());
+            }
+            for reuse in [
+                spend_nullifier_for_recipient,
+                spend_nullifier_v3_for_recipient,
+            ] {
+                if reuse(&nk, &recipient, VALUE, &[0xff; HASH_SIZE], &DUMMY_RSEED)
+                    != Err(Error::MalformedPallasBase)
+                {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const RECIPIENT_REUSE_REJECTS_MISMATCHES: TestType = TestType {
+        modname: module_path!(),
+        name: "recipient_reuse_rejects_mismatches",
+        f: || {
+            let base = crate::DiversifiedBase::derive(&INTERNAL_DIVERSIFIER).map_err(|_| ())?;
+            let ivk = pallas::Base::from(7).to_repr();
+            let pk_d = crate::orchard_pk_d_from_base(&ivk, &base).map_err(|_| ())?;
+            let other_ivk = pallas::Base::from(8).to_repr();
+            if ValidatedRecipient::from_ivk(&other_ivk, &base, &pk_d)
+                .map_err(|_| ())?
+                .is_some()
+            {
+                return Err(());
+            }
+            for invalid in [[0; HASH_SIZE], [0xff; HASH_SIZE]] {
+                if ValidatedRecipient::from_ivk(&ivk, &base, &invalid)
+                    .map_err(|_| ())?
+                    .is_some()
+                    || ValidatedRecipient::from_ivk(&invalid, &base, &pk_d).is_ok()
+                {
+                    return Err(());
+                }
+                let mut raw = [0; ORCHARD_RAW_ADDRESS_SIZE];
+                raw[..DIVERSIFIER_SIZE].copy_from_slice(&INTERNAL_DIVERSIFIER);
+                raw[DIVERSIFIER_SIZE..].copy_from_slice(&invalid);
+                if ValidatedRecipient::from_raw(&raw).is_ok() {
+                    return Err(());
+                }
+            }
+            let mut wrong_key = pk_d;
+            wrong_key[0] ^= 1;
+            if ValidatedRecipient::from_ivk(&ivk, &base, &wrong_key)
+                .map_err(|_| ())?
+                .is_some()
+            {
+                return Err(());
+            }
+            let mut other_diversifier = INTERNAL_DIVERSIFIER;
+            other_diversifier[0] ^= 1;
+            let other_base = crate::DiversifiedBase::derive(&other_diversifier).map_err(|_| ())?;
+            if ValidatedRecipient::from_ivk(&ivk, &other_base, &pk_d)
+                .map_err(|_| ())?
+                .is_some()
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
 
     /// `note_commitment_v3` must produce a result that differs from `note_commitment`
     /// for the same `(g_d, pk_d, value, rho, rseed)` inputs.

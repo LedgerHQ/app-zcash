@@ -10,24 +10,48 @@ from application_client.pczt import (
     PcztOrchardBundle,
     PcztTransparentInput,
     PcztTransparentOutput,
+    output_account_extension,
     pczt_transaction_bytes,
 )
 from application_client.zcash_command_sender import (
     CLA,
-    Errors,
-    InsType,
     P1,
     P2,
+    Errors,
+    InsType,
     ZcashCommandSender,
 )
 from application_client.zcash_response_unpacker import unpack_get_public_key_response
 from application_client.zcash_utils import ripemd160
 from application_client.zcash_verify_sign import (
+    check_orchard_spendauth_signature_validity,
     check_tx_v5_signature_validity,
+    nu5_signature_digests,
 )
 from ragger.error import ExceptionRAPDU
 from ragger.navigator import NavigateWithScenario
 from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
+
+from .own_account_consent import own_account_consent
+from .own_account_vectors import (
+    MALFORMED_OUTPUT_EXTENSIONS,
+    ORCHARD_ACCOUNT_1_EXTERNAL_EXTERNAL_OVK,
+    ORCHARD_ACCOUNT_1_EXTERNAL_INTERNAL_OVK,
+    ORCHARD_ACCOUNT_1_EXTERNAL_NO_OVK,
+    ORCHARD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK,
+    ORCHARD_ACCOUNT_1_INTERNAL_INTERNAL_OVK,
+    ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK,
+    ORCHARD_ACCOUNT_1_MEMO,
+    own_account_orchard_action,
+)
+from .test_pczt_ironwood import (
+    _NU6_3_BRANCH_ID,
+    _NU7_BRANCH_ID,
+    _TRANSPARENT_OUTPUT_299K,
+    _review_reject_up_to_the_choice,
+    _valid_orchard_action,
+    _valid_orchard_bundle,
+)
 
 # Mirrors MAX_PCZT_SCRIPT_SIZE in src/consts.rs, itself the host's single-byte CompactSize limit.
 _MAX_PCZT_SCRIPT_SIZE = 252
@@ -77,6 +101,8 @@ def _strict_orchard_action(
 def _review_approve(
     scenario_navigator: NavigateWithScenario,
     snapshot_test_name: str,
+    *,
+    compare: bool = True,
 ) -> None:
     scenario = NavigationScenarioData(
         scenario_navigator.device,
@@ -87,6 +113,15 @@ def _review_approve(
 
     if scenario_navigator.device.touchable:
         scenario.validation = scenario.validation[:-1]
+
+    if not compare:
+        scenario_navigator.navigator.navigate_until_text(
+            navigate_instruction=scenario.navigation,
+            validation_instructions=scenario.validation,
+            text=scenario.pattern,
+            screen_change_after_last_instruction=False,
+        )
+        return
 
     scenario_navigator.navigator.navigate_until_text_and_compare(
         navigate_instruction=scenario.navigation,
@@ -161,7 +196,12 @@ def _assert_pczt_orchard_sign_digest(
     ]
     auth_sigs = _sign_all_orchard_actions(client, orchard_bundle)
 
-    assert [sig.hex() for sig in auth_sigs] == [sig.hex() for sig in expected_auth_sigs], [sig.hex() for sig in auth_sigs]
+    # The nonce depends on Speculos RNG consumption, so both signatures are verified rather than compared.
+    digest = nu5_signature_digests(tx_bytes, input_amounts)["final_digest"]
+    real_actions = [action for action in orchard_bundle.actions if action.spend_value != 0]
+    for action, signature, expected in zip(real_actions, auth_sigs, expected_auth_sigs, strict=True):
+        assert check_orchard_spendauth_signature_validity(action.rk, expected, digest)
+        assert check_orchard_spendauth_signature_validity(action.rk, signature, digest)
 
     for input_index, (_txin, transparent_sig) in enumerate(zip(transparent_inputs, transparent_sigs, strict=True)):
         assert check_tx_v5_signature_validity(
@@ -224,6 +264,65 @@ def test_pczt_sign_tx_v5_simple(
 
     resp = client.pczt_sign_transparent(input_index=0).data
     signature = resp[:-1]
+
+    assert check_tx_v5_signature_validity(
+        public_key,
+        signature,
+        TX_BYTES,
+        input_index=0,
+        input_amounts=[TRANSPARENT_INPUT.value],
+    )
+
+
+def test_pczt_session_survives_a_malformed_frame(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The SDK refuses a length-mismatched frame before the app; the host resends it and the session goes on."""
+    PCZT_GLOBAL = PcztGlobal()
+    PATH = "m/44'/133'/0'/0/2"
+    TRANSPARENT_INPUT = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=81630485,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path=PATH,
+    )
+    TRANSPARENT_OUTPUT = PcztTransparentOutput(
+        value=81628565,
+        script_pubkey=bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac"),
+    )
+    TX_BYTES = pczt_transaction_bytes(PCZT_GLOBAL, [TRANSPARENT_INPUT], [TRANSPARENT_OUTPUT])
+
+    client = ZcashCommandSender(backend)
+
+    response = client.get_public_key(path=PATH).data
+    public_key, _, _ = unpack_get_public_key_response(response)
+
+    declared_length = 5
+    malformed_frame = struct.pack(
+        ">BBBBB", CLA, InsType.PCZT_TRANSPARENT_OUTPUT, P1.P1_FIRST, P2.P2_NONE, declared_length
+    ) + bytes(declared_length - 2)
+    send_outputs = client._send_pczt_transparent_outputs_sync
+
+    def send_outputs_after_a_malformed_frame(transparent_outputs):
+        with pytest.raises(ExceptionRAPDU) as e:
+            backend.exchange_raw(malformed_frame)
+        assert e.value.status == Errors.SW_WRONG_APDU_LENGTH
+        assert not e.value.data
+        send_outputs(transparent_outputs)
+
+    client._send_pczt_transparent_outputs_sync = send_outputs_after_a_malformed_frame
+
+    with client.send_pczt(
+        pczt_global=PCZT_GLOBAL,
+        transparent_inputs=[TRANSPARENT_INPUT],
+        transparent_outputs=[TRANSPARENT_OUTPUT],
+    ):
+        _review_approve(scenario_navigator, "test_sign_tx_v5_simple")
+
+    signature = client.pczt_sign_transparent(input_index=0).data[:-1]
 
     assert check_tx_v5_signature_validity(
         public_key,
@@ -1287,6 +1386,32 @@ def test_pczt_sign_tx_v5_mult_outputs(
     )
 
 
+def _transparent_to_orchard_bundle() -> PcztOrchardBundle:
+    """A dummy spend paying 90000 zatoshis into the Orchard pool: value_balance is negative."""
+    action = {
+        "cv_net": "fd87b590de6e73dbf0372fc4e80e4c9a44c6f9b196fd296165276b15f38ca7be",
+        "nullifier": "781c4faf960206510fdc72739267fa193d9e012dbc68998d35539837e520ae2a",
+        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
+        "spend_rho": "0100000000000000000000000000000000000000000000000000000000000000",
+        "spend_rseed": "1500000000000000000000000000000000000000000000000000000000000000",
+        "cmx": "8fa021d7ce7e10ac828106e295d0daaec54ca3101f22054e90a4bb9b61a38000",
+        "ephemeral_key": "7895cdaf491fc7b6754bbe1339eab4f4d142e59fff9cf8d3820217f1e940801b",
+        "enc_ciphertext": "ffebe7c7d7f8e08fd0baffb71f54ca6fad3b8a1b1702be187bcc24f1874a48bc3013c44c8d0aaadfbdbebeb31c3eda96e539d9856c6b2c38ce2af66b080c355856dc67bf61319f0f1ac890a1cc543f49d32d30b47241d1632e6dcba30492b6a7bdbaafb9f9dd1e68c2ac12d17b485aed2fb8ba6162f4ec70f8b3c045c4db74fd7861cfb6ce2dc74c2a4219fa429332ed86e891aeca5cf2dfd0517f99fee0f0ddcc5a1a2729bac0626f895a1b572fa8eddaf3b72d2cbb6c1681aeb865740d439b7c90334512faa315207d540eb411dfe8d38b3f6673cb65e12816f42bee50abb966437fa386c34ac54611c86cc093ddee1cfe098903f3be4a8de20de1c48fdbd8ca8a9900eeee734dfff526c39ad353a81de786deb8278bdc870b9d65cc99422e54d0bf7e8e0fcf88a0a701ee59195aaa130b8950bf39bc598520f913af4bf770dfcf37e1ed4d19549759e1642945affbe385eb80497b9652e33a5366667b4fd9c212b061c6c2c47d3f289dee39fea4eba73faf6c91428ca0b97d2be3feb7c0e1ea5ee0250aed9a96d7fe9e91c525f46debe71ddbbc0f8d05576ea27a2249f5b9a341561772b6b480404d5e839af42a56d71f20ad5538214b9925f7931d926017353759398d25a5a2611cf243ff44f732cdc57312b7dfe386118a1e9377f36d7ee312be7ce3c0efa96228a83653a607e00d556f8e04defbb39a2179bb2ed8a0389bb157c75913236e6f9ddf21dcc7108b804c1fa194b2603058e03da7ab3f6ee5dacb4fc3769879d72fc21f68116f0af304142361c4e2a86f36e76407a699d61e18fdae6c",  # noqa: E501
+        "out_ciphertext": "9964518f9947818c4b75d0aad44fd05bb75a2ed34ff2a915c080e829a150cd8491272ea43bf99db6fc677560484f7667c8ee7307c1acc44873068ef0475b940a62834f31fad9a486f183a5e2d030a01b",  # noqa: E501
+        "rcv": "3d00000000000000000000000000000000000000000000000000000000000000",
+        "rseed": "2900000000000000000000000000000000000000000000000000000000000000",
+        "spend_value": 0,
+        "value": 90000,
+        "recipient": "4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
+    }
+    return PcztOrchardBundle(
+        actions=[_strict_orchard_action(action)],
+        flags=3,
+        value_balance=-90000,
+        anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
+    )
+
+
 def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
     backend,
     scenario_navigator: NavigateWithScenario,
@@ -1303,28 +1428,7 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
         signing_path="m/44'/133'/0'/0/2",
     )
     TRANSPARENT_OUTPUTS = []
-    ORCHARD_ACTION = {
-        "cv_net": "fd87b590de6e73dbf0372fc4e80e4c9a44c6f9b196fd296165276b15f38ca7be",
-        "nullifier": "781c4faf960206510fdc72739267fa193d9e012dbc68998d35539837e520ae2a",
-        "spend_recipient": "4a6414bb6f09e4a89469663a081fc2646c083708f552597d524b2f1812272e472d2b28f7414ece124ddf02",
-        "spend_rho": "0100000000000000000000000000000000000000000000000000000000000000",
-        "spend_rseed": "1500000000000000000000000000000000000000000000000000000000000000",
-        "cmx": "8fa021d7ce7e10ac828106e295d0daaec54ca3101f22054e90a4bb9b61a38000",
-        "ephemeral_key": "7895cdaf491fc7b6754bbe1339eab4f4d142e59fff9cf8d3820217f1e940801b",
-        "enc_ciphertext": "ffebe7c7d7f8e08fd0baffb71f54ca6fad3b8a1b1702be187bcc24f1874a48bc3013c44c8d0aaadfbdbebeb31c3eda96e539d9856c6b2c38ce2af66b080c355856dc67bf61319f0f1ac890a1cc543f49d32d30b47241d1632e6dcba30492b6a7bdbaafb9f9dd1e68c2ac12d17b485aed2fb8ba6162f4ec70f8b3c045c4db74fd7861cfb6ce2dc74c2a4219fa429332ed86e891aeca5cf2dfd0517f99fee0f0ddcc5a1a2729bac0626f895a1b572fa8eddaf3b72d2cbb6c1681aeb865740d439b7c90334512faa315207d540eb411dfe8d38b3f6673cb65e12816f42bee50abb966437fa386c34ac54611c86cc093ddee1cfe098903f3be4a8de20de1c48fdbd8ca8a9900eeee734dfff526c39ad353a81de786deb8278bdc870b9d65cc99422e54d0bf7e8e0fcf88a0a701ee59195aaa130b8950bf39bc598520f913af4bf770dfcf37e1ed4d19549759e1642945affbe385eb80497b9652e33a5366667b4fd9c212b061c6c2c47d3f289dee39fea4eba73faf6c91428ca0b97d2be3feb7c0e1ea5ee0250aed9a96d7fe9e91c525f46debe71ddbbc0f8d05576ea27a2249f5b9a341561772b6b480404d5e839af42a56d71f20ad5538214b9925f7931d926017353759398d25a5a2611cf243ff44f732cdc57312b7dfe386118a1e9377f36d7ee312be7ce3c0efa96228a83653a607e00d556f8e04defbb39a2179bb2ed8a0389bb157c75913236e6f9ddf21dcc7108b804c1fa194b2603058e03da7ab3f6ee5dacb4fc3769879d72fc21f68116f0af304142361c4e2a86f36e76407a699d61e18fdae6c",  # noqa: E501
-        "out_ciphertext": "9964518f9947818c4b75d0aad44fd05bb75a2ed34ff2a915c080e829a150cd8491272ea43bf99db6fc677560484f7667c8ee7307c1acc44873068ef0475b940a62834f31fad9a486f183a5e2d030a01b",  # noqa: E501
-        "rcv": "3d00000000000000000000000000000000000000000000000000000000000000",
-        "rseed": "2900000000000000000000000000000000000000000000000000000000000000",
-        "spend_value": 0,
-        "value": 90000,
-        "recipient": "4559029c0b5dbf941c5ad181a5fe8f45b34630f29d0c8dd8dc1cc3573386f416cb324133156d723df5e62d",
-    }
-    ORCHARD_BUNDLE = PcztOrchardBundle(
-        actions=[_strict_orchard_action(ORCHARD_ACTION)],
-        flags=3,
-        value_balance=-90000,
-        anchor=bytes.fromhex("ae2935f1dfd8a24aed7c70df7de3a668eb7a49b1319880dde2bbd9031ae5d82f"),
-    )
+    ORCHARD_BUNDLE = _transparent_to_orchard_bundle()
     PCZT_GLOBAL = PcztGlobal()
     # All Orchard spends are dummy padding (spend_value == 0), signed host-side;
     # the device produces no Orchard spend-auth signature for this transfer.
@@ -1341,6 +1445,34 @@ def test_pczt_sign_tx_v5_transparent_to_orchard_simple(
         transparent_input=TRANSPARENT_INPUT,
         prevout_tx=TX_PREVOUT_BYTES,
     )
+
+
+@pytest.mark.parametrize("branch_id", [_NU6_3_BRANCH_ID, _NU7_BRANCH_ID], ids=["nu6_3", "nu7"])
+def test_pczt_sign_tx_v5_value_into_orchard_refused_from_nu6_3(backend, branch_id: int):
+    """From NU6.3 no value may enter the Orchard pool; the same bundle signs under NU5."""
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(consensus_branch_id=branch_id),
+            transparent_inputs=[
+                PcztTransparentInput(
+                    prevout_txid=bytes.fromhex("cf67287a7f4820dc2dd57503b3a5e940b4c1b322024cee5e8ffbece7f217f4bf"),
+                    prevout_index=0,
+                    value=100000,
+                    script_pubkey=bytes.fromhex("76a91419650e98310b2cc27f00a9d0c4580386553da2e488ac"),
+                    sequence=bytes.fromhex("ffffffff"),
+                    signing_path="m/44'/133'/0'/0/2",
+                )
+            ],
+            transparent_outputs=[],
+            orchard_bundle=_transparent_to_orchard_bundle(),
+        ):
+            # The trailer is the last packet, answered when the block exits.
+            pass
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert not e.value.data
 
 
 def test_pczt_sign_tx_v5_transparent_to_orchard_with_memo(
@@ -1923,6 +2055,53 @@ def _mixed_real_and_dummy_orchard_bundle() -> PcztOrchardBundle:
     )
 
 
+def test_pczt_orchard_change_split_across_notes_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A repeated Orchard change note is accepted; the transparent input covers the fee it leaves uncovered."""
+    base = _mixed_real_and_dummy_orchard_bundle()
+    recipient, change = base.actions
+    bundle = PcztOrchardBundle(
+        actions=[recipient, change, change],
+        flags=base.flags,
+        value_balance=base.value_balance - change.value,
+        anchor=base.anchor,
+    )
+    fee_input = PcztTransparentInput(
+        prevout_txid=bytes.fromhex("58854aa4e2e3b82aa2040c0bc3a6dc9b8ac6acb5e15bf0cfeacd09e77249c18a"),
+        prevout_index=0,
+        value=11000,
+        script_pubkey=bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+        sequence=bytes.fromhex("00000000"),
+        signing_path="m/44'/133'/0'/0/2",
+    )
+    client = ZcashCommandSender(backend)
+
+    with client.send_pczt(
+        pczt_global=PcztGlobal(),
+        transparent_inputs=[fee_input],
+        transparent_outputs=[],
+        orchard_bundle=bundle,
+    ):
+        scenario = NavigationScenarioData(
+            scenario_navigator.device,
+            scenario_navigator.backend,
+            UseCase.TX_REVIEW,
+            True,
+        )
+        if scenario_navigator.device.touchable:
+            scenario.validation = scenario.validation[:-1]
+        scenario_navigator.navigator.navigate_until_text(
+            navigate_instruction=scenario.navigation,
+            validation_instructions=scenario.validation,
+            text=scenario.pattern,
+            screen_change_after_last_instruction=False,
+        )
+
+    assert len(client.pczt_sign_orchard(action_index=0).data) == 64
+
+
 # Both tests below review the same bundle, so they share its review snapshots.
 _ORCHARD_TO_ORCHARD_SNAPSHOTS = "test_sign_tx_v5_orchard_to_orchard_with_change"
 
@@ -2186,3 +2365,251 @@ def test_pczt_hidden_shielded_change_in_another_account_yields_no_signature(
 
     assert error.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
     assert not error.value.data
+
+
+# ── Transfers to another account of the same seed (Orchard pool) ───────────────
+
+_OWN_ACCOUNT_ORCHARD_TRANSFER_VECTORS = {
+    "internal_address_external_ovk": ORCHARD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK,
+    "internal_address_internal_ovk": ORCHARD_ACCOUNT_1_INTERNAL_INTERNAL_OVK,
+    "internal_address_no_ovk": ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK,
+    "external_address_external_ovk": ORCHARD_ACCOUNT_1_EXTERNAL_EXTERNAL_OVK,
+    "external_address_internal_ovk": ORCHARD_ACCOUNT_1_EXTERNAL_INTERNAL_OVK,
+    "external_address_no_ovk": ORCHARD_ACCOUNT_1_EXTERNAL_NO_OVK,
+}
+
+
+def _own_account_orchard_bundle(own_action: PcztOrchardAction, change: bool = False) -> PcztOrchardBundle:
+    """Account 0 spends 300 000 zatoshis to `own_action`, plus its own change note with `change`."""
+    actions = [_valid_orchard_action(), own_action]
+    if change:
+        actions.append(_mixed_real_and_dummy_orchard_bundle().actions[1])
+    return PcztOrchardBundle(
+        actions=actions,
+        value_balance=sum(action.spend_value - action.value for action in actions),
+        flags=3,
+        anchor=bytes.fromhex("699c780066f179ff12b26a5ec5b1af3d418eb0eadec3d3b18f10c91d97b33109"),
+    )
+
+
+def _assert_own_account_orchard_refused(client: ZcashCommandSender, own_action: PcztOrchardAction) -> None:
+    with pytest.raises(ExceptionRAPDU) as error:
+        with client.send_pczt(
+            pczt_global=PcztGlobal(),
+            transparent_inputs=[],
+            transparent_outputs=[],
+            orchard_bundle=_own_account_orchard_bundle(own_action),
+        ):
+            pass
+    assert error.value.status == Errors.SW_INVALID_TRANSACTION
+
+    with pytest.raises(ExceptionRAPDU):
+        client.pczt_sign_orchard(action_index=0)
+    assert client.get_version().status == 0x9000
+
+
+@pytest.mark.parametrize(
+    "name, vector",
+    _OWN_ACCOUNT_ORCHARD_TRANSFER_VECTORS.items(),
+    ids=_OWN_ACCOUNT_ORCHARD_TRANSFER_VECTORS.keys(),
+)
+def test_pczt_orchard_own_account_transfer_signs(backend, scenario_navigator: NavigateWithScenario, name, vector):
+    """Every OVK policy signs and draws the same screens for one address scope: `Account index 2` and that address."""
+    scope = name.split("_address")[0]
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
+
+    with client.send_pczt(
+        pczt_global=PcztGlobal(),
+        transparent_inputs=[],
+        transparent_outputs=[],
+        orchard_bundle=_own_account_orchard_bundle(own_account_orchard_action(vector)),
+    ):
+        _review_approve(scenario_navigator, f"test_pczt_orchard_own_account_transfer_{scope}")
+
+    assert client.own_account_prompts == [1]
+    assert len(client.pczt_sign_orchard(action_index=0).data) == 64
+
+
+def _send_own_account_orchard(client: ZcashCommandSender, bundle: PcztOrchardBundle):
+    return client.send_pczt(
+        pczt_global=PcztGlobal(),
+        transparent_inputs=[],
+        transparent_outputs=[],
+        orchard_bundle=bundle,
+    )
+
+
+def test_pczt_orchard_own_account_transfer_shows_its_memo(backend, scenario_navigator: NavigateWithScenario):
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
+
+    with _send_own_account_orchard(client, _own_account_orchard_bundle(own_account_orchard_action(ORCHARD_ACCOUNT_1_MEMO))):
+        _review_approve(scenario_navigator, "test_pczt_orchard_own_account_transfer_shows_its_memo")
+
+    assert len(client.pczt_sign_orchard(action_index=0).data) == 64
+
+
+def test_pczt_orchard_own_account_transfer_beside_change_keeps_change_hidden(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The transfer counts as external, so nothing reveals the change note as a self-transfer."""
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
+    bundle = _own_account_orchard_bundle(own_account_orchard_action(ORCHARD_ACCOUNT_1_MEMO), change=True)
+
+    with _send_own_account_orchard(client, bundle):
+        _review_approve(
+            scenario_navigator,
+            "test_pczt_orchard_own_account_transfer_beside_change_keeps_change_hidden",
+        )
+
+    assert len(client.pczt_sign_orchard(action_index=0).data) == 64
+
+
+def test_pczt_orchard_own_account_transfer_rejected_by_user(backend, scenario_navigator: NavigateWithScenario):
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
+    bundle = _own_account_orchard_bundle(own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK))
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with _send_own_account_orchard(client, bundle):
+            _review_reject_up_to_the_choice(scenario_navigator, "test_pczt_orchard_own_account_transfer_rejected_by_user")
+    assert error.value.status == Errors.SW_DENY
+
+    with pytest.raises(ExceptionRAPDU):
+        client.pczt_sign_orchard(action_index=0)
+
+
+def test_pczt_orchard_own_account_output_undeclared_is_refused(backend):
+    client = ZcashCommandSender(backend)
+
+    _assert_own_account_orchard_refused(client, own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK, declared=None))
+
+
+def test_pczt_orchard_own_account_declared_for_another_account_is_refused(backend, scenario_navigator: NavigateWithScenario):
+    """Refused even though account 0's external OVK would recover it as an ordinary payment."""
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
+
+    _assert_own_account_orchard_refused(client, own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK, declared=2))
+    assert client.own_account_prompts == [2]
+
+
+def test_pczt_orchard_own_account_declared_for_a_recipient_outside_the_seed_is_refused(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """A failed declaration must not fall back to recovery by account 0's external OVK."""
+    action = _mixed_real_and_dummy_orchard_bundle().actions[0]
+    action.output_extensions = output_account_extension(1)
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
+
+    _assert_own_account_orchard_refused(client, action)
+    assert client.own_account_prompts == [1]
+
+
+def test_pczt_orchard_own_account_declaring_the_source_account_is_refused(backend, scenario_navigator: NavigateWithScenario):
+    """Refused before the consent screen: no answer of the user could make it valid."""
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
+
+    _assert_own_account_orchard_refused(client, own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK, declared=0))
+    assert not client.own_account_prompts
+
+
+@pytest.mark.parametrize("extensions", MALFORMED_OUTPUT_EXTENSIONS.values(), ids=MALFORMED_OUTPUT_EXTENSIONS.keys())
+def test_pczt_orchard_own_account_malformed_extension_is_refused(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    extensions: bytes,
+):
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator)
+
+    _assert_own_account_orchard_refused(
+        client,
+        own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK, extensions=extensions),
+    )
+    assert not client.own_account_prompts
+
+
+def _orchard_trailer_packet(client: ZcashCommandSender, bundle: PcztOrchardBundle) -> bytes:
+    return client._build_pczt_orchard_action_packets(bundle)[-1]  # pylint: disable=protected-access
+
+
+def test_pczt_orchard_own_account_consent_rejected_by_user(backend, scenario_navigator: NavigateWithScenario):
+    """Rejecting the consent denies the transaction and ends the session."""
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator, approve=False)
+    bundle = _own_account_orchard_bundle(own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_NO_OVK))
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with _send_own_account_orchard(client, bundle):
+            pass
+    assert error.value.status == Errors.SW_DENY
+    assert not error.value.data
+    assert client.own_account_prompts == [1]
+    # The rejection status screen holds off every command until it returns home.
+    backend.wait_for_home_screen()
+
+    with pytest.raises(ExceptionRAPDU) as trailer_error:
+        backend.exchange(cla=CLA, ins=InsType.PCZT_ORCHARD_ACTION, p1=P1.P1_LAST, data=_orchard_trailer_packet(client, bundle))
+    assert trailer_error.value.status == Errors.SW_BAD_STATE
+    with pytest.raises(ExceptionRAPDU):
+        client.pczt_sign_orchard(action_index=0)
+    assert client.get_version().status == 0x9000
+
+
+_OWN_ACCOUNT_ORCHARD_PROBES = {
+    "matching_note": own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK),
+    "note_of_another_account": own_account_orchard_action(ORCHARD_ACCOUNT_1_INTERNAL_EXTERNAL_OVK, declared=2),
+}
+
+
+@pytest.mark.parametrize("probe", _OWN_ACCOUNT_ORCHARD_PROBES.values(), ids=_OWN_ACCOUNT_ORCHARD_PROBES.keys())
+def test_pczt_orchard_own_account_consent_rejection_reveals_no_ownership(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+    probe: PcztOrchardAction,
+):
+    """Without consent, a note the declared account owns and one it does not draw the same answer."""
+    client = ZcashCommandSender(backend)
+    client.own_account_consent = own_account_consent(scenario_navigator, approve=False)
+
+    with pytest.raises(ExceptionRAPDU) as error:
+        with _send_own_account_orchard(client, _own_account_orchard_bundle(probe)):
+            pass
+    assert error.value.status == Errors.SW_DENY
+    assert not error.value.data
+
+
+def test_pczt_orchard_v5_nu7_branch_id_signs(
+    backend,
+    scenario_navigator: NavigateWithScenario,
+):
+    """The signature verifies against the NU7 digest and not the NU5 one, so the branch id is what was signed."""
+    client = ZcashCommandSender(backend)
+    pczt_global = PcztGlobal(consensus_branch_id=_NU7_BRANCH_ID)
+    bundle = _valid_orchard_bundle()
+
+    with client.send_pczt(
+        pczt_global=pczt_global,
+        transparent_inputs=[],
+        transparent_outputs=[_TRANSPARENT_OUTPUT_299K],
+        orchard_bundle=bundle,
+    ):
+        _review_approve(scenario_navigator, "test_pczt_orchard_v5_nu7_branch_id_signs")
+
+    signature = client.pczt_sign_orchard(action_index=0).data
+    assert len(signature) == 64
+
+    def digest(global_fields: PcztGlobal) -> bytes:
+        tx_bytes = pczt_transaction_bytes(global_fields, [], [_TRANSPARENT_OUTPUT_299K], bundle)
+        return nu5_signature_digests(tx_bytes, [])["final_digest"]
+
+    rk = bundle.actions[0].rk
+    assert check_orchard_spendauth_signature_validity(rk, signature, digest(pczt_global))
+    assert not check_orchard_spendauth_signature_validity(rk, signature, digest(PcztGlobal()))

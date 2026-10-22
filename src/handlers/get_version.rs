@@ -16,7 +16,7 @@
  *****************************************************************************/
 use crate::AppSW;
 use core::str::FromStr;
-use ledger_device_sdk::io;
+use ledger_device_sdk::io::{Command, CommandResponse};
 
 const LEGACY_VERSION_PREFIX: u8 = 0x38;
 const ARCH_ID: u8 = 0x30;
@@ -24,7 +24,7 @@ const NU_SDK_MAJOR_VERSION: u8 = 1;
 const NU_SDK_MINOR_VERSION: u8 = 0;
 const NU_API_LEVEL: u8 = 0x03;
 
-pub fn handler_get_version(comm: &mut io::Comm) -> Result<(), AppSW> {
+pub fn handler_get_version<'a>(command: Command<'a>) -> Result<CommandResponse<'a>, AppSW> {
     if let Some((major, minor, patch)) = parse_version_string(env!("CARGO_PKG_VERSION")) {
         let legacy_version_format = [
             LEGACY_VERSION_PREFIX,
@@ -36,8 +36,9 @@ pub fn handler_get_version(comm: &mut io::Comm) -> Result<(), AppSW> {
             NU_SDK_MINOR_VERSION,
             NU_API_LEVEL,
         ];
-        comm.append(&legacy_version_format);
-        Ok(())
+        let mut response = command.into_response();
+        response.append(&legacy_version_format)?;
+        Ok(response)
     } else {
         Err(AppSW::VersionParsingFail)
     }

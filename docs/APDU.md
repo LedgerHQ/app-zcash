@@ -29,8 +29,8 @@ stated again with the command that returns it.
 | --- | --- | --- |
 | `0x6986` | `ConditionsOfUseNotSatisfied` | The request contradicts what the user approved — chiefly a change output whose account is not the one being spent. |
 | `0xB007` | `BadState` | The command has no meaning in the current phase: a continuation opened before the review, or any round resuming a finished transaction. |
-| `0x6A80` | `IncorrectData` | Malformed payload, or a derivation path outside the shape the command accepts. |
-| `0x6A84` | `NotEnoughMemorySpace` | An allocation the device refused: retained memo text past its per-transaction budget, or an Orchard derivation past the per-run cap. |
+| `0x6A80` | `IncorrectData` | Malformed payload, or a derivation path outside the shape the command accepts — including a malformed output extension block, and a shielded output declared for an account it does not decrypt under or for the account being spent. |
+| `0x6A84` | `NotEnoughMemorySpace` | An allocation the device refused: retained memo text past its per-transaction budget, a shielded action's ciphertext buffer the heap cannot hold, an Orchard derivation past the per-run cap, more shielded outputs than the review may hold, outputs declared for more than four other accounts, or a transaction whose remaining parse or review the heap cannot hold. |
 | `0x6B00` | `WrongP1P2` | The P1/P2 combination has no meaning for this command. |
 | `0x6F03` | `RngFailure` | The hardware random number generator reported a failure. No signature is produced. |
 | `0x6985` | `Deny` | The user rejected the review. |
@@ -39,10 +39,32 @@ Under swap, refusals reach the host as `IncorrectData`: the Exchange app maps
 every application error code onto it, so the finer codes this app defines serve
 its own logs rather than host discrimination.
 
-`0x6901` `CmdNotAccepted` comes from the device SDK, not from this app. From SDK
-1.37 the legacy I/O layer refuses a frame it takes for an APDU while a review is
-on screen, and it can answer the first display command of a session. A host does
-better to tolerate and retry it than to surface it as a failure.
+`0x6901` `CmdNotAccepted` comes from the SDK when another application command
+arrives while a command is still being processed, including during review. Wait
+for the original command to finish before retrying. The SDK's built-in commands
+(`CLA = 0xB0`) get the same answer while a command is in flight, except
+GET_VERSION, which is answered so that a host can still identify the app.
+
+An APDU whose payload length differs from its declared length, in the short or the
+extended form, is refused by the SDK before it reaches the app, with `0x6E03`
+`BadLen`, a word distinct from the app's own `0x6700` length error. While a command
+is in flight it gets `0x6901` `CmdNotAccepted` instead, like any other frame. A command with
+no data may use either the four-byte form or an explicit `Lc = 0x00`.
+
+Because such a frame never reaches the app, it leaves a signing session in progress
+untouched: a PCZT or legacy round keeps the state built by the frames before it, and
+the host may resend the frame correctly and continue. An error the app raises on a
+frame it has received still ends a PCZT session.
+
+## Locked devices
+
+When a PIN is configured and the device is locked, every APDU is answered `0x5515`
+`DeviceLocked` before it is decoded, whatever its class: Zcash instructions and the
+SDK's built-in commands (`CLA = 0xB0`: app name/version, quit, certificate load)
+alike, including those queued while a screen is displayed. The SDK applies the check
+to each received frame before any decoding (`ledger_device_sdk` 1.41.0,
+`src/io_new/event.rs`), and its legacy I/O path applies the same check
+(`src/io_legacy.rs`). The app holds no lock check of its own.
 
 ## Accepted derivation paths
 
@@ -56,6 +78,11 @@ Beyond the prefix, each command constrains the shape it accepts, and the
 constraint differs by purpose: signing needs to know whether a path is a change
 path, whereas key export must not dictate a shape to the host. The requirement is
 stated with each command below.
+
+The testnet build (`variant_testnet`) is installed with `44'/1'` and `32'/1'` instead,
+and accepts coin type `1'` only; a mainnet build accepts coin type `133'` only. In
+both builds, any other coin type is refused with the status word the command uses for
+a path outside its prefixes.
 
 ## Legacy transparent signing commands
 
@@ -76,8 +103,16 @@ Only the deviations below are Zcash-specific; the shielded flow uses the PCZT co
 
 Zcash deviations:
 
-- V4, V5 and V6 transaction versions are all accepted; `P2 = 0x05` selects the Sapling variant
-  and `0x80` continues an in-progress hash.
+- `GET_TRUSTED_INPUT` reads V4, V5 and V6 previous transactions. The transaction being signed
+  (`HASH_INPUT_START`) must be V5: V4 and V6 are refused with `IncorrectData` (`0x6A80`), a V6
+  transaction being signed through the PCZT commands instead. `P2 = 0x05` selects the Sapling
+  variant and `0x80` continues an in-progress hash.
+- The header's `consensus_branch_id` must be one the protocol defines — Sprout's `0`, then
+  Overwinter through NU7 — or the transaction is refused with `IncorrectData` (`0x6A80`). The
+  transaction being signed (`HASH_INPUT_START`) must moreover have a version its branch can
+  carry: a V5 transaction under a branch that predates NU5 is refused the same way. A previous
+  transaction given to `GET_TRUSTED_INPUT` keeps the branch id the host sends, which for V4 does
+  not even enter its txid.
 - Anchor streaming depends on the version: a V5 Orchard bundle commits to its anchor in the
   hashed preimage, whereas in a V6 transaction both shielded bundles moved the anchor to the
   authorizing digest (ZIP 229), which a trusted input never computes — so the host streams no
@@ -89,6 +124,12 @@ Zcash deviations:
   transaction but refuses to sign it, with `ConditionsOfUseNotSatisfied` (`0x6986`) on the
   `0x48` that asks for the signature. Change is filtered out of the review, so an output
   returning to another account would otherwise be paid without ever being displayed.
+  Change information is accepted once per transaction; a second `P1 = 0xFF` is refused with
+  `ConditionsOfUseNotSatisfied`.
+- The path of the `0x48` that asks for the signature must be a five-component BIP-44 path with
+  purpose, coin type and account hardened; change and address index are the host's. Any other
+  shape, a ZIP-32 account path included, is refused with `ConditionsOfUseNotSatisfied`
+  (`0x6986`).
 - **The review runs on the first `HASH_SIGN`, not at the end of `HASH_INPUT_FINALIZE_FULL`.**
   `locktime` and `expiry_height` only reach the device with the eleven-byte header that
   `HASH_SIGN` carries, so reviewing earlier would ask the user to approve a transaction whose
@@ -107,10 +148,11 @@ Zcash deviations:
   - `0x00`: derive without displaying the address
   - `0x01`: display the transparent address for user approval
 - P2: `0x00`
-- Data: BIP32 path. Only the prefix is constrained — purpose `44'` or `32'`
+- Data: BIP32 path. With `P1 = 0x00`, only the prefix is constrained — purpose `44'` or `32'`
   followed by the Zcash coin type, both hardened — so the host may request the
-  two-component prefix itself, an account-level path, or any deeper one. A path
-  outside the two prefixes, or one whose prefix components are not hardened,
+  two-component prefix itself, an account-level path, or any deeper one. With `P1 = 0x01`, the
+  path must be one the app signs from: a five-component BIP-44 path with purpose, coin type and
+  account hardened. A path outside these rules, or one whose prefix components are not hardened,
   returns `IncorrectData`. The hardening bit is part of the comparison: the app
   declares `44'/133'` and `32'/133'`, so an unhardened prefix is a path the OS
   will not derive, and it answers that by taking the app down rather than with a
@@ -173,7 +215,8 @@ P1 `0x80` with empty data until the full response has been collected. For UFVK,
 the first two response bytes encode the total UTF-8 string length.
 
 The command displays the requested viewing key on the device before returning
-the first response chunk, naming the account the key belongs to alongside it.
+the first response chunk, naming the account the key belongs to alongside it,
+numbered from 1.
 User rejection returns `Deny` with an empty response.
 
 Both P2 modes derive an Orchard key, so this command draws on the same
@@ -287,6 +330,14 @@ Once even the digest no longer fits the budget the command returns
 `NotEnoughMemorySpace` (`0x6A84`). The budget holds two maximum-length memos,
 well above what a wallet-built transaction carries. The same applies to
 `INS_PCZT_IRONWOOD_ACTION`, which shares the rendering.
+
+An output may declare the account of the seed it pays, in an extension block at
+the end of its metadata packet. The device derives that account's viewing keys,
+shows the output as `Account index <n>` only if it decrypts under one of them,
+and refuses the transaction with `IncorrectData` otherwise; a fifth distinct
+account is refused with `NotEnoughMemorySpace`. The same applies to
+`INS_PCZT_IRONWOOD_ACTION`. See
+[PCZT_APDU.md](./PCZT_APDU.md#transfers-to-another-account-of-the-seed).
 
 For **V5 transactions**, `P2 = 0x01` on the last APDU marks the PCZT payload
 as complete. For **V6 transactions**, the last APDU of this command must use

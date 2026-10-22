@@ -1,4 +1,6 @@
-use crate::consts::{UNHARDENED_MASK, ZCASH_BIP44_COIN_TYPE, ZIP32_PATH_LEN, ZIP32_PURPOSE};
+use crate::consts::{
+    MAX_ACCOUNT_INDEX, UNHARDENED_MASK, ZCASH_BIP44_COIN_TYPE, ZIP32_PATH_LEN, ZIP32_PURPOSE,
+};
 use crate::utils::bip32_path::Bip32Path;
 use alloc::vec::Vec;
 use ledger_device_sdk::log::error;
@@ -82,6 +84,15 @@ impl core::fmt::Display for HexSlice<'_> {
     }
 }
 
+/// Refuse with `NotEnoughMemorySpace` unless `bytes` of contiguous heap are free, so later
+/// infallible allocations cannot exit the app.
+pub fn ensure_heap_headroom(bytes: usize) -> Result<(), AppSW> {
+    let mut probe: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    probe
+        .try_reserve_exact(bytes)
+        .map_err(|_| AppSW::NotEnoughMemorySpace)
+}
+
 /// Constant-time memory comparison to prevent timing attacks.
 #[inline(never)]
 pub fn secure_memcmp(buf1: &[u8], buf2: &[u8]) -> bool {
@@ -101,8 +112,8 @@ pub enum Bip44CheckMode {
     Full {
         is_change_path: bool,
     },
-    /// Purpose and coin type on a five-component BIP-44 path, or a ZIP-32 account path.
-    OnlyCoinType,
+    /// Transparent signing key: five-component BIP-44 path, hardened account, change/index free.
+    TransparentSigning,
     Zip32Only,
     /// Purpose and coin type only, at any depth: key export accepts account-level and deeper paths,
     /// so the app restricts its prefixes without dictating the shape.
@@ -116,7 +127,6 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
     const BIP44_COIN_TYPE_OFFSET: usize = 1;
     const BIP44_CHANGE_OFFSET: usize = 3;
     const BIP44_ADDRESS_INDEX_OFFSET: usize = 4;
-    const MAX_BIP44_ACCOUNT_RECOMMENDED: u32 = 100;
     const MAX_BIP44_ADDRESS_INDEX_RECOMMENDED: u32 = 50000;
 
     const BIP44_PREFIX_LEN: usize = 2;
@@ -168,8 +178,12 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
                 return false;
             }
         }
-        // Shielded derivations arrive as ZIP-32 account paths, transparent ones as BIP-44.
-        Bip44CheckMode::OnlyCoinType => {}
+        Bip44CheckMode::TransparentSigning => {
+            if is_zip32_shape {
+                error!("ZIP32 path where a transparent signing path is required");
+                return false;
+            }
+        }
     }
 
     if is_zip32_shape {
@@ -211,14 +225,14 @@ pub fn check_bip44_compliance(path: &Bip32Path, mode: Bip44CheckMode) -> bool {
         return false;
     }
 
-    if let Bip44CheckMode::Full { is_change_path } = mode {
-        if path[BIP44_ACCOUNT_OFFSET] & HARDENED == 0 {
-            error!("Bip44 account is not hardened");
-            return false;
-        }
+    if path[BIP44_ACCOUNT_OFFSET] & HARDENED == 0 {
+        error!("Bip44 account is not hardened");
+        return false;
+    }
 
+    if let Bip44CheckMode::Full { is_change_path } = mode {
         let account = path[BIP44_ACCOUNT_OFFSET] & UNHARDENED_MASK;
-        if account > MAX_BIP44_ACCOUNT_RECOMMENDED {
+        if account > MAX_ACCOUNT_INDEX {
             error!("Bad Bip44 account");
             return false;
         }

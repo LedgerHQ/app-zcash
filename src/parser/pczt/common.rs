@@ -1,6 +1,87 @@
 use super::*;
 
 impl PcztParser {
+    /// Reuses account material only after checking the complete cached path. The validation key is
+    /// derived on the first real spend and wiped before review; each real action still checks rk.
+    pub(super) fn prepare_shielded_account_keys(
+        &mut self,
+        ctx: &mut PcztParserCtx<'_>,
+        path: &Bip32Path,
+    ) -> Result<(), ParserError> {
+        let need_fvk = self.orchard_fvk.is_none();
+        let need_validation_key =
+            self.current_action.spend_value != 0 && self.orchard_validation_key.is_none();
+        // This must run on cache hits too: a different account must fail closed.
+        let sk = self
+            .orchard_spending_key(path)
+            .map_err(ParserError::from_sw)?;
+
+        let (fvk, validation_key) = match (need_fvk, need_validation_key) {
+            (true, true) => {
+                let (fvk, ask) =
+                    derive_orchard_fvk_and_ask_from_sk(sk).map_err(ParserError::from_sw)?;
+                (Some(fvk), Some(ask.ledger_validation_key()))
+            }
+            (true, false) => (
+                Some(derive_orchard_fvk_from_sk(sk).map_err(ParserError::from_sw)?),
+                None,
+            ),
+            (false, true) => (
+                None,
+                Some(
+                    derive_orchard_ask_from_sk(sk)
+                        .map_err(ParserError::from_sw)?
+                        .ledger_validation_key(),
+                ),
+            ),
+            (false, false) => (None, None),
+        };
+
+        if let Some(fvk) = fvk {
+            ctx.tx_info.orchard_decipher_keys = Some(
+                OrchardDecipherKeys::from_fvk(&fvk, ZCASH_NETWORK).map_err(ParserError::from_sw)?,
+            );
+            self.orchard_fvk = Some(RetainedOrchardFvk::new(fvk));
+        }
+        if validation_key.is_some() {
+            self.orchard_validation_key = validation_key;
+        }
+
+        if ctx.tx_info.orchard_decipher_keys.is_none() {
+            return Err(ParserError::from_sw(AppSW::BadState));
+        }
+        Ok(())
+    }
+
+    /// Returns recipient material only after matching a key from the checked account.
+    pub(super) fn validated_spend_recipient(
+        &self,
+        fvk: &OrchardFvk,
+        keys: &mut OrchardDecipherKeys,
+    ) -> Result<Option<ledger_zcash_crypto::orchard::ValidatedRecipient>, ParserError> {
+        let mut diversifier = [0u8; 11];
+        diversifier.copy_from_slice(&self.current_action.spend_recipient[..11]);
+        let mut claimed_pk_d = [0u8; 32];
+        claimed_pk_d.copy_from_slice(&self.current_action.spend_recipient[11..]);
+        let base = ledger_zcash_crypto::DiversifiedBase::derive(&diversifier)
+            .map_err(|_| ParserError::from_str("Bad PCZT spend recipient"))?;
+        for scope in [OrchardScope::External, OrchardScope::Internal] {
+            let ivk = keys
+                .incoming_viewing_key(fvk, scope)
+                .map_err(ParserError::from_sw)?;
+            if let Some(recipient) = ledger_zcash_crypto::orchard::ValidatedRecipient::from_ivk(
+                ivk,
+                &base,
+                &claimed_pk_d,
+            )
+            .map_err(|_| ParserError::from_sw(AppSW::TechnicalProblem))?
+            {
+                return Ok(Some(recipient));
+            }
+        }
+        Ok(None)
+    }
+
     pub(super) fn parse_pczt_header(
         &mut self,
         reader: &mut ByteReader<'_>,
@@ -42,6 +123,13 @@ impl PcztParser {
         }
 
         let consensus_branch_id = ok!(BranchId::try_from(branch_id_raw));
+        // Refuse, before any review, a V6 transaction under a pre-V6 branch or the reverse.
+        let tx_version = if is_v6 { TxVersion::V6 } else { TxVersion::V5 };
+        if !tx_version.valid_in_branch(consensus_branch_id) {
+            return Err(ParserError::from_str(
+                "PCZT transaction version not valid in its consensus branch",
+            ));
+        }
         let fallback_lock_time = self.read_optional_u32(reader)?;
         let expiry_height = ok!(reader.read_u32_le());
         let coin_type = ok!(reader.read_u32_le());
@@ -130,6 +218,7 @@ impl PcztParser {
             ironwood_vb
         );
 
+        // An output to another seed account is not change: it is shown and the change stays hidden.
         // In the case of internal transfers between pools (for example, transparent -> Orchard or Orchard -> transparent),
         // we have to display the internal outputs on the clear-sign screen.
         // Not in swap mode: there is no screen to reveal anything on, and clearing `is_change`
@@ -137,6 +226,11 @@ impl PcztParser {
         let has_external_output = ctx.tx_info.outputs.iter().any(|output| !output.is_change);
         let reveal_self_outputs = !has_external_output && ctx.swap_params.is_none();
         if reveal_self_outputs {
+            // Revealed change notes are displayed, so they must fit the display bound.
+            if ctx.tx_info.retained_shielded_outputs > MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER {
+                error!("Too many shielded outputs to reveal on the review");
+                return Err(ParserError::from_sw(AppSW::NotEnoughMemorySpace));
+            }
             debug!("PCZT has no external outputs; displaying self-transfer output");
             // PCZT does not read tx_info.outputs after review; this only affects UI filtering.
             for output in ctx.tx_info.outputs.iter_mut() {
@@ -150,6 +244,11 @@ impl PcztParser {
         let spent_from_private = spent_from_private || self.ironwood_spend_value_sum > 0;
         let transfer_type =
             TransferType::classify(spent_from_public, spent_from_private, &ctx.tx_info.outputs);
+        // No validation remains: wipe every IVK and the OVK before the review wait.
+        self.orchard_fvk = None;
+        self.orchard_validation_key = None;
+        ctx.tx_info.orchard_decipher_keys = None;
+        discard_own_account_keys(ctx.tx_info);
         // Swap mode substitutes validation for review, exactly as the legacy path does: the user
         // already approved the operation in the Exchange app, which drives this flow without
         // interaction, so prompting here would both stall it and ask about something the user has
@@ -162,6 +261,7 @@ impl PcztParser {
                 fees
             ));
         } else if !ok!(ui_display_tx(
+            ctx.comm,
             &ctx.tx_info.outputs,
             fees,
             transfer_type,

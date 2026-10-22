@@ -1,0 +1,87 @@
+---
+# rust-secp256k1 CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+name: Continuous Integration
+
+jobs:
+  Test:
+    runs-on: debian-trixie
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, msrv]
+        dep: [minimal, recent]
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6
+        with:
+          fetch-depth: 0 # Context required for bisectability tests.
+          persist-credentials: false
+      - uses: ./.forgejo/actions/setup-rbmt
+      - name: "Run tests"
+        run: cargo rbmt --lock-file ${{ matrix.dep }} test --toolchain ${{ matrix.toolchain }} --baseline ${{ forgejo.event.pull_request.base.sha || forgejo.event.before }}
+
+  Check:
+    runs-on: debian-trixie
+    strategy:
+      fail-fast: false
+      matrix:
+        command: [lint, docs, docsrs, "fmt --check"]
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6
+      - uses: ./.forgejo/actions/setup-rbmt
+      - name: "Run ${{ matrix.command }}"
+        run: cargo rbmt ${{ matrix.command }}
+
+  NoStd:
+    runs-on: debian-trixie
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/setup-rbmt
+      - name: "Install no-std toolchain"
+        working-directory: no_std_test
+        run: cargo rbmt toolchains
+      - name: "Run no-std tests"
+        working-directory: no_std_test
+        run: |
+          cargo rbmt run --toolchain=nightly --lock-file=existing -- run -Z build-std=core,alloc --release --target x86_64-unknown-linux-gnu | grep -q "Verified Successfully"
+          cargo rbmt run --toolchain=nightly --lock-file=existing -- run -Z build-std=core,alloc --release --target x86_64-unknown-linux-gnu --features=alloc | grep -q "Verified alloc Successfully"
+
+  ASAN:
+    runs-on: debian-trixie
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/setup-rbmt
+      - name: "Run Address Sanitizer tests"
+        env:
+          CC: "clang"
+          CFLAGS: "-fsanitize=address -fno-omit-frame-pointer"
+          RUSTFLAGS: "-Z sanitizer=address -C linker=clang -C force-frame-pointers=yes"
+          RUSTDOCFLAGS: "-Z sanitizer=address -C linker=clang -C force-frame-pointers=yes"
+          ASAN_OPTIONS: "detect_leaks=1:detect_invalid_pointer_pairs=1:detect_stack_use_after_return=1"
+        run: cargo rbmt test --toolchain=nightly -- -Z build-std --target x86_64-unknown-linux-gnu
+
+  MSAN:
+    runs-on: debian-trixie
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/setup-rbmt
+      - name: "Run Memory Sanitizer tests"
+        env:
+          CC: "clang"
+          CFLAGS: "-fsanitize=memory"
+          RUSTFLAGS: "-Z sanitizer=memory -Z sanitizer-memory-track-origins -C linker=clang"
+          RUSTDOCFLAGS: "-Z sanitizer=memory -Z sanitizer-memory-track-origins -C linker=clang"
+          MSAN_OPTIONS: "halt_on_error=0"
+        run: cargo rbmt test --toolchain=nightly -- -Z build-std --target x86_64-unknown-linux-gnu

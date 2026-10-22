@@ -13,7 +13,7 @@ use zcash_protocol::consensus::BranchId;
 use ledger_device_sdk::log::error;
 
 use crate::AppSW;
-use crate::parser::orchard_decipher::OrchardDecipherKeys;
+use crate::parser::orchard_decipher::{OrchardDecipherKeys, OwnAccountKeys};
 use crate::parser::personalization::ZCASH_IRONWOOD_HASH_PERSONALIZATION;
 use crate::parser::personalization::{
     ZCASH_OUTPUTS_HASH_PERSONALIZATION, ZCASH_PREVOUTS_HASH_PERSONALIZATION,
@@ -114,6 +114,8 @@ pub struct TxOutput {
     pub is_change: bool,
     pub memo: Option<TxOutputMemo>,
     pub pool: TxPool,
+    /// Seed account (ZIP 32) this output pays, proven by decryption; shown instead of an address.
+    pub own_account: Option<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -185,8 +187,11 @@ pub struct TxInfo {
     ///
     /// Counted rather than derived from `outputs` so the budget is spent before an address is
     /// encoded: what it bounds is the allocation, so it cannot be read from the allocations already
-    /// made. Change outputs are excluded — only one is ever accepted, and it is kept off the review.
+    /// made. Change notes are counted in `retained_shielded_outputs`.
     pub displayed_shielded_outputs: usize,
+    /// Shielded outputs accepted, displayed and change alike; claimed before encoding, as above.
+    pub retained_shielded_outputs: usize,
+    /// Transparent change seen; at most one, and never beside a shielded change note.
     pub is_change_found: bool,
     pub change_pk_hash: Option<[u8; 20]>,
     /// Account component of the change path the host declared, hardening bit included.
@@ -211,6 +216,8 @@ pub struct TxInfo {
     pub branch_id_raw: u32,
 
     pub orchard_decipher_keys: Option<OrchardDecipherKeys>,
+    /// IVKs of the other seed accounts paid, derived once each; wiped with the source keys.
+    pub own_account_keys: Vec<OwnAccountKeys>,
 }
 
 /// Refuse a signature that would spend from an account other than the one the change returns to.

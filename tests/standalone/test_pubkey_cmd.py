@@ -255,6 +255,29 @@ def test_get_public_key_rejects_out_of_prefix_path(backend, path):
     assert len(e.value.data) == 0
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "m/44'/133'",
+        "m/44'/133'/0'",
+        "m/44'/133'/0/0/0",
+        "m/44'/133'/0'/0/0/0",
+        "m/32'/133'/0'",
+    ],
+    ids=["prefix", "account_level", "unhardened_account", "too_deep", "zip32_account"],
+)
+def test_get_public_key_display_refuses_unspendable_path(backend, path):
+    """An address is shown for confirmation only at a path the app signs from."""
+    client = ZcashCommandSender(backend)
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        with client.get_public_key_with_confirmation(path=path):
+            pass
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert len(e.value.data) == 0
+
+
 # The Orchard FVK is derived from this path and exposes the account's whole shielded history, so the
 # restriction applies in this mode exactly as it does in the unified one — a viewing key must not be
 # exported for a path the app has no derivation for.

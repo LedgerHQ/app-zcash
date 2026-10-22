@@ -1,0 +1,43 @@
+---
+name: Cross Compilation
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  Cross:
+    name: ${{ matrix.arch.name }}
+    runs-on: debian-trixie
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          # Non-native architectures run the test binaries with qemu-user
+          # instead of relying on binfmt_misc registrations on the runner.
+          - {name: aarch64, rust: aarch64-unknown-linux-gnu, gcc: aarch64-linux-gnu-gcc, runner: "qemu-aarch64 -L /usr/aarch64-linux-gnu"}
+          - {name: i686, rust: i686-unknown-linux-gnu, gcc: i686-linux-gnu-gcc, runner: ""}
+          - {name: x86_64, rust: x86_64-unknown-linux-gnu, gcc: gcc, runner: ""}
+          - {name: arm, rust: arm-unknown-linux-gnueabi, gcc: arm-linux-gnueabi-gcc, runner: "qemu-arm -L /usr/arm-linux-gnueabi"}
+          - {name: armv7, rust: arm-unknown-linux-gnueabihf, gcc: arm-linux-gnueabihf-gcc, runner: "qemu-arm -L /usr/arm-linux-gnueabihf"}
+          - {name: powerpc64le, rust: powerpc64le-unknown-linux-gnu, gcc: powerpc64le-linux-gnu-gcc, runner: "qemu-ppc64le -L /usr/powerpc64le-linux-gnu"}
+          - {name: riscv64, rust: riscv64gc-unknown-linux-gnu, gcc: riscv64-linux-gnu-gcc, runner: "qemu-riscv64 -L /usr/riscv64-linux-gnu"}
+          - {name: s390x, rust: s390x-unknown-linux-gnu, gcc: s390x-linux-gnu-gcc, runner: "qemu-s390x -L /usr/s390x-linux-gnu"}
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6
+      - uses: ./.forgejo/actions/setup-rbmt
+      - name: "Install target"
+        run: rustup target add --toolchain $(cargo rbmt toolchains --stable) ${{ matrix.arch.rust }}
+      - name: "Run tests"
+        env:
+          RUSTFLAGS: "-C linker=${{ matrix.arch.gcc }}"
+        # Cross compiling doctests is a nightly feature, limiting to just unit and integration tests.
+        # Point cargo's runner at qemu (provided by the CI runner image) so the cross-compiled
+        # binaries can execute regardless of the binfmt_misc setup of the runner machine.
+        run: |
+          if [ -n "${{ matrix.arch.runner }}" ]; then
+            export "CARGO_TARGET_$(echo '${{ matrix.arch.rust }}' | tr 'a-z-' 'A-Z_')_RUNNER=${{ matrix.arch.runner }}"
+          fi
+          cargo rbmt run -- test --target ${{ matrix.arch.rust }} --tests
