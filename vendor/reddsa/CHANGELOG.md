@@ -2,6 +2,47 @@
 
 Entries are listed in reverse chronological order.
 
+## Unreleased
+
+## 0.6.1 - 2026-09-25
+
+* The `serde` feature no longer enables `serde/std`, so it can be used in
+  `no_std` builds.
+
+## 0.6.0 - 2026-09-25
+
+* MSRV is now 1.88.0
+* Migrate `group` to `0.14`, `jubjub` to `0.11`, `rand_core` to `0.10`
+  and `pasta_curves` to `0.6`. RNG parameters are now bounded by
+  `rand_core::Rng + CryptoRng` instead of `RngCore + CryptoRng`.
+* Breaking: the `frost` feature was removed; the FROST ciphersuites will be
+  moved to the [`frost`](https://github.com/ZcashFoundation/frost) repository.
+* Added an `internal` feature which exposes internal functions required to e.g.
+  implement the FROST ciphersuites. It is not covered by SemVer guarantees.
+* `SigningKey` is no longer `Copy`. It still implements `Clone`.
+* Removed `impl From<SigningKey<T>> for [u8; 32]`; use the new
+  `SigningKey::to_bytes` method instead, which makes extraction of the secret
+  scalar explicit at the call site.
+* Removed `impl TryFrom<[u8; 32]> for SigningKey<T>`; use the new
+  `SigningKey::from_bytes` method instead.
+* When the `zeroize` feature is enabled, `SigningKey` implements
+  `zeroize::Zeroize` and `zeroize::ZeroizeOnDrop` and erases its secret scalar
+  on drop, and `SigningKey::new`, `SigningKey::sign`, `SigningKey::to_bytes`,
+  `SigningKey::from_bytes` and serde (de)serialization of `SigningKey` erase
+  their secret intermediates before returning. Erasure is best effort: it does
+  not cover the internal state of the hash function, or copies that the
+  compiler makes in registers or on the stack.
+* The `zeroize` feature now also enables `jubjub/zeroize` and
+  `pasta_curves/zeroize`.
+
+## 0.5.2
+
+* The `Debug` implementation of `SigningKey` now redacts the signing key value.
+  Thanks @Zk-nd3r for reporting the issue.
+* Updated `frost-rerandomized` to 3.0.0. Note that a lot of breaking changes are
+  included under the `frost` feature; refer to the `frost-rerandomized`
+  changelog.
+
 ## 0.5.1
 
 * MSRV is now 1.65.0
@@ -62,4 +103,3 @@ relative to `redjubjub 0.4.0`:
     specification) should continue to use previous versions of this crate, until
     they can either move the checks into their own code, or migrate their
     consensus rules to match the RedDSA specification.
-

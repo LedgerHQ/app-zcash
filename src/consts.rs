@@ -1,3 +1,5 @@
+use zcash_protocol::consensus::NetworkType;
+
 use crate::AppSW;
 
 pub const ZCASH_TICKER: &str = "ZEC";
@@ -15,12 +17,18 @@ pub const MAX_PCZT_SCRIPT_SIZE: usize = 252;
 pub const MAX_OUTPUTS_NUMBER: usize = 8;
 pub const SIGHASH_ALL: u8 = 0x01;
 pub const UNHARDENED_MASK: u32 = 0x7FFF_FFFF;
+// Highest account index of the user's, for change paths and declared PCZT output accounts.
+pub const MAX_ACCOUNT_INDEX: u32 = 100;
 pub const ZIP32_PATH_LEN: usize = 3;
 pub const ZIP32_PURPOSE: u32 = 32;
-#[cfg(not(feature = "testnet"))]
+#[cfg(not(feature = "variant_testnet"))]
 pub const ZCASH_BIP44_COIN_TYPE: u32 = 133;
-#[cfg(feature = "testnet")]
+#[cfg(feature = "variant_testnet")]
 pub const ZCASH_BIP44_COIN_TYPE: u32 = 1;
+#[cfg(not(feature = "variant_testnet"))]
+pub const ZCASH_NETWORK: NetworkType = NetworkType::Main;
+#[cfg(feature = "variant_testnet")]
+pub const ZCASH_NETWORK: NetworkType = NetworkType::Test;
 
 // Transparent inputs one transaction may spend.
 //
@@ -65,6 +73,20 @@ pub const MAX_PCZT_IRONWOOD_ACTIONS_NUMBER: usize = 32;
 // toward the point where the SDK's `nbPairs: fields.len() as u8` truncates and draws an empty review
 // that still collects an approval; a raise therefore belongs with a fix for that, not before it.
 pub const MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER: usize = 4;
+
+// Displayed outputs plus hidden change notes, both shielded pools. Six (one recipient, five change
+// notes) fits Nano X; heap exhaustion is refused by the headroom guards, not by this count.
+pub const MAX_PCZT_SHIELDED_RETAINED_OUTPUTS_NUMBER: usize = 6;
+
+// Distinct other seed accounts one transaction may pay; each costs one Orchard derivation.
+pub const MAX_PCZT_OWN_ACCOUNTS: usize = MAX_PCZT_SHIELDED_DISPLAYED_OUTPUTS_NUMBER;
+
+// Tag of the output-metadata extension naming the ZIP 32 account an output pays.
+pub const PCZT_OUTPUT_EXTENSION_ACCOUNT: u8 = 0x01;
+
+// Free heap required once signing records are reserved: an infallible allocation on the key or
+// decryption path exits the app, so refusing early keeps the failure a status word.
+pub const SHIELDED_ACTIONS_HEAP_HEADROOM: usize = 2560;
 
 // Highest action count the signing instructions can address, P2 carrying the action index in a
 // single byte. A measurement build raises both shielded bounds to it so that a run ends where the

@@ -1,5 +1,33 @@
 # Changelog
 
+## 3.10.0
+
+Performance and hardening release.
+
+- Accept the NU7 consensus branch id, and refuse a transaction version its consensus branch
+  cannot carry
+- Refuse, from NU6.3, a transaction that moves value into the Orchard pool (ZIP 258)
+- Accept a shielded change split across several notes of the account being spent
+- Recognize a shielded transfer to another account of the same seed, declared by the host and
+  shown only if the output decrypts under that account's keys
+- Add a testnet build variant (`variant_testnet`)
+- Speed up shielded validation by reusing the keys and note material already derived for the
+  transaction
+- Use the SDK's new I/O path (`io_new`, SDK 1.41.0): a reply leaves as soon as its command
+  completes, and a locked device or an ongoing review refuses other commands
+- Reject an APDU whose payload length differs from its declared length
+- Refuse with `NotEnoughMemorySpace`, instead of exiting the app, a transaction the heap cannot
+  hold
+- Require each signing path to have the shape of the key it names: BIP-44 for a transparent
+  signature, ZIP-32 for an Orchard or Ironwood spend authorization
+- Harden the swap flow: an Exchange value or reference address that does not fit its buffer is
+  refused, and every failure returns to Exchange
+- Wipe more of the secrets a note decryption handles, and drop the viewing keys once validation
+  is over
+- Move to the `zcash_protocol` 0.11 crate set and re-base the vendored `orchard`,
+  `sapling-crypto` and `reddsa` onto 0.16, 0.9 and 0.6.1
+- Security fixes
+
 ## 3.9.4
 
 - Initialize the BLAKE2b context that hashes a shielded output's memo for the review. A memo

@@ -8,6 +8,7 @@ app_flex.json
 
 # Automatic generated NBGL glyphs
 glyphs/home_nano_nbgl.png
+glyphs/home_nano_nbgl_test.png
 
 # Temporary directory with snapshots taken during test runs
 snapshots-tmp/

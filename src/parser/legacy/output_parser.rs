@@ -216,6 +216,7 @@ impl LegacyOutputParser {
                                 is_change,
                                 memo: None,
                                 pool: TxPool::Transparent,
+                                own_account: None,
                             });
 
                             if is_change {

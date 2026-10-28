@@ -11,9 +11,9 @@
 
 [package]
 edition = "2021"
-rust-version = "1.85.1"
+rust-version = "1.88"
 name = "orchard"
-version = "0.15.5"
+version = "0.16.0"
 authors = [
     "Sean Bowe <ewillbefull@gmail.com>",
     "Jack Grigg <thestr4d@gmail.com>",
@@ -55,6 +55,7 @@ default = [
     "circuit",
     "multicore",
     "std",
+    "zeroize",
 ]
 dev-graph = [
     "halo2_proofs?/dev-graph",
@@ -70,16 +71,24 @@ std = [
 test-dependencies = [
     "proptest",
     "rand/std",
+    "rand/std_rng",
 ]
 ledger = [
     "dep:ledger_zcash_crypto",
     "reddsa/ledger",
+    "zeroize",
 ]
 unstable-frost = []
 unstable-voting-circuits = []
 verifier-fingerprint = [
     "circuit",
     "halo2_proofs/unstable-verifier-fingerprint",
+]
+zeroize = [
+    "dep:zeroize",
+    "pasta_curves/zeroize",
+    "reddsa/zeroize",
+    "zip32/zeroize",
 ]
 
 [lib]
@@ -90,6 +99,10 @@ bench = false
 [[test]]
 name = "builder"
 path = "tests/builder.rs"
+
+[[test]]
+name = "platform_smoke"
+path = "tests/platform_smoke.rs"
 
 [[bench]]
 name = "circuit"
@@ -104,6 +117,12 @@ harness = false
 required-features = ["circuit"]
 
 [[bench]]
+name = "orchard_k11_prover"
+path = "benches/orchard_k11_prover.rs"
+harness = false
+required-features = ["circuit"]
+
+[[bench]]
 name = "small"
 path = "benches/small.rs"
 harness = false
@@ -113,7 +132,7 @@ path = "../../ledger_zcash_crypto"
 optional = true
 
 [dependencies.aes]
-version = "0.8"
+version = "0.9"
 
 [dependencies.bitvec]
 version = "1"
@@ -129,11 +148,11 @@ features = ["alloc"]
 default-features = false
 
 [dependencies.ff]
-version = "0.13"
+version = "0.14"
 default-features = false
 
 [dependencies.fpe]
-version = "0.6"
+version = "0.7"
 features = ["alloc"]
 default-features = false
 
@@ -141,15 +160,15 @@ default-features = false
 version = "0.1"
 
 [dependencies.group]
-version = "0.13"
+version = "0.14"
 
 [dependencies.halo2_gadgets]
-version = "0.5"
+version = "0.6"
 optional = true
 default-features = false
 
 [dependencies.halo2_proofs]
-version = "0.3.5"
+version = "0.4"
 features = [
     "batch",
     "floor-planner-v1-legacy-pdqsort",
@@ -163,11 +182,11 @@ features = ["alloc"]
 default-features = false
 
 [dependencies.image]
-version = "0.24"
+version = "0.25"
 optional = true
 
 [dependencies.incrementalmerkletree]
-version = "0.8.1"
+version = "0.9"
 
 [dependencies.lazy_static]
 version = "1"
@@ -181,7 +200,7 @@ version = "0.11"
 default-features = false
 
 [dependencies.pasta_curves]
-version = "0.5.2"
+version = "0.6"
 features = ["glv"]
 
 [dependencies.plotters]
@@ -189,23 +208,23 @@ version = "0.3.0"
 optional = true
 
 [dependencies.poseidon]
-version = "0.1"
+version = "0.2"
 package = "halo2_poseidon"
 
 [dependencies.proptest]
-version = ">=1.0.0, <1.7.0"
+version = "1"
 optional = true
 
 [dependencies.rand]
-version = "0.8"
+version = "0.10"
 default-features = false
 
 [dependencies.rand_core]
-version = "0.6"
+version = "0.10"
 default-features = false
 
 [dependencies.reddsa]
-version = "0.5"
+version = "0.6"
 default-features = false
 
 [dependencies.serde]
@@ -214,7 +233,7 @@ features = ["derive"]
 default-features = false
 
 [dependencies.sinsemilla]
-version = "0.1"
+version = "0.2"
 
 [dependencies.subtle]
 version = "2.6"
@@ -229,44 +248,56 @@ default-features = false
 version = "0.1.1"
 
 [dependencies.zcash_note_encryption]
-version = "0.4.2"
+version = "0.5.1"
 
 [dependencies.zcash_spec]
 version = "0.2.1"
 
 [dependencies.zeroize]
-version = "1.6.0"
+version = "1"
+optional = true
 default-features = false
 
 [dependencies.zip32]
-version = "0.2.0"
+version = "0.3"
 default-features = false
 
 [dev-dependencies.criterion]
-version = "0.4"
+version = "0.5"
 
 [dev-dependencies.halo2_gadgets]
-version = "0.5"
+version = "0.6"
 features = ["test-dependencies"]
 
 [dev-dependencies.hex]
 version = "0.4"
 
 [dev-dependencies.incrementalmerkletree]
-version = "0.8.1"
+version = "0.9"
 features = ["test-dependencies"]
 
 [dev-dependencies.proptest]
-version = ">=1.0.0, <1.7.0"
+version = "1"
 
-[dev-dependencies.rand_chacha]
-version = "0.3"
+[dev-dependencies.rand]
+version = "0.10"
+features = [
+    "chacha",
+    "std",
+    "std_rng",
+    "sys_rng",
+    "thread_rng",
+]
 
 [dev-dependencies.shardtree]
-version = "0.6"
+version = "0.8"
+
+[dev-dependencies.sinsemilla]
+version = "0.2"
+features = ["test-dependencies"]
 
 [dev-dependencies.zcash_note_encryption]
-version = "0.4.2"
+version = "0.5.1"
 features = ["pre-zip-212"]
 
 [target."cfg(unix)".dev-dependencies.inferno]
@@ -278,7 +309,7 @@ features = [
 default-features = false
 
 [target."cfg(unix)".dev-dependencies.pprof]
-version = "0.11"
+version = "0.15"
 features = [
     "criterion",
     "flamegraph",

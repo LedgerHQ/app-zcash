@@ -33,7 +33,7 @@ mkdir -p "$VENDOR_DIR"
 
 existing=()
 for entry in "${VENDORED_DEPS[@]}"; do
-    IFS='|' read -r name _ _ <<< "$entry"
+    IFS='|' read -r name _ _ _ <<< "$entry"
     [[ -d "$VENDOR_DIR/$name" ]] && existing+=("$name")
 done
 
@@ -52,7 +52,7 @@ fi
 git_sourced=()
 
 for entry in "${VENDORED_DEPS[@]}"; do
-    IFS='|' read -r name kind coord <<< "$entry"
+    IFS='|' read -r name kind coord sha256 <<< "$entry"
 
     dest="$VENDOR_DIR/$name"
     patch_file="$SCRIPT_DIR/patches/${name}_dep.patch"
@@ -68,7 +68,7 @@ for entry in "${VENDORED_DEPS[@]}"; do
     fi
 
     echo "Fetching $name base ($kind $coord)..."
-    materialize_base "$name" "$kind" "$coord" "$dest"
+    materialize_base "$name" "$kind" "$coord" "$sha256" "$dest"
 
     if [[ ! -f "$patch_file" ]]; then
         echo "No patch for $name; leaving the base as fetched."

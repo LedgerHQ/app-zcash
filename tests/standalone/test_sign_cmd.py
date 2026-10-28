@@ -22,6 +22,9 @@ from ragger.navigator.navigation_scenario import NavigationScenarioData, UseCase
 NU5_BRANCH_ID = 0xC2D6D0B4
 NU6_2_BRANCH_ID = 0x5437F330
 NU6_3_BRANCH_ID = 0x37A5165B
+NU7_BRANCH_ID = 0x77190AD9
+# Next to the NU7 id, but not a branch id the protocol defines.
+UNDEFINED_BRANCH_ID = 0x77190AD8
 
 
 def extension(cls):
@@ -334,6 +337,219 @@ def test_sign_tx_v5_nu6_3_trusted_input_and_tx(backend, scenario_navigator: Navi
             input_amounts=[input_amount],
             sighash_type=sighash_type,
         )
+
+
+def test_sign_tx_v5_nu7_trusted_input_and_tx(backend, scenario_navigator: NavigateWithScenario):
+    locktime = 0
+    expiry = 0
+    sighash_type = 0x01
+    input_amount = 81_630_485
+    send_amount = 81_628_565
+    path = "m/44'/133'/0'/0/1"
+    input_script_pubkey = bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac")
+    output_script_pubkey = bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac")
+
+    prevout_tx_bytes = _build_transparent_tx_v5(
+        locktime=locktime,
+        expiry=expiry,
+        branch_id=NU7_BRANCH_ID,
+        inputs=[
+            {
+                "prev_txid": bytes.fromhex("11" * 32),
+                "prev_vout": 0,
+                "script": bytes.fromhex("6a"),
+                "sequence": 0xFFFFFFFF,
+            }
+        ],
+        outputs=[
+            {
+                "value": input_amount,
+                "script": input_script_pubkey,
+            }
+        ],
+    )
+    prevout_txid = nu5_txid_digests(prevout_tx_bytes)["final_digest"]
+
+    tx_bytes = _build_transparent_tx_v5(
+        locktime=locktime,
+        expiry=expiry,
+        branch_id=NU7_BRANCH_ID,
+        inputs=[
+            {
+                "prev_txid": prevout_txid,
+                "prev_vout": 0,
+                "script": input_script_pubkey,
+                "sequence": 0,
+            }
+        ],
+        outputs=[
+            {
+                "value": send_amount,
+                "script": output_script_pubkey,
+            }
+        ],
+    )
+
+    assert prevout_tx_bytes[8:12] == struct.pack("<I", NU7_BRANCH_ID)
+    assert tx_bytes[8:12] == struct.pack("<I", NU7_BRANCH_ID)
+
+    client = ZcashCommandSender(backend)
+
+    trusted_input = client.get_trusted_input(prevout_tx_bytes, 0).data
+    trusted_txid, trusted_input_idx, trusted_amount, _, _ = unpack_trusted_input_response(trusted_input)
+    assert trusted_txid == prevout_txid
+    assert trusted_input_idx == 0
+    assert trusted_amount == input_amount
+
+    response = client.get_public_key(path=path).data
+    public_key, _, _ = unpack_get_public_key_response(response)
+
+    client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input])
+
+    with client.hash_sign_header(locktime=locktime, expiry=expiry, sighash_type=sighash_type):
+        scenario_navigator.review_approve()
+
+    resp = client.hash_sign(
+        path=path,
+        locktime=locktime,
+        expiry=expiry,
+        sighash_type=sighash_type,
+    ).data
+    signature = resp[:-1]
+    assert resp[-1] == sighash_type
+
+    assert check_tx_v5_signature_validity(
+        public_key,
+        signature,
+        tx_bytes,
+        input_index=0,
+        input_amounts=[input_amount],
+        sighash_type=sighash_type,
+    )
+
+    with pytest.raises(BadSignatureError):
+        check_tx_v5_signature_validity(
+            public_key,
+            signature,
+            _with_v5_branch_id(tx_bytes, NU6_2_BRANCH_ID),
+            input_index=0,
+            input_amounts=[input_amount],
+            sighash_type=sighash_type,
+        )
+
+
+def test_sign_tx_v5_undefined_branch_id_rejected(backend):
+    prevout_tx_bytes = _build_transparent_tx_v5(
+        locktime=0,
+        expiry=0,
+        branch_id=UNDEFINED_BRANCH_ID,
+        inputs=[
+            {
+                "prev_txid": bytes.fromhex("11" * 32),
+                "prev_vout": 0,
+                "script": bytes.fromhex("6a"),
+                "sequence": 0xFFFFFFFF,
+            }
+        ],
+        outputs=[
+            {
+                "value": 81_630_485,
+                "script": bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"),
+            }
+        ],
+    )
+
+    client = ZcashCommandSender(backend)
+
+    # An undefined branch id aborts the legacy header parse.
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.get_trusted_input(prevout_tx_bytes, 0)
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+SPROUT_BRANCH_ID = 0
+CANOPY_BRANCH_ID = 0xE9FF75A6
+
+
+def _trusted_v5_prevout(client: ZcashCommandSender, branch_id: int = NU5_BRANCH_ID) -> tuple[bytes, bytes]:
+    """A trusted input for a V5 previous transaction under `branch_id`, and that transaction's txid."""
+    prevout_tx_bytes = _build_transparent_tx_v5(
+        locktime=0,
+        expiry=0,
+        branch_id=branch_id,
+        inputs=[{"prev_txid": bytes.fromhex("11" * 32), "prev_vout": 0, "script": bytes.fromhex("6a"),
+                 "sequence": 0xFFFFFFFF}],
+        outputs=[{"value": 81_630_485, "script": bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac")}],
+    )
+    trusted_input = client.get_trusted_input(prevout_tx_bytes, 0).data
+    return trusted_input, nu5_txid_digests(prevout_tx_bytes)["final_digest"]
+
+
+@pytest.mark.parametrize(
+    "branch_id",
+    [SPROUT_BRANCH_ID, CANOPY_BRANCH_ID, UNDEFINED_BRANCH_ID],
+    ids=["sprout", "canopy", "undefined"],
+)
+def test_sign_tx_v5_branch_that_cannot_carry_it_is_rejected(backend, branch_id):
+    """Refused at HASH_INPUT: the network could never mine a V5 transaction under this branch."""
+    client = ZcashCommandSender(backend)
+    trusted_input, prevout_txid = _trusted_v5_prevout(client)
+    tx_bytes = _build_transparent_tx_v5(
+        locktime=0,
+        expiry=0,
+        branch_id=branch_id,
+        inputs=[{"prev_txid": prevout_txid, "prev_vout": 0,
+                 "script": bytes.fromhex("76a914ca3ba17907dde979bf4e88f5c1be0ddf0847b25d88ac"), "sequence": 0}],
+        outputs=[{"value": 81_628_565, "script": bytes.fromhex("76a91431352ad6f20315d1233d6e6da7ec1d6958f2bf1988ac")}],
+    )
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        client.hash_input(transaction=tx_bytes, trusted_inputs=[trusted_input])
+
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+    assert client.get_version().status == 0x9000
+
+
+# Version and version group id as HASH_INPUT_START carries them, before the consensus branch id.
+_V4_VERSION_AND_GROUP = "0400008085202f89"
+_V5_VERSION_AND_GROUP = "050000800a27a726"
+
+
+@pytest.mark.parametrize(
+    "version_and_group, branch_id, accepted",
+    [
+        (_V4_VERSION_AND_GROUP, NU6_3_BRANCH_ID, False),
+        (_V4_VERSION_AND_GROUP, NU7_BRANCH_ID, False),
+        (_V5_VERSION_AND_GROUP, NU7_BRANCH_ID, True),
+    ],
+    ids=["v4_under_nu6_3", "v4_under_nu7", "v5_under_nu7"],
+)
+def test_sign_tx_signs_v5_only(backend, version_and_group, branch_id, accepted):
+    """A V4 header is refused under any branch while the same packet with a V5 header is accepted."""
+    transport = ZcashCommandSender(backend)
+    header = version_and_group + struct.pack("<I", branch_id).hex() + "01"
+    apdu = "e0440005" + f"{len(bytes.fromhex(header)):02x}" + header
+
+    if accepted:
+        sw, _ = transport.exchange_raw(apdu)
+        assert sw == 0x9000
+        return
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw(apdu)
+    assert e.value.status == Errors.SW_INVALID_TRANSACTION
+
+
+def test_trusted_input_keeps_the_branch_id_of_a_previous_transaction(backend):
+    """A previous transaction only lends an output, so its branch id is not checked against its version."""
+    client = ZcashCommandSender(backend)
+
+    trusted_input, prevout_txid = _trusted_v5_prevout(client, SPROUT_BRANCH_ID)
+
+    trusted_txid, trusted_input_idx, _, _, _ = unpack_trusted_input_response(trusted_input)
+    assert trusted_txid == prevout_txid
+    assert trusted_input_idx == 0
 
 
 def test_sign_tx_v5_change(backend, scenario_navigator):
@@ -1111,6 +1327,8 @@ def _open_legacy_change_info_state(transport) -> None:
         pytest.param("058000002c80000085000000020000000100000000", id="unhardened_account"),
         # The converse: the address index hardened where BIP-44 leaves it plain.
         pytest.param("058000002c80000085800000020000000180000000", id="hardened_address_index"),
+        # The testnet coin type, which only the testnet build accepts.
+        pytest.param("058000002c80000001800000020000000100000000", id="testnet_coin_type"),
     ],
 )
 def test_legacy_change_info_rejects_non_change_path(backend, change_path):
@@ -1147,6 +1365,31 @@ def test_legacy_change_info_accepts_the_vector_change_path(backend):
         "e04aff00" + f"{len(bytes.fromhex(_LEGACY_VALID_CHANGE_PATH)):02x}" + _LEGACY_VALID_CHANGE_PATH
     )
     assert sw == 0x9000
+
+
+@pytest.mark.parametrize(
+    "second_path",
+    [
+        pytest.param(_LEGACY_VALID_CHANGE_PATH, id="same_path"),
+        # Account 1', a change path of another account.
+        pytest.param("058000002c80000085800000010000000100000000", id="other_account"),
+    ],
+)
+def test_legacy_change_info_refuses_a_second_declaration(backend, second_path):
+    """One change declaration per transaction: a second one is refused, whatever its path."""
+    transport = ZcashCommandSender(backend)
+
+    _open_legacy_change_info_state(transport)
+
+    sw, _ = transport.exchange_raw(
+        "e04aff00" + f"{len(bytes.fromhex(_LEGACY_VALID_CHANGE_PATH)):02x}" + _LEGACY_VALID_CHANGE_PATH
+    )
+    assert sw == 0x9000
+
+    with pytest.raises(ExceptionRAPDU) as e:
+        transport.exchange_raw("e04aff00" + f"{len(bytes.fromhex(second_path)):02x}" + second_path)
+
+    assert e.value.status == Errors.SW_CONDITIONS_OF_USE_NOT_SATISFIED
 
 
 def test_legacy_continuation_rejects_a_round_before_the_review(backend):

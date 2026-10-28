@@ -99,6 +99,8 @@ pub enum SwapAppErrorCode {
     UnexpectedExternalOutputCount = 0x06,
     BufferOverflow = 0x07,
     UnsupportedDestinationExtraId = 0x08,
+    OwnAccountDestination = 0x09,
+    EmptyDestination = 0x0A,
 }
 
 impl SwapAppErrorCodeTrait for SwapAppErrorCode {
@@ -106,6 +108,16 @@ impl SwapAppErrorCodeTrait for SwapAppErrorCode {
     fn as_u8(self) -> u8 {
         self as u8
     }
+}
+
+/// Refusal of an output paying another account of the seed, which a swap never sends to.
+pub fn own_account_destination_error() -> SwapError<SwapAppErrorCode> {
+    error!("Swap output pays another account of the seed");
+    SwapError::with_message(
+        SwapErrorCommonCode::ErrorWrongDestination,
+        SwapAppErrorCode::OwnAccountDestination,
+        "Destination is another account of the seed".to_string(),
+    )
 }
 
 /// Validates the transaction to be signed against the Exchange's reference parameters: the amount and
@@ -153,6 +165,11 @@ pub fn check_swap_params(
     }
 
     let output = external_outputs[0];
+
+    // A swap pays the Exchange destination, never another account of the seed.
+    if output.own_account.is_some() {
+        return Err(own_account_destination_error());
+    }
 
     // Validate amount
     // Parse amount (u64 from big-endian bytes, right aligned in 16-byte buffer)
@@ -232,6 +249,15 @@ pub fn check_swap_params(
                 "Failed to UTF-8 decode destination str".to_string(),
             )
         })?;
+
+    if swap_dest.is_empty() {
+        error!("Swap destination is empty");
+        return Err(SwapError::with_message(
+            SwapErrorCommonCode::ErrorWrongDestination,
+            SwapAppErrorCode::EmptyDestination,
+            "Empty destination".to_string(),
+        ));
+    }
 
     if output.address != swap_dest {
         error!(
@@ -320,11 +346,9 @@ fn check_address(params: &CheckAddressParams) -> Result<bool, SwapAppErrorCode> 
     )
     .map_err(|_e| SwapAppErrorCode::FailedToDeriveAddress)?;
 
-    // Same prefix restriction the APDU key-export path applies. Exchange is a trusted caller, so
-    // this is defense in depth — but the path it forwards originates with the host, and refusing an
-    // out-of-prefix one here costs nothing.
-    if !check_bip44_compliance(&bip32_path, Bip44CheckMode::PrefixOnly) {
-        error!("Swap check_address path outside the app's derivation prefixes");
+    // Only an address this app can later sign from is certified as the user's.
+    if !check_bip44_compliance(&bip32_path, Bip44CheckMode::TransparentSigning) {
+        error!("Swap check_address path is not a transparent signing path");
         return Err(SwapAppErrorCode::FailedToDeriveAddress);
     }
 
@@ -385,4 +409,145 @@ fn get_printable_amount(
     debug!("Formatted amount: {:?} ", printable.as_str());
 
     Ok(printable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_address, check_swap_params};
+    use crate::tx::{TxOutput, TxPool};
+    use crate::utils::base58_address::{Base58Address, ToBase58Address};
+    use crate::utils::bip32_path::Bip32Path;
+    use crate::utils::extended_public_key::ExtendedPublicKey;
+    use alloc::string::String;
+    use alloc::vec;
+    use ledger_device_sdk::libcall::swap::{CheckAddressParams, CreateTxParams};
+    use ledger_device_sdk::testing::TestType;
+
+    const AMOUNT: u64 = 100_000;
+    const FEE: u64 = 1_000;
+    const DESTINATION: &str = "t1b1Rbw2shhJkP6MCnCyxCPuyFedHrwKty8";
+
+    fn params(destination: &str) -> CreateTxParams {
+        let mut params = CreateTxParams::default();
+        let amount_start = params.amount.len() - 8;
+        params.amount[amount_start..].copy_from_slice(&AMOUNT.to_be_bytes());
+        let fee_start = params.fee_amount.len() - 8;
+        params.fee_amount[fee_start..].copy_from_slice(&FEE.to_be_bytes());
+        params.dest_address[..destination.len()].copy_from_slice(destination.as_bytes());
+        params.dest_address_len = destination.len();
+        params
+    }
+
+    fn output(address: &str, own_account: Option<u32>) -> TxOutput {
+        TxOutput {
+            amount: AMOUNT,
+            address: String::from(address),
+            is_change: false,
+            memo: None,
+            pool: TxPool::Orchard,
+            own_account,
+        }
+    }
+
+    #[test_case]
+    const MATCHING_DESTINATION_IS_ACCEPTED: TestType = TestType {
+        modname: module_path!(),
+        name: "matching_destination_is_accepted",
+        f: || {
+            check_swap_params(&params(DESTINATION), &vec![output(DESTINATION, None)], FEE)
+                .map_err(|_| ())
+        },
+    };
+
+    #[test_case]
+    const OWN_ACCOUNT_OUTPUT_IS_REFUSED: TestType = TestType {
+        modname: module_path!(),
+        name: "own_account_output_is_refused",
+        f: || {
+            for (destination, address) in [(DESTINATION, ""), ("", ""), (DESTINATION, DESTINATION)]
+            {
+                let outputs = vec![output(address, Some(1))];
+                if check_swap_params(&params(destination), &outputs, FEE).is_ok() {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const EMPTY_DESTINATION_IS_REFUSED: TestType = TestType {
+        modname: module_path!(),
+        name: "empty_destination_is_refused",
+        f: || {
+            if check_swap_params(&params(""), &vec![output("", None)], FEE).is_ok() {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    const H: u32 = 0x8000_0000;
+    const COIN: u32 = crate::consts::ZCASH_BIP44_COIN_TYPE | H;
+
+    fn check_address_params(path: &[u32], reference: &str) -> CheckAddressParams {
+        let mut params = CheckAddressParams::default();
+        for (i, component) in path.iter().enumerate() {
+            params.dpath[4 * i..4 * i + 4].copy_from_slice(&component.to_be_bytes());
+        }
+        params.dpath_len = path.len();
+        params.ref_address[..reference.len()].copy_from_slice(reference.as_bytes());
+        params.ref_address_len = reference.len();
+        params
+    }
+
+    fn address_at(path: &[u32]) -> Result<Base58Address, ()> {
+        let mut dpath = [0u8; 40];
+        for (i, component) in path.iter().enumerate() {
+            dpath[4 * i..4 * i + 4].copy_from_slice(&component.to_be_bytes());
+        }
+        let path = Bip32Path::from_dpath(path.len(), &dpath[..4 * path.len()]).map_err(|_| ())?;
+        let key = ExtendedPublicKey::try_from(&path).map_err(|_| ())?;
+        let hash = key.compressed_public_key_hash160().map_err(|_| ())?;
+        Base58Address::from_public_key_hash(&hash).map_err(|_| ())
+    }
+
+    #[test_case]
+    const CHECK_ADDRESS_ACCEPTS_SIGNING_PATH: TestType = TestType {
+        modname: module_path!(),
+        name: "check_address_accepts_signing_path",
+        f: || {
+            let path = [44 | H, COIN, H, 0, 0];
+            let address = address_at(&path)?;
+            match check_address(&check_address_params(&path, address.as_str())) {
+                Ok(true) => {}
+                _ => return Err(()),
+            }
+            match check_address(&check_address_params(&path, DESTINATION)) {
+                Ok(false) => Ok(()),
+                _ => Err(()),
+            }
+        },
+    };
+
+    #[test_case]
+    const CHECK_ADDRESS_REFUSES_UNSPENDABLE_PATHS: TestType = TestType {
+        modname: module_path!(),
+        name: "check_address_refuses_unspendable_paths",
+        f: || {
+            let paths: [&[u32]; 4] = [
+                &[44 | H, COIN],
+                &[44 | H, COIN, H],
+                &[32 | H, COIN, H],
+                &[44 | H, COIN, 0, 0, 0],
+            ];
+            for path in paths {
+                let address = address_at(path)?;
+                if check_address(&check_address_params(path, address.as_str())).is_ok() {
+                    return Err(());
+                }
+            }
+            Ok(())
+        },
+    };
 }

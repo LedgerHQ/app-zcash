@@ -1,15 +1,15 @@
 use ff::{Field, FromUniformBytes, PrimeField};
 use ledger_device_sdk::{
     debug,
-    ecc::{CurvesId, math::EcPoint},
     hash::{
         HashInit as _,
         blake2::{Blake2b_512, Blake2bWithPerso},
     },
 };
 use pasta_curves::pallas;
+use subtle::{ConditionallySelectable, ConstantTimeEq};
 
-use crate::{Error, bytes::reverse_copy};
+use crate::{Error, bytes::reverse_copy, points::AffinePoint};
 
 // `hash_to_field_pallas` below is a Ledger-port of `pasta_curves::hashtocurve::hash_to_field`.
 // In the original code these are `R_IN_BYTES = 128` and `CHUNKLEN = 64`.
@@ -29,8 +29,7 @@ const HASH_TO_CURVE_SUFFIX: &[u8] = b"_XMD:BLAKE2b_SSWU_RO_";
 const ORCHARD_DIVERSIFY_HASH_PERSONALIZATION: &str = "z.cash:Orchard-gd";
 
 // `(t - 1) // 2` where `t * 2^s + 1 = p` with `t` odd, from
-// `pasta_curves::fields::fp.rs`. Feeds the software Tonelli-Shanks used by
-// `Fp::sqrt`.
+// `pasta_curves::fields::fp.rs`.
 const PALLAS_T_MINUS1_OVER2: [u64; 4] = [
     0x04a67c8dcc969876,
     0x0000000011234c7e,
@@ -67,12 +66,25 @@ const PALLAS_THETA: Fp = Fp::from_raw([
 ]);
 
 // `GENERATOR^t where t * 2^s + 1 = p` with `t` odd; in other words, this is a `2^s` root of unity.
-// Used by Tonelli-Shanks in `sqrt()` and by `sqrt_ratio()`.
 const PALLAS_ROOT_OF_UNITY: Fp = Fp::from_raw([
     0xbdad6fabd87ea32f,
     0xea322bf2b7bb7584,
     0x362120830561f81a,
     0x2bce74deac30ebda,
+]);
+
+// RFC 9380 F.2.1.1 c6 = Z^t, c7 = Z^((t + 1) / 2), Z = ROOT_OF_UNITY (matches PALLAS_THETA).
+const SQRT_RATIO_C6: pallas::Base = pallas::Base::from_raw([
+    0x3d626185ee6c5b71,
+    0x7dfb60c2fc84a3b1,
+    0xb311211e8def9ebb,
+    0x057068dce2307c79,
+]);
+const SQRT_RATIO_C7: pallas::Base = pallas::Base::from_raw([
+    0x8e8148feb3ce7e3c,
+    0x9cd6f82cf051ee50,
+    0x24e6ad93cf0beba7,
+    0x371172a1a0a88cf0,
 ]);
 
 // Constants for the degree-3 isogeny from `iso-pallas` to `pallas`, copied from
@@ -214,17 +226,6 @@ impl Fp {
         Ok(self.0.invert().map(Self).into())
     }
 
-    // Not `Field::sqrt`: under `pasta_curves/sqrt-table`, which is enabled
-    // transitively, it lazily builds ~32 KB of lookup tables that the heap cannot
-    // hold. This form is constant-time and allocation-free.
-    fn sqrt(&self) -> Result<Option<Self>, Error> {
-        Ok(
-            ff::helpers::sqrt_tonelli_shanks(&self.0, PALLAS_T_MINUS1_OVER2)
-                .map(Self)
-                .into(),
-        )
-    }
-
     fn to_be_bytes(self) -> [u8; 32] {
         let mut be = [0u8; 32];
         reverse_copy(&mut be, &self.0.to_repr());
@@ -325,7 +326,7 @@ impl JacobianPoint {
         }
     }
 
-    fn to_compressed_bytes(self) -> Result<Option<[u8; 32]>, Error> {
+    fn to_affine(self) -> Result<Option<AffinePoint>, Error> {
         if self.is_identity() {
             return Ok(None);
         }
@@ -337,32 +338,54 @@ impl JacobianPoint {
         let x = self.x.mul(&zinv2)?;
         let y = self.y.mul(&zinv2)?.mul(&zinv)?;
 
-        let mut point = EcPoint::new(CurvesId::Pallas)?;
-        point.init(&x.to_be_bytes(), &y.to_be_bytes())?;
+        Ok(Some(AffinePoint::from_trusted_coordinates(
+            x.to_be_bytes(),
+            y.to_be_bytes(),
+        )))
+    }
+}
 
-        let mut x_be = [0u8; 32];
-        let sign = point.compress(&mut x_be)?;
-        Ok(Some(encode_pallas_point_bytes(&x_be, sign)))
+/// Nonidentity Orchard diversified base; only hash-to-curve constructs it, so host
+/// encodings cannot bypass point validation through it.
+#[derive(Clone, Copy)]
+pub struct DiversifiedBase(AffinePoint);
+
+impl DiversifiedBase {
+    /// Includes Orchard's fallback to the empty-message hash on an identity result.
+    pub fn derive(d: &[u8; 11]) -> Result<Self, Error> {
+        let point = match hash_to_curve_pallas(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION, d)? {
+            Some(point) => point,
+            None => hash_to_curve_pallas(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION, &[])?
+                .ok_or(Error::InvalidDiversifyHashPoint)?,
+        };
+        Ok(Self(point))
+    }
+
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.0.to_bytes()
+    }
+
+    pub(crate) fn to_sdk(self) -> Result<ledger_device_sdk::ecc::math::EcPoint, Error> {
+        Ok(self.0.to_sdk()?)
+    }
+
+    pub(crate) fn to_validated_point(self) -> Result<crate::points::ValidatedPoint, Error> {
+        Ok(self.0.to_validated()?)
     }
 }
 
 pub fn diversify_hash_ledger(d: &[u8; 11]) -> Result<[u8; 32], Error> {
-    if let Some(g_d) = hash_to_curve_pallas(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION, d)? {
-        return Ok(g_d);
-    }
-
-    hash_to_curve_pallas(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION, &[])?
-        .ok_or(Error::InvalidDiversifyHashPoint)
+    Ok(DiversifiedBase::derive(d)?.to_bytes())
 }
 
-fn hash_to_curve_pallas(domain_prefix: &str, message: &[u8]) -> Result<Option<[u8; 32]>, Error> {
+fn hash_to_curve_pallas(domain_prefix: &str, message: &[u8]) -> Result<Option<AffinePoint>, Error> {
     let [u0, u1] = hash_to_field_pallas(domain_prefix, message)?;
     let q0 = map_to_curve_simple_swu_iso_pallas(&u0)?;
     let q1 = map_to_curve_simple_swu_iso_pallas(&u1).inspect_err(|e| {
         debug!("map_to_curve_simple_swu_iso_pallas failed for u1: {:?}", e);
         debug!("u1: {:?}", u1.to_be_bytes());
     })?;
-    iso_map_pallas(&q0.add_iso_pallas(&q1)?)?.to_compressed_bytes()
+    iso_map_pallas(&q0.add_iso_pallas(&q1)?)?.to_affine()
 }
 
 fn hash_to_field_pallas(domain_prefix: &str, message: &[u8]) -> Result<[Fp; 2], Error> {
@@ -460,6 +483,9 @@ fn map_to_curve_simple_swu_iso_pallas(u: &Fp) -> Result<JacobianPoint, Error> {
     })
 }
 
+// sqrt(num/div), or sqrt(ROOT_OF_UNITY*num/div) and false for nonsquares. RFC 9380 F.2.1.1:
+// constant-time and allocation-free, unlike `Field::sqrt` under `pasta_curves/sqrt-table`.
+#[inline(never)]
 fn sqrt_ratio(num: &Fp, div: &Fp) -> Result<(bool, Fp), Error> {
     if num.is_zero() {
         return Ok((true, Fp::ZERO));
@@ -468,21 +494,42 @@ fn sqrt_ratio(num: &Fp, div: &Fp) -> Result<(bool, Fp), Error> {
         return Ok((false, Fp::ZERO));
     }
 
-    let Some(div_inverse) = div.invert()? else {
-        return Ok((false, Fp::ZERO));
-    };
-    let quotient = num.mul(&div_inverse)?;
+    // s = div^(2^32 - 1)
+    let mut s = div.0;
+    for i in 0..5 {
+        s = square_n(s, 1 << i) * s;
+    }
+    let w = (num.0 * s.square() * div.0).pow_vartime(PALLAS_T_MINUS1_OVER2) * s;
+    let mut x = w * num.0;
+    let mut b = x * w * div.0;
+    let is_square = square_n(b, 31).ct_eq(&pallas::Base::ONE);
 
-    if let Some(sqrt) = quotient.sqrt()? {
-        return Ok((true, sqrt));
+    let mut z = SQRT_RATIO_C6;
+    x = pallas::Base::conditional_select(&(x * SQRT_RATIO_C7), &x, is_square);
+    b = pallas::Base::conditional_select(&(b * z), &b, is_square);
+
+    for i in (2..=32).rev() {
+        let is_one = square_n(b, i - 2).ct_eq(&pallas::Base::ONE);
+        x = pallas::Base::conditional_select(&(x * z), &x, is_one);
+        z = z.square();
+        b = pallas::Base::conditional_select(&(b * z), &b, is_one);
     }
 
-    let adjusted = PALLAS_ROOT_OF_UNITY.mul(&quotient)?;
-    let Some(sqrt) = adjusted.sqrt()? else {
+    let expected =
+        pallas::Base::conditional_select(&(PALLAS_ROOT_OF_UNITY.0 * num.0), &num.0, is_square);
+    if x.square() * div.0 != expected {
         return Err(Error::InvalidDiversifyHashPoint);
-    };
+    }
 
-    Ok((false, sqrt))
+    Ok((bool::from(is_square), Fp(x)))
+}
+
+#[inline(never)]
+fn square_n(mut value: pallas::Base, count: u32) -> pallas::Base {
+    for _ in 0..count {
+        value = value.square();
+    }
+    value
 }
 
 fn iso_map_pallas(point: &JacobianPoint) -> Result<JacobianPoint, Error> {
@@ -532,9 +579,111 @@ fn iso_map_pallas(point: &JacobianPoint) -> Result<JacobianPoint, Error> {
     })
 }
 
-fn encode_pallas_point_bytes(x_be: &[u8; 32], sign: u32) -> [u8; 32] {
-    let mut x_le = [0u8; 32];
-    reverse_copy(&mut x_le, x_be);
-    x_le[31] |= ((sign & 1) as u8) << 7;
-    x_le
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ledger_device_sdk::testing::TestType;
+    use pasta_curves::{arithmetic::CurveExt, group::GroupEncoding};
+
+    #[test_case]
+    const SQRT_RATIO_CONSTANTS: TestType = TestType {
+        modname: module_path!(),
+        name: "sqrt_ratio_constants",
+        f: || {
+            let mut t = PALLAS_T_MINUS1_OVER2;
+            let mut carry = 1;
+            for limb in &mut t {
+                let next_carry = *limb >> 63;
+                *limb = (*limb << 1) | carry;
+                carry = next_carry;
+            }
+            let z = PALLAS_ROOT_OF_UNITY.0;
+            if pallas::Base::S != 32
+                || SQRT_RATIO_C6 != z.pow_vartime(t)
+                || SQRT_RATIO_C7 != z.pow_vartime(PALLAS_T_MINUS1_OVER2) * z
+            {
+                return Err(());
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const SQRT_RATIO_MATCHES_REFERENCE: TestType = TestType {
+        modname: module_path!(),
+        name: "sqrt_ratio_matches_reference",
+        f: || {
+            let inputs = [
+                pallas::Base::ZERO,
+                pallas::Base::ONE,
+                -pallas::Base::ONE,
+                pallas::Base::from(7),
+                PALLAS_ROOT_OF_UNITY.0,
+                -PALLAS_ROOT_OF_UNITY.0,
+            ];
+            for num in inputs {
+                for div in inputs {
+                    let (is_square, result) = sqrt_ratio(&Fp(num), &Fp(div)).map_err(|_| ())?;
+                    let quotient = num * div.invert().unwrap_or(pallas::Base::ZERO);
+                    let root = ff::helpers::sqrt_tonelli_shanks(&quotient, PALLAS_T_MINUS1_OVER2);
+                    let expected_square = bool::from(root.is_some())
+                        && (num == pallas::Base::ZERO || div != pallas::Base::ZERO);
+                    let expected = if is_square {
+                        num
+                    } else {
+                        num * PALLAS_ROOT_OF_UNITY.0
+                    };
+                    if is_square != expected_square
+                        || (div != pallas::Base::ZERO && result.0.square() * div != expected)
+                        || (div == pallas::Base::ZERO && result != Fp::ZERO)
+                    {
+                        return Err(());
+                    }
+                }
+            }
+            Ok(())
+        },
+    };
+
+    #[test_case]
+    const DERIVED_BASES_MATCH_SOFTWARE_AND_DECODED_PATH: TestType = TestType {
+        modname: module_path!(),
+        name: "derived_bases_match_software_and_decoded_path",
+        f: || {
+            for d in [
+                [0; 11],
+                [1; 11],
+                [0xff; 11],
+                [
+                    0xed, 0xe3, 0xd2, 0xce, 0x08, 0xc1, 0x1d, 0x8c, 0x5c, 0x7b, 0xfe,
+                ],
+            ] {
+                let base = DiversifiedBase::derive(&d).map_err(|_| ())?;
+                let expected =
+                    pallas::Point::hash_to_curve(ORCHARD_DIVERSIFY_HASH_PERSONALIZATION)(&d);
+                if base.to_bytes() != expected.to_bytes() {
+                    return Err(());
+                }
+                let initialized = base.to_sdk().map_err(|_| ())?;
+                if crate::pallas_point_to_bytes(&initialized).map_err(|_| ())? != base.to_bytes() {
+                    return Err(());
+                }
+                drop(initialized);
+                for scalar in [1u64, 7, u64::MAX] {
+                    let ivk = pallas::Base::from(scalar).to_repr();
+                    let fast = crate::orchard_pk_d_from_base(&ivk, &base).map_err(|_| ())?;
+                    let decoded = crate::orchard_pk_d(&ivk, &base.to_bytes()).map_err(|_| ())?;
+                    if fast != decoded {
+                        return Err(());
+                    }
+                }
+                for ivk in [[0; 32], [0xff; 32]] {
+                    if crate::orchard_pk_d_from_base(&ivk, &base).is_ok() {
+                        return Err(());
+                    }
+                }
+            }
+            Ok(())
+        },
+    };
 }

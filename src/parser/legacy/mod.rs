@@ -297,6 +297,14 @@ impl LegacyParser {
 
         let value = ok!(reader.read_u32_le());
         let consensus_branch_id = ok!(BranchId::try_from(value));
+        // Refuse a V5 transaction under a pre-NU5 branch. Previous transactions only lend an
+        // output (a V4 branch does not enter its txid), so they are not checked.
+        if self.mode == LegacyParserMode::Signature && !version.valid_in_branch(consensus_branch_id)
+        {
+            return Err(ParserError::from_str(
+                "Transaction version not valid in its consensus branch",
+            ));
+        }
 
         info!(
             "Transaction version: {:?}, consensus branch id: {:?}",
